@@ -89,3 +89,12 @@ No, caching is disabled for C files.
 ### When was the source last merged with LLVM trunk?
 
 This open-source release was last merged with LLVM r307021 on 2017-07-03.
+
+### Where is the zapcc code?
+
+There are patches all around LLVM & clang.
+Additional zapcc-only code in
+
+    tools/zapcc
+    tools/zapccs
+    tools/clang/test/zapcc
