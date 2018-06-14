@@ -1,0 +1,3 @@
+// RUN: %zapccxx -fsyntax-only -isystem %S %S/file1.cpp %S/file1.cpp 2>&1 | FileCheck %s -allow-empty
+// CHECK-NOT: macro 'BUG2125B_FILE_OFFSET_BITS' was
+// Bug 2125

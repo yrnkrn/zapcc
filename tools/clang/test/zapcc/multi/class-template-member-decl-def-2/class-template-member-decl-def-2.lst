@@ -1,0 +1,3 @@
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp %S/file2.cpp 2>&1 | tee %t.txt && FileCheck -input-file=%t.txt %s  --allow-empty
+// CHECK-NOT: error:  
+// Bug 1919

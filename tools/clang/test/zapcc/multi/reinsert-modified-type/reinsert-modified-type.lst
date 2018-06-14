@@ -1,0 +1,5 @@
+// RUN: %zap_compare_object FILE="file1.cpp"
+// RUN: %zap_compare_object FILE="file2.cpp"
+// RUN: %zap_compare_object FILE="file1.cpp"
+// RUN: %zap_compare_object FILE="file2.cpp"
+// Bug 1679

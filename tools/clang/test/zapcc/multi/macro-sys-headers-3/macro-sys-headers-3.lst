@@ -1,0 +1,5 @@
+// RUN: %zapccxx -fsyntax-only -isystem %S/macro-sys-headers-3 %S/file1.cpp %S/file2.cpp 2>&1 | tee %t.txt && FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// CHECK-COMPILE-NOT: note: system {{.*}} was removed
+// CHECK-COMPILE-NOT: error: 
+// CHECK-COMPILE-NOT: warning: 
+// CHECK-COMPILE-NOT: Assertion

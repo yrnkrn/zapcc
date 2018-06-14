@@ -1,0 +1,9 @@
+// RUN: %zapccxx -M %S/file1.cpp 2>&1 | tee %t.txt && FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// CHECK-COMPILE-NOT: error: 
+// CHECK-COMPILE-NOT: warning:
+
+// CHECK-COMPILE: file1.cpp
+// CHECK-COMPILE: file1.h
+// CHECK-COMPILE: file2.h
+// CHECK-COMPILE: file3.h
+// Bug 1221

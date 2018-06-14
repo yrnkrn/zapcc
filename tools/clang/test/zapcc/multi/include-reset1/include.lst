@@ -1,0 +1,13 @@
+// RUN: %zapccxx -I %S/header1 %S/file1.cpp -o %t
+// RUN: %zapccxx -I %S/header2 %S/file2.cpp -o %t 2>&1  | tee %t.txt && FileCheck %s -allow-empty -input-file=%t.txt
+
+// RUN: %zapcc_reset
+// RUN: cd %S/dummy-dir
+// RUN: %zapccxx -I ../headers %S/file1.cpp -o %t
+// RUN: cd %S/dummy-dir/dummy-dir2
+// RUN: %zapccxx -I ../../headers %S/file2.cpp -o %t 2>&1  | tee %t.txt && FileCheck %s -allow-empty -input-file=%t.txt
+
+// CHECK-NOT: error
+// CHECK-NOT: note: system {{.*}} was removed
+// CHECK-NOT: error: 
+// CHECK-NOT: warning: 

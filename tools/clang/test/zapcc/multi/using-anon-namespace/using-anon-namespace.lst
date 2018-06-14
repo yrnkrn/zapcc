@@ -1,0 +1,5 @@
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp %S/file2.cpp 2>&1 | FileCheck %s --allow-empty
+// CHECK-NOT: error:
+// CHECK-NOT: warning: 
+// CHECK-NOT: Assertion
+// Bug 2407

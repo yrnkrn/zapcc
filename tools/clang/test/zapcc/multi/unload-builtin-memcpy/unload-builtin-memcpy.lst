@@ -1,0 +1,6 @@
+// RUN: %zapccxx -c %S/file1.cpp %S/file2.cpp >%t 2>&1
+// RUN: FileCheck %s -allow-empty -check-prefix=CHECK-COMPILE < %t
+// RUN: %zapccxx -c %S/file1.cpp %S/file2.cpp >%t 2>&1
+// RUN: FileCheck %s -allow-empty -check-prefix=CHECK-COMPILE < %t
+// CHECK-COMPILE-NOT: error:
+// Bug 1135

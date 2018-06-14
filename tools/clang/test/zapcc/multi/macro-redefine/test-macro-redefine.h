@@ -1,0 +1,1 @@
+#define TEST_MACRO_REDEFINE 1

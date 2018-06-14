@@ -1,0 +1,5 @@
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-std=c++11 -fpic -target x86_64-pc-linux"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-std=c++11 -fpic -target x86_64-pc-linux"
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-std=c++11 -fpic -target x86_64-pc-linux"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-std=c++11 -fpic -target x86_64-pc-linux"
+// Bug 942

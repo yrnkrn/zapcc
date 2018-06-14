@@ -1,0 +1,17 @@
+// CHECK-COMPILE-NOT: error: 
+// CHECK-COMPILE-NOT: warning: 
+// CHECK-COMPILE-NOT: Assertion
+// CHECK-COMPILE-NOT: Stack dump:
+// Bug 241
+
+// CHECK1: AttributeUsedClass
+// CHECK2-NOT: AttributeUsedClass
+
+// RUN: %zapccxx -c %S/file1.cpp -o %T/file1.o -O2
+// RUN: llvm-nm %T/file1.o | FileCheck %s -check-prefix=CHECK1
+// RUN: %zapccxx -c %S/file2.cpp -o %T/file2.o -O2
+// RUN: llvm-nm %T/file2.o | FileCheck %s -check-prefix=CHECK2 -allow-empty
+// RUN: %zapccxx -c %S/file1.cpp -o %T/file1.o -O2
+// RUN: llvm-nm %T/file1.o | FileCheck %s -check-prefix=CHECK1
+// RUN: %zapccxx -c %S/file2.cpp -o %T/file2.o -O2
+// RUN: llvm-nm %T/file2.o | FileCheck %s -check-prefix=CHECK2 -allow-empty

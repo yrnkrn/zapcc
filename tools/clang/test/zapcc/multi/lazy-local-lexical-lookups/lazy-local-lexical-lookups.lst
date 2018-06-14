@@ -1,0 +1,6 @@
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp %S/file2.cpp 2>&1 | tee %t.txt
+// RUN: FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// CHECK-COMPILE-NOT: error:
+// CHECK-COMPILE-NOT: warning: 
+// CHECK-COMPILE-NOT: Assertion
+// Bug 952

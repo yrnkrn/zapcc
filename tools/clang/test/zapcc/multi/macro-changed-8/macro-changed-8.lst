@@ -1,0 +1,3 @@
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp %S/file2.cpp 2>&1 | FileCheck %s
+// CHECK: macro 'INTEL_NO_MACRO_BODY' was '32' before but is '64' now
+// Bug 2238

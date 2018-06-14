@@ -1,0 +1,1 @@
+enum ExactlySameEnum { ExactlySameEnumValue };

@@ -1,0 +1,6 @@
+// RUN: %zapccxx -fsyntax-only -std=c++11 %S/file1.cpp %S/file2.cpp 2>&1 | tee %t.txt
+// RUN: FileCheck -input-file=%t.txt %s --allow-empty
+// CHECK-NOT: warning:
+// CHECK-NOT: error:
+// CHECK-NOT: Assertion
+// Bug 2508

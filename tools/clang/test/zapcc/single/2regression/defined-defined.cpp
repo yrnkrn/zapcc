@@ -1,0 +1,7 @@
+// RUN: %zap_compare_object
+// Bug 2085
+#ifndef FMT_USE_USER_DEFINED_LITERALS
+#define FMT_USE_USER_DEFINED_LITERALS defined(FMT_ICC_VERSION)
+#endif
+#if FMT_USE_USER_DEFINED_LITERALS
+#endif

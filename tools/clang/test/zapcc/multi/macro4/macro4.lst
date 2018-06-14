@@ -1,0 +1,1 @@
+// RUN: %zap_compare_object FILE="file1.cpp"

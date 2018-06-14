@@ -1,0 +1,5 @@
+// RUN: %zapcc_reset 
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp %S/file2.cpp 2>&1 | FileCheck %s --allow-empty
+// RUN: %zapcc_reset 
+// RUN: %zapccxx -fsyntax-only %S/file2.cpp %S/file1.cpp 2>&1 | FileCheck %s --allow-empty
+// CHECK-NOT: macro

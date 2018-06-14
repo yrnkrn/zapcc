@@ -1,0 +1,9 @@
+// RUN: %zapccxx -fsyntax-only -I %S/header1 %S/file1.cpp 2>&1 | tee %t.txt && FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty 
+// RUN: %zapccxx -fsyntax-only -I %S/header2 %S/file2.cpp 2>&1 | tee %t.txt && FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty 
+// CHECK-COMPILE-NOT: note: system {{.*}} was removed
+// CHECK-COMPILE-NOT: error: 
+// CHECK-COMPILE-NOT: warning:
+// CHECK-COMPILE-NOT: Assertion
+// CHECK-COMPILE-NOT: Stack dump:
+// CHECK-COMPILE-NOT: Alias must point to a definition
+// CHECK: same-name-headers

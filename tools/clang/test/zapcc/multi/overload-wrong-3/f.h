@@ -1,0 +1,3 @@
+namespace NSGlobalDetail {
+void get();
+}

@@ -1,0 +1,4 @@
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp 2>&1 | FileCheck %s --allow-empty
+// CHECK-NOT: error:
+// CHECK-NOT: Assertion
+// Bug 1172

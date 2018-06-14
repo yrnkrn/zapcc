@@ -1,0 +1,4 @@
+// RUN: %zapccxx -fsyntax-only '-DvtkRenderingCore_AUTOINIT=3(vtkInteractionStyle,vtkRenderingFreeType,vtkRenderingOpenGL)' %S/file1.cpp 2>&1
+// RUN: %zapccxx -fsyntax-only '-DvtkRenderingCore_AUTOINIT=2(vtkInteractionStyle,vtkRenderingOpenGL)' %S/file2.cpp 2>&1 | FileCheck %s
+// CHECK:  macro 'vtkRenderingCore_AUTOINIT' was '3(vtkInteractionStyle,vtkRenderingFreeType,vtkRenderingOpenGL)' before but is '2(vtkInteractionStyle,vtkRenderingOpenGL)' now
+// Bug 2340

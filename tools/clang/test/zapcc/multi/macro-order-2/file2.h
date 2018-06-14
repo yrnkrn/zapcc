@@ -1,0 +1,1 @@
+#undef Bug1198AUX_WRAPPER_INST

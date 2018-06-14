@@ -1,0 +1,91 @@
+# ZAPCC
+zapcc is a caching C++ compiler based on clang, designed to perform faster compilations.
+zapcc uses in-memory compilation cache in client-server architecture, remembering all compilation information between runs. 
+zapcc is the client while zapccs is the server. Each zapcc run will reuse an existing server or if none was available will start a new one.
+
+## License
+
+This open source release is licensed under the LLVM Release License (University of Illinois/NCSA).
+
+## Building
+
+The prerequisites and build process are identical to [building LLVM](https://llvm.org/docs/CMake.html).
+
+    mkdir build
+    cd build
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ../llvm
+    ninja
+    
+## Running the tests
+    
+    ninja check-all
+
+## Using
+
+zapcc command syntax is identical to [clang](https://clang.llvm.org/docs/UsersManual.html) with the command being zapcc.
+   
+    zapcc ...
+   
+## Killing the zapccs server
+
+    pkill zapcc
+
+To kill the zapccs server to free memory or replace with newly-built zapcc
+    
+## FAQ
+
+### What is the typical acceleration of Zapcc?
+
+Typically re-compilations are 10x-50x faster [Boost.Math](https://www.zapcc.com/demo-incremental-build/), and full builds are 2x-5x faster [WebKit](https://www.zapcc.com/demo-webkit).
+
+### Is Zapcc Clang compatible?
+
+Yes, zapcc is based on heavily-modified clang code.
+
+### Is Zapcc GCC compatible?
+
+Yes, to the extent clang is gcc compatible.
+
+### My project does not compile with Zapcc!
+
+Please make sure first your project compiles successfully with Clang. If your project does not compile with Clang, Zapcc, being based on Clang, will not be able to compile any more than clang.
+
+### Are the sanitizers supported?
+
+Currently, no.
+
+### Which operating systems is supported?
+
+zapcc builds on Linux x64. Windows x64 support with mingw-w64 is experimental.
+
+### How zapcc is different from precompiled headers?
+
+Precompiled headers requires building your project to the exact precompiled headers rules. Most projects do not bother with using precompiled headers. Even then, precompiled  headers do not cache as much as zapcc. Zapcc works within your existing build.
+
+Precompiled headers are currently ignored by Zapcc.
+
+### How zapcc is different from C++ modules?
+
+Modules are not yet standard, rarely used and do not support well legacy code and macros found in most existing C++ code, such as Boost. Modules require significant code refactoring in bottom-up approach everything or are slow. Even then, modules do not cache template instantiations and generated code that are specific to your code like zapcc does.
+
+### How much memory does Zapcc use?
+
+To avoid killing the server by using endless memory, Zapcc server has a memory limit and will automatically reset after reaching it, restarting with an empty cache and low memory usage. The memory limit is set under [MaxMemory] at bin/zapccs.config, and you can change it to optimize memory usage and the number of servers you plan to use. Usually, you should not set the -j parameter to more than the number of physical cores + 2. This is especially important for Intel CPU with hyper-threading enabled, which report twice the number of physical cores. In such cases, Zapcc may run faster with fewer servers, each using a higher memory limit.
+
+### Does it use ccache, distcc, warp or the like?
+
+No.
+
+### By how much Zapcc will accelerate compilation times?
+
+This depends on the complexity of the header files vs. the complexity of the source files. It can range from no acceleration at all for plain C projects to x2-x5 for build-all of heavily templated projects, up to cases of x50 speedups in developer-build incremental change of one file.
+
+As a reference number, Zapcc accelerates clang build-all about x2 faster compared to building clang using clang.
+
+### Will Zapcc accelerate C projects as well?
+
+No, caching is disabled for C files.
+
+### When was the source last merged with LLVM trunk?
+
+This open-source release was last merged with LLVM r307021 on 2017-07-03.

@@ -1,0 +1,2 @@
+namespace {}
+#include "f.h"

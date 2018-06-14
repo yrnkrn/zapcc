@@ -1,0 +1,7 @@
+// RUN: %zapccxx -c %S/file1.cpp -o %T/file1.o
+// RUN: not %zapccxx -c %S/file2.cpp -o %T/file2.o >%t 2>&1
+// RUN: FileCheck %s -allow-empty -check-prefix=CHECK-COMPILE < %t
+// CHECK-COMPILE-NOT: Assertion
+// CHECK-COMPILE-NOT: Stack dump:
+// CHECK-COMPILE-NOT: #0 0x
+// Bug 416

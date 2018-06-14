@@ -1,0 +1,5 @@
+// RUN: %zapccxx -c -target x86_64-pc-linux %S/file1.cpp -o %T/file1.o 2>&1
+// RUN: %zapccxx -c -target x86_64-pc-linux %S/file2.cpp -o %T/file2.o 2>&1 
+// RUN: llvm-nm %T/file2.o | FileCheck %s
+// CHECK: W _ZN15DIDF2_ByteQueue14MaxRetrievableEv
+// Bug 607

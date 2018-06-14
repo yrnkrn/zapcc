@@ -1,0 +1,5 @@
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-O -target x86_64-unknown-darwin"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-O -target x86_64-unknown-darwin"
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-O -target x86_64-unknown-darwin"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-O -target x86_64-unknown-darwin"
+// Bug 1467

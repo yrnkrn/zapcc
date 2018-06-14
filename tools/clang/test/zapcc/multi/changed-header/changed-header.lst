@@ -1,0 +1,13 @@
+// RUN: echo > %T/file1.h
+// RUN: %zapccxx -fsyntax-only -I %T %S/file1.cpp 2>&1 | FileCheck %s -check-prefix=CHECK-EMPTY --allow-empty
+// Wait one second to make sure timestamp would change.
+// RUN: sleep 1
+// RUN: echo '#pragma message ("boom")' > %T/file1.h
+// Don't wait now, to see zapcc miss the change.
+// RUN: %zapccxx -fsyntax-only -I %T %S/file1.cpp 2>&1 | FileCheck %s -check-prefix=CHECK-EMPTY --allow-empty
+// Now sleep to see zapcc catches the change.
+// RUN: sleep 4
+// RUN: %zapccxx -fsyntax-only -I %T %S/file1.cpp 2>&1 | FileCheck %s -check-prefix=CHECK-BOOM --allow-empty
+// CHECK-EMPTY-NOT: boom
+// CHECK-BOOM: boom
+// Bug 1955

@@ -1,0 +1,11 @@
+// RUN: %zapcc_reset
+// RUN: rm -rf %T/build
+// RUN: %zapccxx -fsyntax-only -I %T/build %S/file1.cpp 2>&1 | tee %t.txt
+// RUN: FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// RUN: mkdir -p %T/build
+// RUN: echo > %T/build/conf.h
+// RUN: %zapccxx -fsyntax-only -I %T/build %S/file2.cpp 2>&1 | tee %t.txt
+// RUN: FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// CHECK-COMPILE-NOT: Assertion
+// CHECK-COMPILE-NOT: error
+// Bug 978

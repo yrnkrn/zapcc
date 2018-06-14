@@ -1,0 +1,3 @@
+#define DUPLICATEMACROTYPEALL(TYPE) void DuplicateMacrotypeAll(TYPE);
+DUPLICATEMACROTYPEALL(const char *);
+DUPLICATEMACROTYPEALL(double);

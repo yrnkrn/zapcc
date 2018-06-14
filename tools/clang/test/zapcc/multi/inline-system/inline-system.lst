@@ -1,0 +1,10 @@
+// RUN: %zapcc_reset
+// RUN: %zapccxx -c %S/file1.cpp -o %T/file1.o 2>&1
+// RUN: %zapccxx -c %S/file2.cpp -o %T/file2.o 2>&1 | FileCheck %s -allow-empty -check-prefix=CHECK-COMPILE
+// C0HECK-COMPILE: error: use of undeclared identifier 'Bug431fn1'
+// CHECK-COMPILE-NOT: error:
+// C0HECK-COMPILE: Success
+// CHECK-COMPILE-NOT: warning: 
+// CHECK-COMPILE-NOT: Assertion
+// CHECK-COMPILE-NOT: Stack dump:
+// Bug 413

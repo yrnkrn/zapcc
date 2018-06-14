@@ -1,0 +1,4 @@
+// RUN: %zapccxx -fsyntax-only -DINTEL_NO_MACRO_BODY=AA %S/file1.cpp %S/file1.cpp 2>&1
+// RUN: %zapccxx -fsyntax-only -DINTEL_NO_MACRO_BODY=BB %S/file1.cpp %S/file1.cpp 2>&1 | FileCheck %s
+// CHECK: macro 'INTEL_NO_MACRO_BODY' was 'AA' before but is 'BB' now
+// Bug 2169

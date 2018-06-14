@@ -1,0 +1,1 @@
+template <int> class DependentSizedArray;

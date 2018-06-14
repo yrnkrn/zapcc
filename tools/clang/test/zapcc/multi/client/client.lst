@@ -1,0 +1,5 @@
+// RUN: cd %S
+// RUN: sh read-stdin.sh %zapccxx 2>&1 | tee %t.txt || true
+// RUN: FileCheck %s -allow-empty -input-file=%t.txt
+// CHECK: file1.cpp
+// CHECK: file2.cpp

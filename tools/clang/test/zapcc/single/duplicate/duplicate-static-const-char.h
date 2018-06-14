@@ -1,0 +1,1 @@
+static const char *DuplicateStaticChar = "duplicate-static-char";

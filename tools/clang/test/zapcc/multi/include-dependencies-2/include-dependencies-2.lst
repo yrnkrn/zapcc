@@ -1,0 +1,9 @@
+// RUN: %zapccxx -c %S/file1.cpp -MD -MF %t.d
+// RUN: FileCheck -input-file=%t.d %s --allow-empty
+// RUN: %zapccxx -c %S/file1.cpp -MD -MF %t.d
+// RUN: FileCheck -input-file=%t.d %s --allow-empty
+// CHECK: file1.cpp
+// CHECK: file1.h
+// CHECK: file2.h
+// CHECK: file3.h
+// Bug 2016

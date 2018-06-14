@@ -1,0 +1,3 @@
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-fpic"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-fpic"
+// Bug 1838

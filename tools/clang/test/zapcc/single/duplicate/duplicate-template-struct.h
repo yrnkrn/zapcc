@@ -1,0 +1,2 @@
+template <typename>
+struct ExactlySameTemplateStruct {};

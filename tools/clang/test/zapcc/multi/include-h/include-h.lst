@@ -1,0 +1,7 @@
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp 2>&1 | tee %t.txt
+// RUN: FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp 2>&1 | tee %t.txt
+// RUN: FileCheck -input-file=%t.txt %s -check-prefix=CHECK-COMPILE --allow-empty
+// CHECK-COMPILE-NOT: Assertion
+// CHECK-COMPILE-NOT: error:
+// Bug 809

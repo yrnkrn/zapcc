@@ -1,0 +1,5 @@
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-g"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-g"
+// RUN: %zap_compare_object FILE="file1.cpp" CXXFLAGS="-g"
+// RUN: %zap_compare_object FILE="file2.cpp" CXXFLAGS="-g"
+// Bug 1017

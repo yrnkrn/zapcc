@@ -1,0 +1,6 @@
+// RUN: %zapcc_reset 
+// RUN: %zapccxx -fsyntax-only %S/file1.cpp %S/file2.cpp 2>&1 | FileCheck %s -check-prefix=CHECK1
+// CHECK1: macro 'CK_TEMPLATES_ONLY' was '(undefined)' before but is '(defined)' now
+// RUN: %zapcc_reset 
+// RUN: %zapccxx -fsyntax-only %S/file2.cpp %S/file1.cpp 2>&1 | FileCheck %s -check-prefix=CHECK2
+// CHECK2: macro 'CK_TEMPLATES_ONLY' was '(defined)' before but is '(undefined)' now
