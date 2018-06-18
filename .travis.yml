@@ -1,3 +1,6 @@
+sudo: required
+before_install:
+  - sudo apt-get install ninja-build
 language: cpp
 compiler:
   - gcc
