@@ -1,0 +1,10 @@
+language: cpp
+compiler:
+  - gcc
+script:
+  - mkdir build
+  - cd build
+  - cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ..
+  - ninja
+  - ninja check-all
+
