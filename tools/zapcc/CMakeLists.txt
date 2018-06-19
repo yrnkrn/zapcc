@@ -31,7 +31,7 @@ include_directories(BEFORE
   ${CMAKE_CURRENT_SOURCE_DIR}/../clang/include
 )
 
-add_clang_executable(zapcc
+add_clang_tool(zapcc
   Client.cpp
   ErrorCouldNot.cpp
   FindBaseName.cpp

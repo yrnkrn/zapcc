@@ -19,7 +19,7 @@ set(LLVM_LINK_COMPONENTS
   MC
 )
 
-add_clang_executable(zapccs
+add_clang_tool(zapccs
   CachingCompiler.cpp
   CachingPassManager.cpp
   CommandLine.cpp
