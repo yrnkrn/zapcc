@@ -1,5 +1,7 @@
 if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -Wl,--wrap=memcpy")
+  if(NOT APPLE)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -Wl,--wrap=memcpy")
+  endif()
 endif ()
 
 if (ZAPCC_DEBUG)
