@@ -74,3 +74,7 @@ add_custom_target (
 )
 
 add_dependencies(zapccs copy_config)
+
+install(FILES zapccs.config
+  DESTINATION bin
+  COMPONENT zapccs)
