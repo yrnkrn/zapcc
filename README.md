@@ -11,6 +11,7 @@ This open source release is licensed under the LLVM Release License (University 
 
 The prerequisites and build process are identical to [building LLVM](https://llvm.org/docs/CMake.html).
 
+    git clone https://github.com/yrnkrn/zapcc.git llvm
     mkdir build
     cd build
     cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ../llvm
