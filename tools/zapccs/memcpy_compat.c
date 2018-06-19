@@ -1,5 +1,5 @@
 #include "llvm/Config/config.h"
-#ifdef LLVM_ON_UNIX
+#ifdef __linux__
 #include <string.h>
 // Replacement for memcpy@@GLIBC_2.14.
 __asm__(".symver memcpy, memcpy@GLIBC_2.2.5");
