@@ -1,7 +1,6 @@
 # zapccs
 if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-common -Woverloaded-virtual -fno-strict-aliasing -pedantic")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -Wl,--wrap=memcpy")
 endif ()
 
 include_directories(BEFORE
@@ -32,7 +31,6 @@ add_clang_tool(zapccs
   GetExePath.cpp
   GetMemoryUsage.cpp
   Getters.cpp
-  memcpy_compat.c
   raw_colored_svector_ostream.cpp
   ReplaceDeclInMap.cpp
   Server.cpp

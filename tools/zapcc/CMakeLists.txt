@@ -1,7 +1,3 @@
-if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libstdc++ -Wl,--wrap=memcpy")
-endif ()
-
 if (ZAPCC_DEBUG)
   string (REGEX REPLACE "[/-]O2" "-O0"
     CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}") 
@@ -45,7 +41,6 @@ add_clang_tool(zapcc
   ../zapccs/DisableStreamsBuffering.cpp
   ../zapccs/FindOption.cpp
   ../zapccs/GetExePath.cpp
-  ../zapccs/memcpy_compat.c
   ../zapccs/StringConst.cpp
   ../zapccs/StopWatch.cpp
   ../zapccs/TextFile.cpp
