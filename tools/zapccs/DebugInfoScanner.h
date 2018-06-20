@@ -1,4 +1,9 @@
-// Copyright (c) 2014-2017 Ceemple Software Ltd. All rights Reserved.
+// Copyright (c) 2014-2018 Ceemple Software Ltd. All rights Reserved.
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
 #ifndef LLVM_IR_DEBUGINFOSCANNER_H
 #define LLVM_IR_DEBUGINFOSCANNER_H
 

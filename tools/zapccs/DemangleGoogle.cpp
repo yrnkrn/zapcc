@@ -1,4 +1,3 @@
-// Copyright (c) 2014-2017 Ceemple Software Ltd. All rights Reserved.
 // Code from http://libcxxabi.llvm.org/ can't be compiled on Visual C++.
 // This working code is from https://code.google.com/p/google-glog/.
 //

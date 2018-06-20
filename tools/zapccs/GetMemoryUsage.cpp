@@ -1,4 +1,9 @@
-// Copyright (c) 2014-2017 Ceemple Software Ltd. All rights Reserved.
+// Copyright (c) 2014-2018 Ceemple Software Ltd. All rights Reserved.
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
 #include "GetMemoryUsage.h"
 
 // http://nadeausoftware.com/articles/2012/07/c_c_tip_how_get_process_resident_set_size_physical_memory_use
