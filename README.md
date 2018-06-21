@@ -1,4 +1,5 @@
 ![ZAPCC Logo](/docs/zapcc/zapcc-logo.png)
+
 zapcc is a caching C++ compiler based on clang, designed to perform faster compilations.
 zapcc uses in-memory compilation cache in client-server architecture, remembering all compilation information between runs. 
 zapcc is the client while zapccs is the server. Each zapcc run will reuse an existing server or if none was available will start a new one.
