@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 // Provide M_PI.
 #define _USE_MATH_DEFINES
 #endif
