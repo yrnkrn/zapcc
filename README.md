@@ -37,7 +37,11 @@ To kill the zapccs server to free memory or replace with newly-built zapcc
 
 ### What is the typical acceleration of Zapcc?
 
-Typically re-compilations are 10x-50x faster [Boost.Math](https://www.zapcc.com/demo-incremental-build/), and full builds are 2x-5x faster [WebKit](https://www.zapcc.com/demo-webkit).
+Typically re-compilation of a modified source file is 10x-50x faster, see [Boost.Math](https://www.zapcc.com/demo-incremental-build/). Full builds are 2x-5x faster, see [WebKit](https://www.zapcc.com/demo-webkit).
+
+Acceleration depends on the complexity of the header files vs. the complexity of the source files. It can range from no acceleration at all for plain C projects where caching is disabled to x2-x5 for build-all of heavily templated projects, up to cases of x50 speedups in developer-mode incremental change of one source file.
+
+As a reference number, Zapcc builds LLVM build-all about x2 faster compared to building LLVM using clang.
 
 ### Is Zapcc Clang compatible?
 
@@ -57,7 +61,8 @@ Currently, no.
 
 ### Which operating systems is supported?
 
-zapcc builds on Linux x64. Windows x64 support with mingw-w64 is experimental.
+zapcc builds on Linux x64, Visual C++, mingw-w64 and MacOS.
+It was thoroughly tested on Linux x64 only, the rest are experimental.
 
 ### How zapcc is different from precompiled headers?
 
@@ -76,16 +81,6 @@ To avoid killing the server by using endless memory, Zapcc server has a memory l
 ### Does it use ccache, distcc, warp or the like?
 
 No.
-
-### By how much Zapcc will accelerate compilation times?
-
-This depends on the complexity of the header files vs. the complexity of the source files. It can range from no acceleration at all for plain C projects to x2-x5 for build-all of heavily templated projects, up to cases of x50 speedups in developer-build incremental change of one file.
-
-As a reference number, Zapcc accelerates clang build-all about x2 faster compared to building clang using clang.
-
-### Will Zapcc accelerate C projects as well?
-
-No, caching is disabled for C files.
 
 ### When was the source last merged with LLVM trunk?
 
