@@ -60,10 +60,15 @@ Please make sure first your project compiles successfully with Clang. If your pr
 
 Currently, no.
 
-### Which operating systems is supported?
+### Which operating systems are supported?
 
-zapcc builds on Linux x64, Visual C++, mingw-w64 and MacOS.
-It was thoroughly tested on Linux x64 only, the rest are experimental.
+zapcc builds on 
+* Linux x64 using gcc, clang or zapcc
+* Windows using Visual C++ or mingw-w64
+* On MacOS using clang
+
+zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on Windows targetting mingw-w64.
+Rest are experimental, please share your experience.
 
 ### How zapcc is different from precompiled headers?
 
