@@ -38,7 +38,7 @@ To kill the zapccs server to free memory or replace with newly-built zapcc
 
 ### What is the typical acceleration of Zapcc?
 
-Full builds are 2x-5x faster, see [WebKit](https://www.zapcc.com/demo-webkit) or [MKVToolNix ](https://www.bunkus.org/blog/2018/06/speeding-up-mkvtoolnix-compilation-speed-with-zapcc/).
+Full builds are 2x-5x faster, see [WebKit](https://www.zapcc.com/demo-webkit) or [MKVToolNix](https://www.bunkus.org/blog/2018/06/speeding-up-mkvtoolnix-compilation-speed-with-zapcc/).
 Typically re-compilation of one modified source file is 10x-50x faster, see [Boost.Math](https://www.zapcc.com/demo-incremental-build/). 
 
 Acceleration depends on the complexity of the header files vs. the complexity of the source files. It can range from no acceleration at all for plain C projects where caching is disabled to x2-x5 for build-all of heavily templated projects, up to cases of x50 speedups in developer-mode incremental change of one source file.
