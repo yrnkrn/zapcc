@@ -242,9 +242,12 @@ void CachingPassManager::Implementation::resurrect() {
     }
   }
   for (const Decl *D : DeclsToDecide) {
-    if (D->hasAttr<AliasAttr>() || D->hasAttr<UsedAttr>())
+    if (D->hasAttr<AliasAttr>() || D->hasAttr<UsedAttr>()) {
+      if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D))
+        if (FD->isTemplateInstantiation())
+          continue;
       setGlobalValues(D, false);
-    else if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
+    } else if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
       if (hasOutOfLineStaticDataMemberInstantiation(VD)) {
         auto TSK = VD->getTemplateSpecializationKind();
         if (TSK == TSK_ExplicitInstantiationDefinition ||
