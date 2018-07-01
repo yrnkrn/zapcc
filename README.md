@@ -74,6 +74,7 @@ Rest are experimental, please share your experience.
 ### How zapcc is different from precompiled headers?
 
 Precompiled headers requires building your project to the exact precompiled headers rules. Most projects do not bother with using precompiled headers. Even then, precompiled  headers do not cache as much as zapcc. Zapcc works within your existing build.
+See [discussion at cfe-dev](http://lists.llvm.org/pipermail/cfe-dev/2015-May/043155.html).
 
 Precompiled headers are currently ignored by Zapcc.
 
