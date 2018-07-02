@@ -68,7 +68,7 @@ zapcc builds on
 * Windows using Visual C++ or mingw-w64
 * On MacOS using clang
 
-zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on Windows targetting mingw-w64.
+zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on Windows targetting mingw-w64, 32 or 64 bits.
 Rest are experimental, please share your experience.
 
 ### How zapcc is different from precompiled headers?
