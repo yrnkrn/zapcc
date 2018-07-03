@@ -16,12 +16,18 @@
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <utility>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "tti"
+
+static cl::opt<bool> UseWideMemcpyLoopLowering(
+    "use-wide-memcpy-loop-lowering", cl::init(false),
+    cl::desc("Enables the new wide memcpy loop lowering in Transforms/Utils."),
+    cl::Hidden);
 
 namespace {
 /// \brief No-op implementation of the TTI interface using the utility base
@@ -74,6 +80,11 @@ unsigned TargetTransformInfo::getInliningThresholdMultiplier() const {
 int TargetTransformInfo::getGEPCost(Type *PointeeType, const Value *Ptr,
                                     ArrayRef<const Value *> Operands) const {
   return TTIImpl->getGEPCost(PointeeType, Ptr, Operands);
+}
+
+int TargetTransformInfo::getExtCost(const Instruction *I,
+                                    const Value *Src) const {
+  return TTIImpl->getExtCost(I, Src);
 }
 
 int TargetTransformInfo::getIntrinsicCost(
@@ -133,9 +144,10 @@ bool TargetTransformInfo::isLegalAddressingMode(Type *Ty, GlobalValue *BaseGV,
                                                 int64_t BaseOffset,
                                                 bool HasBaseReg,
                                                 int64_t Scale,
-                                                unsigned AddrSpace) const {
+                                                unsigned AddrSpace,
+                                                Instruction *I) const {
   return TTIImpl->isLegalAddressingMode(Ty, BaseGV, BaseOffset, HasBaseReg,
-                                        Scale, AddrSpace);
+                                        Scale, AddrSpace, I);
 }
 
 bool TargetTransformInfo::isLSRCostLess(LSRCost &C1, LSRCost &C2) const {
@@ -155,7 +167,7 @@ bool TargetTransformInfo::isLegalMaskedGather(Type *DataType) const {
 }
 
 bool TargetTransformInfo::isLegalMaskedScatter(Type *DataType) const {
-  return TTIImpl->isLegalMaskedGather(DataType);
+  return TTIImpl->isLegalMaskedScatter(DataType);
 }
 
 bool TargetTransformInfo::prefersVectorizedAddressing() const {
@@ -173,9 +185,8 @@ int TargetTransformInfo::getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
   return Cost;
 }
 
-bool TargetTransformInfo::isFoldableMemAccessOffset(Instruction *I,
-                                                    int64_t Offset) const {
-  return TTIImpl->isFoldableMemAccessOffset(I, Offset);
+bool TargetTransformInfo::LSRWithInstrQueries() const {
+  return TTIImpl->LSRWithInstrQueries();
 }
 
 bool TargetTransformInfo::isTruncateFree(Type *Ty1, Type *Ty2) const {
@@ -456,9 +467,9 @@ int TargetTransformInfo::getAddressComputationCost(Type *Tp,
   return Cost;
 }
 
-int TargetTransformInfo::getReductionCost(unsigned Opcode, Type *Ty,
-                                          bool IsPairwiseForm) const {
-  int Cost = TTIImpl->getReductionCost(Opcode, Ty, IsPairwiseForm);
+int TargetTransformInfo::getArithmeticReductionCost(unsigned Opcode, Type *Ty,
+                                                    bool IsPairwiseForm) const {
+  int Cost = TTIImpl->getArithmeticReductionCost(Opcode, Ty, IsPairwiseForm);
   assert(Cost >= 0 && "TTI should not produce negative costs!");
   return Cost;
 }
@@ -480,6 +491,25 @@ unsigned TargetTransformInfo::getAtomicMemIntrinsicMaxElementSize() const {
 Value *TargetTransformInfo::getOrCreateResultFromMemIntrinsic(
     IntrinsicInst *Inst, Type *ExpectedType) const {
   return TTIImpl->getOrCreateResultFromMemIntrinsic(Inst, ExpectedType);
+}
+
+Type *TargetTransformInfo::getMemcpyLoopLoweringType(LLVMContext &Context,
+                                                     Value *Length,
+                                                     unsigned SrcAlign,
+                                                     unsigned DestAlign) const {
+  return TTIImpl->getMemcpyLoopLoweringType(Context, Length, SrcAlign,
+                                            DestAlign);
+}
+
+void TargetTransformInfo::getMemcpyLoopResidualLoweringType(
+    SmallVectorImpl<Type *> &OpsOut, LLVMContext &Context,
+    unsigned RemainingBytes, unsigned SrcAlign, unsigned DestAlign) const {
+  TTIImpl->getMemcpyLoopResidualLoweringType(OpsOut, Context, RemainingBytes,
+                                             SrcAlign, DestAlign);
+}
+
+bool TargetTransformInfo::useWideIRMemcpyLoopLowering() const {
+  return UseWideMemcpyLoopLowering;
 }
 
 bool TargetTransformInfo::areInlineCompatible(const Function *Caller,

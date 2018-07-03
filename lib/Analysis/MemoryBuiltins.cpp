@@ -1,4 +1,4 @@
-//===------ MemoryBuiltins.cpp - Identify calls to memory builtins --------===//
+//===- MemoryBuiltins.cpp - Identify calls to memory builtins -------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,20 +13,39 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/ADT/APInt.h"
+#include "llvm/ADT/None.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/TargetFolder.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/Argument.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Intrinsics.h"
-#include "llvm/IR/Metadata.h"
-#include "llvm/IR/Module.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Operator.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include <cassert>
+#include <cstdint>
+#include <iterator>
+#include <utility>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "memory-builtins"
@@ -187,7 +206,6 @@ static bool hasNoAliasAttr(const Value *V, bool LookThroughBitCast) {
   return CS && CS.hasRetAttr(Attribute::NoAlias);
 }
 
-
 /// \brief Tests if a value is a call or invoke to a library function that
 /// allocates or reallocates memory (either malloc, calloc, realloc, or strdup
 /// like).
@@ -323,14 +341,12 @@ Value *llvm::getMallocArraySize(CallInst *CI, const DataLayout &DL,
   return computeArraySize(CI, DL, TLI, LookThroughSExt);
 }
 
-
 /// extractCallocCall - Returns the corresponding CallInst if the instruction
 /// is a calloc call.
 const CallInst *llvm::extractCallocCall(const Value *I,
                                         const TargetLibraryInfo *TLI) {
   return isCallocLikeFn(I, TLI) ? cast<CallInst>(I) : nullptr;
 }
-
 
 /// isFreeCall - Returns non-null if the value is a call to the builtin free()
 const CallInst *llvm::isFreeCall(const Value *I, const TargetLibraryInfo *TLI) {
@@ -386,8 +402,6 @@ const CallInst *llvm::isFreeCall(const Value *I, const TargetLibraryInfo *TLI) {
 
   return CI;
 }
-
-
 
 //===----------------------------------------------------------------------===//
 //  Utility functions to compute size of objects.
@@ -452,7 +466,6 @@ STATISTIC(ObjectVisitorArgument,
 STATISTIC(ObjectVisitorLoad,
           "Number of load instructions with unsolved size and offset");
 
-
 APInt ObjectSizeOffsetVisitor::align(APInt Size, uint64_t Align) {
   if (Options.RoundToAlign && Align)
     return APInt(IntTyBits, alignTo(Size.getZExtValue(), Align));
@@ -505,6 +518,22 @@ SizeOffsetType ObjectSizeOffsetVisitor::compute(Value *V) {
   return unknown();
 }
 
+/// When we're compiling N-bit code, and the user uses parameters that are
+/// greater than N bits (e.g. uint64_t on a 32-bit build), we can run into
+/// trouble with APInt size issues. This function handles resizing + overflow
+/// checks for us. Check and zext or trunc \p I depending on IntTyBits and
+/// I's value.
+bool ObjectSizeOffsetVisitor::CheckedZextOrTrunc(APInt &I) {
+  // More bits than we can handle. Checking the bit width isn't necessary, but
+  // it's faster than checking active bits, and should give `false` in the
+  // vast majority of cases.
+  if (I.getBitWidth() > IntTyBits && I.getActiveBits() > IntTyBits)
+    return false;
+  if (I.getBitWidth() != IntTyBits)
+    I = I.zextOrTrunc(IntTyBits);
+  return true;
+}
+
 SizeOffsetType ObjectSizeOffsetVisitor::visitAllocaInst(AllocaInst &I) {
   if (!I.getAllocatedType()->isSized())
     return unknown();
@@ -515,8 +544,14 @@ SizeOffsetType ObjectSizeOffsetVisitor::visitAllocaInst(AllocaInst &I) {
 
   Value *ArraySize = I.getArraySize();
   if (const ConstantInt *C = dyn_cast<ConstantInt>(ArraySize)) {
-    Size *= C->getValue().zextOrSelf(IntTyBits);
-    return std::make_pair(align(Size, I.getAlignment()), Zero);
+    APInt NumElems = C->getValue();
+    if (!CheckedZextOrTrunc(NumElems))
+      return unknown();
+
+    bool Overflow;
+    Size = Size.umul_ov(NumElems, Overflow);
+    return Overflow ? unknown() : std::make_pair(align(Size, I.getAlignment()),
+                                                 Zero);
   }
   return unknown();
 }
@@ -560,21 +595,6 @@ SizeOffsetType ObjectSizeOffsetVisitor::visitCallSite(CallSite CS) {
   ConstantInt *Arg = dyn_cast<ConstantInt>(CS.getArgument(FnData->FstParam));
   if (!Arg)
     return unknown();
-
-  // When we're compiling N-bit code, and the user uses parameters that are
-  // greater than N bits (e.g. uint64_t on a 32-bit build), we can run into
-  // trouble with APInt size issues. This function handles resizing + overflow
-  // checks for us.
-  auto CheckedZextOrTrunc = [&](APInt &I) {
-    // More bits than we can handle. Checking the bit width isn't necessary, but
-    // it's faster than checking active bits, and should give `false` in the
-    // vast majority of cases.
-    if (I.getBitWidth() > IntTyBits && I.getActiveBits() > IntTyBits)
-      return false;
-    if (I.getBitWidth() != IntTyBits)
-      I = I.zextOrTrunc(IntTyBits);
-    return true;
-  };
 
   APInt Size = Arg->getValue();
   if (!CheckedZextOrTrunc(Size))

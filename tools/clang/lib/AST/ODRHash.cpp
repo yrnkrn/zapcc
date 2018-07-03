@@ -228,6 +228,13 @@ public:
     Hash.AddQualType(T);
   }
 
+  void AddDecl(const Decl *D) {
+    Hash.AddBoolean(D);
+    if (D) {
+      Hash.AddDecl(D);
+    }
+  }
+
   void Visit(const Decl *D) {
     ID.AddInteger(D->getKind());
     Inherited::Visit(D);
@@ -239,7 +246,9 @@ public:
   }
 
   void VisitValueDecl(const ValueDecl *D) {
-    AddQualType(D->getType());
+    if (!isa<FunctionDecl>(D)) {
+      AddQualType(D->getType());
+    }
     Inherited::VisitValueDecl(D);
   }
 
@@ -298,6 +307,8 @@ public:
       Hash.AddSubDecl(Param);
     }
 
+    AddQualType(D->getReturnType());
+
     Inherited::VisitFunctionDecl(D);
   }
 
@@ -321,6 +332,16 @@ public:
   void VisitTypeAliasDecl(const TypeAliasDecl *D) {
     Inherited::VisitTypeAliasDecl(D);
   }
+
+  void VisitFriendDecl(const FriendDecl *D) {
+    TypeSourceInfo *TSI = D->getFriendType();
+    Hash.AddBoolean(TSI);
+    if (TSI) {
+      AddQualType(TSI->getType());
+    } else {
+      AddDecl(D->getFriendDecl());
+    }
+  }
 };
 
 // Only allow a small portion of Decl's to be processed.  Remove this once
@@ -333,8 +354,11 @@ bool ODRHash::isWhitelistedDecl(const Decl *D, const CXXRecordDecl *Parent) {
     default:
       return false;
     case Decl::AccessSpec:
+    case Decl::CXXConstructor:
+    case Decl::CXXDestructor:
     case Decl::CXXMethod:
     case Decl::Field:
+    case Decl::Friend:
     case Decl::StaticAssert:
     case Decl::TypeAlias:
     case Decl::Typedef:
@@ -354,8 +378,12 @@ void ODRHash::AddCXXRecordDecl(const CXXRecordDecl *Record) {
   assert(Record && Record->hasDefinition() &&
          "Expected non-null record to be a definition.");
 
-  if (isa<ClassTemplateSpecializationDecl>(Record)) {
-    return;
+  const DeclContext *DC = Record;
+  while (DC) {
+    if (isa<ClassTemplateSpecializationDecl>(DC)) {
+      return;
+    }
+    DC = DC->getParent();
   }
 
   AddDecl(Record);

@@ -565,7 +565,8 @@ bool RecurrenceDescriptor::isFirstOrderRecurrence(
     auto *I = Phi->user_back();
     if (I->isCast() && (I->getParent() == Phi->getParent()) && I->hasOneUse() &&
         DT->dominates(Previous, I->user_back())) {
-      SinkAfter[I] = Previous;
+      if (!DT->dominates(Previous, I)) // Otherwise we're good w/o sinking.
+        SinkAfter[I] = Previous;
       return true;
     }
   }
@@ -1376,16 +1377,21 @@ Value *llvm::createTargetReduction(IRBuilder<> &Builder,
   }
 }
 
-void llvm::propagateIRFlags(Value *I, ArrayRef<Value *> VL) {
-  if (auto *VecOp = dyn_cast<Instruction>(I)) {
-    if (auto *I0 = dyn_cast<Instruction>(VL[0])) {
-      // VecOVp is initialized to the 0th scalar, so start counting from index
-      // '1'.
-      VecOp->copyIRFlags(I0);
-      for (int i = 1, e = VL.size(); i < e; ++i) {
-        if (auto *Scalar = dyn_cast<Instruction>(VL[i]))
-          VecOp->andIRFlags(Scalar);
-      }
-    }
+void llvm::propagateIRFlags(Value *I, ArrayRef<Value *> VL, Value *OpValue) {
+  auto *VecOp = dyn_cast<Instruction>(I);
+  if (!VecOp)
+    return;
+  auto *Intersection = (OpValue == nullptr) ? dyn_cast<Instruction>(VL[0])
+                                            : dyn_cast<Instruction>(OpValue);
+  if (!Intersection)
+    return;
+  const unsigned Opcode = Intersection->getOpcode();
+  VecOp->copyIRFlags(Intersection);
+  for (auto *V : VL) {
+    auto *Instr = dyn_cast<Instruction>(V);
+    if (!Instr)
+      continue;
+    if (OpValue == nullptr || Opcode == Instr->getOpcode())
+      VecOp->andIRFlags(V);
   }
 }

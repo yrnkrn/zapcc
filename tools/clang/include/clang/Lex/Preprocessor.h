@@ -96,6 +96,7 @@ enum MacroUse {
 /// know anything about preprocessor-level issues like the \#include stack,
 /// token expansion, etc.
 class Preprocessor {
+  friend class VariadicMacroScopeGuard;
   std::shared_ptr<PreprocessorOptions> PPOpts;
   DiagnosticsEngine        *Diags;
   LangOptions       &LangOpts;
@@ -1102,6 +1103,10 @@ public:
   /// which implicitly adds the builtin defines etc.
   void EnterMainSourceFile();
 
+  /// \brief After parser warm-up, initialize the conditional stack from
+  /// the preamble.
+  void replayPreambleConditionalStack();
+
   /// \brief Inform the preprocessor callbacks that processing is complete.
   void EndSourceFile();
 
@@ -1787,11 +1792,6 @@ public:
   /// \brief Return true if we're in the top-level file, not in a \#include.
   bool isInPrimaryFile() const;
 
-  /// \brief Return true if we're in the main file (specifically, if we are 0
-  /// (zero) levels deep \#include. This is used by the lexer to determine if
-  /// it needs to generate errors about unterminated \#if directives.
-  bool isInMainFile() const;
-
   /// \brief Handle cases where the \#include name is expanded
   /// from a macro as multiple tokens, which need to be glued together. 
   ///
@@ -1868,11 +1868,24 @@ private:
   void ReadMacroName(Token &MacroNameTok, MacroUse IsDefineUndef = MU_Other,
                      bool *ShadowFlag = nullptr);
 
+  /// ReadOptionalMacroParameterListAndBody - This consumes all (i.e. the
+  /// entire line) of the macro's tokens and adds them to MacroInfo, and while
+  /// doing so performs certain validity checks including (but not limited to):
+  ///   - # (stringization) is followed by a macro parameter
+  /// \param MacroNameTok - Token that represents the macro name
+  /// \param ImmediatelyAfterHeaderGuard - Macro follows an #ifdef header guard
+  /// 
+  ///  Either returns a pointer to a MacroInfo object OR emits a diagnostic and
+  ///  returns a nullptr if an invalid sequence of tokens is encountered.
+
+  MacroInfo *ReadOptionalMacroParameterListAndBody(
+      const Token &MacroNameTok, bool ImmediatelyAfterHeaderGuard);
+
   /// The ( starting an argument list of a macro definition has just been read.
-  /// Lex the rest of the arguments and the closing ), updating \p MI with
+  /// Lex the rest of the parameters and the closing ), updating \p MI with
   /// what we learn and saving in \p LastTok the last token read.
   /// Return true if an error occurs parsing the arg list.
-  bool ReadMacroDefinitionArgList(MacroInfo *MI, Token& LastTok);
+  bool ReadMacroParameterList(MacroInfo *MI, Token& LastTok);
 
   /// We just read a \#if or related directive and decided that the
   /// subsequent tokens are in the \#if'd out portion of the
@@ -1933,7 +1946,7 @@ private:
 
   /// After reading "MACRO(", this method is invoked to read all of the formal
   /// arguments specified for the macro invocation.  Returns null on error.
-  MacroArgs *ReadFunctionLikeMacroArgs(Token &MacroName, MacroInfo *MI,
+  MacroArgs *ReadMacroCallArgumentList(Token &MacroName, MacroInfo *MI,
                                        SourceLocation &ExpansionEnd);
 
   /// \brief If an identifier token is read that is to be expanded

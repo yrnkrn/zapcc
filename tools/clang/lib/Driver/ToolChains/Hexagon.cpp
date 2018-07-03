@@ -248,7 +248,8 @@ constructHexagonLinkArgs(Compilation &C, const JobAction &JA,
   //----------------------------------------------------------------------------
   if (IncStdLib && IncDefLibs) {
     if (D.CCCIsCXX()) {
-      HTC.AddCXXStdlibLibArgs(Args, CmdArgs);
+      if (HTC.ShouldLinkCXXStdlib(Args))
+        HTC.AddCXXStdlibLibArgs(Args, CmdArgs);
       CmdArgs.push_back("-lm");
     }
 
@@ -428,7 +429,8 @@ unsigned HexagonToolChain::getOptimizationLevel(
 }
 
 void HexagonToolChain::addClangTargetOptions(const ArgList &DriverArgs,
-                                             ArgStringList &CC1Args) const {
+                                             ArgStringList &CC1Args,
+                                             Action::OffloadKind) const {
   if (DriverArgs.hasArg(options::OPT_ffp_contract))
     return;
   unsigned OptLevel = getOptimizationLevel(DriverArgs);

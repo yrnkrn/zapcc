@@ -117,7 +117,10 @@ class VOP2_SDWA_Pseudo <string OpName, VOPProfile P, list<dag> pattern=[]> :
 class getVOP2Pat64 <SDPatternOperator node, VOPProfile P> : LetDummies {
   list<dag> ret = !if(P.HasModifiers,
     [(set P.DstVT:$vdst,
-      (node (P.Src0VT (VOP3Mods0 P.Src0VT:$src0, i32:$src0_modifiers, i1:$clamp, i32:$omod)),
+      (node (P.Src0VT
+              !if(P.HasOMod,
+                  (VOP3Mods0 P.Src0VT:$src0, i32:$src0_modifiers, i1:$clamp, i32:$omod),
+                  (VOP3Mods0 P.Src0VT:$src0, i32:$src0_modifiers, i1:$clamp))),
             (P.Src1VT (VOP3Mods P.Src1VT:$src1, i32:$src1_modifiers))))],
     [(set P.DstVT:$vdst, (node P.Src0VT:$src0, P.Src1VT:$src1))]);
 }
@@ -205,10 +208,10 @@ def VOP_MADMK_F32 : VOP_MADMK <f32>;
 class VOP_MAC <ValueType vt> : VOPProfile <[vt, vt, vt, vt]> {
   let Ins32 = (ins Src0RC32:$src0, Src1RC32:$src1, VGPR_32:$src2);
   let Ins64 = getIns64<Src0RC64, Src1RC64, RegisterOperand<VGPR_32>, 3,
-                       HasModifiers, HasOMod, Src0Mod, Src1Mod, Src2Mod>.ret;
-  let InsDPP = (ins Src0ModDPP:$src0_modifiers, Src0DPP:$src0,
+                       0, HasModifiers, HasOMod, Src0Mod, Src1Mod, Src2Mod>.ret;
+  let InsDPP = (ins DstRCDPP:$old,
+                    Src0ModDPP:$src0_modifiers, Src0DPP:$src0,
                     Src1ModDPP:$src1_modifiers, Src1DPP:$src1,
-                    VGPR_32:$src2, // stub argument
                     dpp_ctrl:$dpp_ctrl, row_mask:$row_mask,
                     bank_mask:$bank_mask, bound_ctrl:$bound_ctrl);
 
@@ -219,7 +222,7 @@ class VOP_MAC <ValueType vt> : VOPProfile <[vt, vt, vt, vt]> {
                      dst_sel:$dst_sel, dst_unused:$dst_unused,
                      src0_sel:$src0_sel, src1_sel:$src1_sel);
   let Asm32 = getAsm32<1, 2, vt>.ret;
-  let Asm64 = getAsm64<1, 2, HasModifiers, HasOMod, vt>.ret;
+  let Asm64 = getAsm64<1, 2, 0, HasModifiers, HasOMod, vt>.ret;
   let AsmDPP = getAsmDPP<1, 2, HasModifiers, vt>.ret;
   let AsmSDWA = getAsmSDWA<1, 2, vt>.ret;
   let AsmSDWA9 = getAsmSDWA9<1, 1, 2, vt>.ret;
@@ -232,13 +235,13 @@ class VOP_MAC <ValueType vt> : VOPProfile <[vt, vt, vt, vt]> {
 def VOP_MAC_F16 : VOP_MAC <f16> {
   // FIXME: Move 'Asm64' definition to VOP_MAC, and use 'vt'. Currently it gives
   // 'not a string initializer' error.
-  let Asm64 = getAsm64<1, 2, HasModifiers, HasOMod, f16>.ret;
+  let Asm64 = getAsm64<1, 2, 0, HasModifiers, HasOMod, f16>.ret;
 }
 
 def VOP_MAC_F32 : VOP_MAC <f32> {
   // FIXME: Move 'Asm64' definition to VOP_MAC, and use 'vt'. Currently it gives
   // 'not a string initializer' error.
-  let Asm64 = getAsm64<1, 2, HasModifiers, HasOMod, f32>.ret;
+  let Asm64 = getAsm64<1, 2, 0, HasModifiers, HasOMod, f32>.ret;
 }
 
 // Write out to vcc or arbitrary SGPR.
@@ -279,7 +282,8 @@ def VOP2b_I32_I1_I32_I32_I1 : VOPProfile<[i32, i32, i32, i1]> {
                      dst_sel:$dst_sel, dst_unused:$dst_unused,
                      src0_sel:$src0_sel, src1_sel:$src1_sel);
 
-  let InsDPP = (ins Src0Mod:$src0_modifiers, Src0DPP:$src0,
+  let InsDPP = (ins DstRCDPP:$old,
+                    Src0Mod:$src0_modifiers, Src0DPP:$src0,
                     Src1Mod:$src1_modifiers, Src1DPP:$src1,
                     dpp_ctrl:$dpp_ctrl, row_mask:$row_mask,
                     bank_mask:$bank_mask, bound_ctrl:$bound_ctrl);
@@ -372,6 +376,14 @@ defm V_SUBREV_I32 : VOP2bInst <"v_subrev_i32", VOP2b_I32_I1_I32_I32, null_frag, 
 defm V_ADDC_U32 : VOP2bInst <"v_addc_u32", VOP2b_I32_I1_I32_I32_I1>;
 defm V_SUBB_U32 : VOP2bInst <"v_subb_u32", VOP2b_I32_I1_I32_I32_I1>;
 defm V_SUBBREV_U32 : VOP2bInst <"v_subbrev_u32", VOP2b_I32_I1_I32_I32_I1, null_frag, "v_subb_u32">;
+
+
+let SubtargetPredicate = HasAddNoCarryInsts in {
+defm V_ADD_U32 : VOP2Inst <"v_add_u32", VOP_I32_I32_I32>;
+defm V_SUB_U32 : VOP2Inst <"v_sub_u32", VOP_I32_I32_I32>;
+defm V_SUBREV_U32 : VOP2Inst <"v_subrev_u32", VOP_I32_I32_I32, null_frag, "v_sub_u32">;
+}
+
 } // End isCommutable = 1
 
 // These are special and do not read the exec mask.
@@ -654,8 +666,6 @@ class VOP2_DPP <bits<6> op, VOP2_Pseudo ps, VOPProfile P = ps.Pfl> :
   let Uses = ps.Uses;
   let SchedRW = ps.SchedRW;
   let hasSideEffects = ps.hasSideEffects;
-  let Constraints = ps.Constraints;
-  let DisableEncoding = ps.DisableEncoding;
 
   bits<8> vdst;
   bits<8> src1;
@@ -813,9 +823,11 @@ let SubtargetPredicate = isVI in {
 
 // Aliases to simplify matching of floating-point instructions that
 // are VOP2 on SI and VOP3 on VI.
-class SI2_VI3Alias <string name, Instruction inst> : InstAlias <
+class SI2_VI3Alias <string name, VOP3_Real inst> : InstAlias <
   name#" $dst, $src0, $src1",
-  (inst VGPR_32:$dst, 0, VCSrc_f32:$src0, 0, VCSrc_f32:$src1, 0, 0)
+  !if(inst.Pfl.HasOMod,
+      (inst VGPR_32:$dst, 0, VCSrc_f32:$src0, 0, VCSrc_f32:$src1, 0, 0),
+      (inst VGPR_32:$dst, 0, VCSrc_f32:$src0, 0, VCSrc_f32:$src1, 0))
 >, PredicateControl {
   let UseInstAsmMatchConverter = 0;
   let AsmVariantName = AMDGPUAsmVariants.VOP3;
@@ -828,3 +840,9 @@ def : SI2_VI3Alias <"v_cvt_pknorm_u16_f32", V_CVT_PKNORM_U16_F32_e64_vi>;
 def : SI2_VI3Alias <"v_cvt_pkrtz_f16_f32", V_CVT_PKRTZ_F16_F32_e64_vi>;
 
 } // End SubtargetPredicate = isVI
+
+let SubtargetPredicate = HasAddNoCarryInsts in {
+defm V_ADD_U32 : VOP2_Real_e32e64_vi <0x34>;
+defm V_SUB_U32 : VOP2_Real_e32e64_vi <0x35>;
+defm V_SUBREV_U32 : VOP2_Real_e32e64_vi <0x36>;
+}

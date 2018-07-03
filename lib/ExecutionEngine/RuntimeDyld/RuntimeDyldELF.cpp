@@ -24,7 +24,6 @@
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/TargetRegistry.h"
 
 using namespace llvm;
 using namespace llvm::object;
@@ -123,7 +122,8 @@ void DyldELFObject<ELFT>::updateSymbolAddress(const SymbolRef &SymRef,
 }
 
 class LoadedELFObjectInfo final
-    : public RuntimeDyld::LoadedObjectInfoHelper<LoadedELFObjectInfo> {
+    : public LoadedObjectInfoHelper<LoadedELFObjectInfo,
+                                    RuntimeDyld::LoadedObjectInfo> {
 public:
   LoadedELFObjectInfo(RuntimeDyldImpl &RTDyld, ObjSectionToIDMap ObjSecToIDMap)
       : LoadedObjectInfoHelper(RTDyld, std::move(ObjSecToIDMap)) {}

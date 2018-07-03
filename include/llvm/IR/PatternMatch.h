@@ -158,12 +158,18 @@ struct match_neg_zero {
 /// zero
 inline match_neg_zero m_NegZero() { return match_neg_zero(); }
 
+struct match_any_zero {
+  template <typename ITy> bool match(ITy *V) {
+    if (const auto *C = dyn_cast<Constant>(V))
+      return C->isZeroValue();
+    return false;
+  }
+};
+
 /// \brief - Match an arbitrary zero/null constant.  This includes
 /// zero_initializer for vectors and ConstantPointerNull for pointers. For
 /// floating point constants, this will match negative zero and positive zero
-inline match_combine_or<match_zero, match_neg_zero> m_AnyZero() {
-  return m_CombineOr(m_Zero(), m_NegZero());
-}
+inline match_any_zero m_AnyZero() { return match_any_zero(); }
 
 struct match_nan {
   template <typename ITy> bool match(ITy *V) {
@@ -175,6 +181,39 @@ struct match_nan {
 
 /// Match an arbitrary NaN constant. This includes quiet and signalling nans.
 inline match_nan m_NaN() { return match_nan(); }
+
+struct match_one {
+  template <typename ITy> bool match(ITy *V) {
+    if (const auto *C = dyn_cast<Constant>(V))
+      return C->isOneValue();
+    return false;
+  }
+};
+
+/// \brief Match an integer 1 or a vector with all elements equal to 1.
+inline match_one m_One() { return match_one(); }
+
+struct match_all_ones {
+  template <typename ITy> bool match(ITy *V) {
+    if (const auto *C = dyn_cast<Constant>(V))
+      return C->isAllOnesValue();
+    return false;
+  }
+};
+
+/// \brief Match an integer or vector with all bits set to true.
+inline match_all_ones m_AllOnes() { return match_all_ones(); }
+
+struct match_sign_mask {
+  template <typename ITy> bool match(ITy *V) {
+    if (const auto *C = dyn_cast<Constant>(V))
+      return C->isMinSignedValue();
+    return false;
+  }
+};
+
+/// \brief Match an integer or vector with only the sign bit(s) set.
+inline match_sign_mask m_SignMask() { return match_sign_mask(); }
 
 struct apint_match {
   const APInt *&Res;
@@ -195,10 +234,34 @@ struct apint_match {
     return false;
   }
 };
+// Either constexpr if or renaming ConstantFP::getValueAPF to
+// ConstantFP::getValue is needed to do it via single template
+// function for both apint/apfloat.
+struct apfloat_match {
+  const APFloat *&Res;
+  apfloat_match(const APFloat *&R) : Res(R) {}
+  template <typename ITy> bool match(ITy *V) {
+    if (auto *CI = dyn_cast<ConstantFP>(V)) {
+      Res = &CI->getValueAPF();
+      return true;
+    }
+    if (V->getType()->isVectorTy())
+      if (const auto *C = dyn_cast<Constant>(V))
+        if (auto *CI = dyn_cast_or_null<ConstantFP>(C->getSplatValue())) {
+          Res = &CI->getValueAPF();
+          return true;
+        }
+    return false;
+  }
+};
 
 /// \brief Match a ConstantInt or splatted ConstantVector, binding the
 /// specified pointer to the contained APInt.
 inline apint_match m_APInt(const APInt *&Res) { return Res; }
+
+/// \brief Match a ConstantFP or splatted ConstantVector, binding the
+/// specified pointer to the contained APFloat.
+inline apfloat_match m_APFloat(const APFloat *&Res) { return Res; }
 
 template <int64_t Val> struct constantint_match {
   template <typename ITy> bool match(ITy *V) {
@@ -258,34 +321,6 @@ template <typename Predicate> struct api_pred_ty : public Predicate {
     return false;
   }
 };
-
-struct is_one {
-  bool isValue(const APInt &C) { return C.isOneValue(); }
-};
-
-/// \brief Match an integer 1 or a vector with all elements equal to 1.
-inline cst_pred_ty<is_one> m_One() { return cst_pred_ty<is_one>(); }
-inline api_pred_ty<is_one> m_One(const APInt *&V) { return V; }
-
-struct is_all_ones {
-  bool isValue(const APInt &C) { return C.isAllOnesValue(); }
-};
-
-/// \brief Match an integer or vector with all bits set to true.
-inline cst_pred_ty<is_all_ones> m_AllOnes() {
-  return cst_pred_ty<is_all_ones>();
-}
-inline api_pred_ty<is_all_ones> m_AllOnes(const APInt *&V) { return V; }
-
-struct is_sign_mask {
-  bool isValue(const APInt &C) { return C.isSignMask(); }
-};
-
-/// \brief Match an integer or vector with only the sign bit(s) set.
-inline cst_pred_ty<is_sign_mask> m_SignMask() {
-  return cst_pred_ty<is_sign_mask>();
-}
-inline api_pred_ty<is_sign_mask> m_SignMask(const APInt *&V) { return V; }
 
 struct is_power2 {
   bool isValue(const APInt &C) { return C.isPowerOf2(); }

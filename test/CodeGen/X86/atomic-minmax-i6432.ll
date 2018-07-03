@@ -1,5 +1,5 @@
-; RUN: llc -march=x86 -mattr=+cmov,cx16 -mtriple=i386-pc-linux -verify-machineinstrs < %s | FileCheck %s -check-prefix=LINUX
-; RUN: llc -march=x86 -mattr=cx16 -mtriple=i386-macosx -relocation-model=pic -verify-machineinstrs < %s | FileCheck %s -check-prefix=PIC
+; RUN: llc -mattr=+cmov,cx16 -mtriple=i386-pc-linux -verify-machineinstrs < %s | FileCheck %s -check-prefix=LINUX
+; RUN: llc -mattr=cx16 -mtriple=i386-macosx -relocation-model=pic -verify-machineinstrs < %s | FileCheck %s -check-prefix=PIC
 
 @sc64 = external global i64
 
@@ -9,32 +9,32 @@ define void @atomic_maxmin_i6432() {
 ; LINUX: [[LABEL:.LBB[0-9]+_[0-9]+]]
 ; LINUX: cmpl
 ; LINUX: sbbl
-; LINUX: cmovne
-; LINUX: cmovne
+; LINUX: jne
+; LINUX: jne
 ; LINUX: lock cmpxchg8b
 ; LINUX: jne [[LABEL]]
   %2 = atomicrmw min  i64* @sc64, i64 6 acquire
 ; LINUX: [[LABEL:.LBB[0-9]+_[0-9]+]]
 ; LINUX: cmpl
 ; LINUX: sbbl
-; LINUX: cmovne
-; LINUX: cmovne
+; LINUX: jne
+; LINUX: jne
 ; LINUX: lock cmpxchg8b
 ; LINUX: jne [[LABEL]]
   %3 = atomicrmw umax i64* @sc64, i64 7 acquire
 ; LINUX: [[LABEL:.LBB[0-9]+_[0-9]+]]
 ; LINUX: cmpl
 ; LINUX: sbbl
-; LINUX: cmovne
-; LINUX: cmovne
+; LINUX: jne
+; LINUX: jne
 ; LINUX: lock cmpxchg8b
 ; LINUX: jne [[LABEL]]
   %4 = atomicrmw umin i64* @sc64, i64 8 acquire
 ; LINUX: [[LABEL:.LBB[0-9]+_[0-9]+]]
 ; LINUX: cmpl
 ; LINUX: sbbl
-; LINUX: cmovne
-; LINUX: cmovne
+; LINUX: jne
+; LINUX: jne
 ; LINUX: lock cmpxchg8b
 ; LINUX: jne [[LABEL]]
   ret void

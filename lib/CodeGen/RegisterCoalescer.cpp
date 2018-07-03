@@ -248,6 +248,16 @@ namespace {
       }
     }
 
+    /// Wrapper Method to do all the necessary work when an Instruction is
+    /// deleted.
+    /// Optimizations should use this to make sure that deleted instructions
+    /// are always accounted for.
+    void deleteInstr(MachineInstr* MI) {
+      ErasedInstrs.insert(MI);
+      LIS->RemoveMachineInstrFromMaps(*MI);
+      MI->eraseFromParent();
+    }
+
   public:
     static char ID; ///< Class identification, replacement for typeinfo
     RegisterCoalescer() : MachineFunctionPass(ID) {
@@ -797,9 +807,7 @@ bool RegisterCoalescer::removeCopyByCommutingDef(const CoalescerPair &CP,
       S.MergeValueNumberInto(SubDVNI, SubBValNo);
     }
 
-    ErasedInstrs.insert(UseMI);
-    LIS->RemoveMachineInstrFromMaps(*UseMI);
-    UseMI->eraseFromParent();
+    deleteInstr(UseMI);
   }
 
   // Extend BValNo by merging in IntA live segments of AValNo. Val# definition
@@ -993,10 +1001,8 @@ bool RegisterCoalescer::removePartialRedundancy(const CoalescerPair &CP,
   // Note: This is fine to remove the copy before updating the live-ranges.
   // While updating the live-ranges, we only look at slot indices and
   // never go back to the instruction.
-  LIS->RemoveMachineInstrFromMaps(CopyMI);
   // Mark instructions as deleted.
-  ErasedInstrs.insert(&CopyMI);
-  CopyMI.eraseFromParent();
+  deleteInstr(&CopyMI);
 
   // Update the liveness.
   SmallVector<SlotIndex, 8> EndPoints;
@@ -1226,6 +1232,34 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
         LiveInterval::SubRange *SR = DstInt.createSubRange(Alloc, MaxMask);
         SR->createDeadDef(DefIndex, Alloc);
       }
+    }
+
+    // Make sure that the subrange for resultant undef is removed
+    // For example:
+    //   vreg1:sub1<def,read-undef> = LOAD CONSTANT 1
+    //   vreg2<def> = COPY vreg1
+    // ==>
+    //   vreg2:sub1<def, read-undef> = LOAD CONSTANT 1
+    //     ; Correct but need to remove the subrange for vreg2:sub0
+    //     ; as it is now undef
+    if (NewIdx != 0 && DstInt.hasSubRanges()) {
+      // The affected subregister segments can be removed.
+      SlotIndex CurrIdx = LIS->getInstructionIndex(NewMI);
+      LaneBitmask DstMask = TRI->getSubRegIndexLaneMask(NewIdx);
+      bool UpdatedSubRanges = false;
+      for (LiveInterval::SubRange &SR : DstInt.subranges()) {
+        if ((SR.LaneMask & DstMask).none()) {
+          DEBUG(dbgs() << "Removing undefined SubRange "
+                << PrintLaneMask(SR.LaneMask) << " : " << SR << "\n");
+          // VNI is in ValNo - remove any segments in this SubRange that have this ValNo
+          if (VNInfo *RmValNo = SR.getVNInfoAt(CurrIdx.getRegSlot())) {
+            SR.removeValNo(RmValNo);
+            UpdatedSubRanges = true;
+          }
+        }
+      }
+      if (UpdatedSubRanges)
+        DstInt.removeEmptySubRanges();
     }
   } else if (NewMI.getOperand(0).getReg() != CopyDstReg) {
     // The New instruction may be defining a sub-register of what's actually
@@ -1550,8 +1584,7 @@ bool RegisterCoalescer::joinCopy(MachineInstr *CopyMI, bool &Again) {
 
   // Eliminate undefs.
   if (!CP.isPhys() && eliminateUndefCopy(CopyMI)) {
-    LIS->RemoveMachineInstrFromMaps(*CopyMI);
-    CopyMI->eraseFromParent();
+    deleteInstr(CopyMI);
     return false;  // Not coalescable.
   }
 
@@ -1579,8 +1612,7 @@ bool RegisterCoalescer::joinCopy(MachineInstr *CopyMI, bool &Again) {
       }
       DEBUG(dbgs() << "\tMerged values:          " << LI << '\n');
     }
-    LIS->RemoveMachineInstrFromMaps(*CopyMI);
-    CopyMI->eraseFromParent();
+    deleteInstr(CopyMI);
     return true;
   }
 
@@ -1640,8 +1672,7 @@ bool RegisterCoalescer::joinCopy(MachineInstr *CopyMI, bool &Again) {
     if (!CP.isPartial() && !CP.isPhys()) {
       if (adjustCopiesBackFrom(CP, CopyMI) ||
           removeCopyByCommutingDef(CP, CopyMI)) {
-        LIS->RemoveMachineInstrFromMaps(*CopyMI);
-        CopyMI->eraseFromParent();
+        deleteInstr(CopyMI);
         DEBUG(dbgs() << "\tTrivial!\n");
         return true;
       }
@@ -1827,8 +1858,7 @@ bool RegisterCoalescer::joinReservedPhysReg(CoalescerPair &CP) {
     }
   }
 
-  LIS->RemoveMachineInstrFromMaps(*CopyMI);
-  CopyMI->eraseFromParent();
+  deleteInstr(CopyMI);
 
   // We don't track kills for reserved registers.
   MRI->clearKillFlags(CP.getSrcReg());
@@ -2211,7 +2241,7 @@ JoinVals::analyzeValue(unsigned ValNo, JoinVals &Other) {
   const MachineInstr *DefMI = nullptr;
   if (VNI->isPHIDef()) {
     // Conservatively assume that all lanes in a PHI are valid.
-    LaneBitmask Lanes = SubRangeJoin ? LaneBitmask(1)
+    LaneBitmask Lanes = SubRangeJoin ? LaneBitmask::getLane(0)
                                      : TRI->getSubRegIndexLaneMask(SubIdx);
     V.ValidLanes = V.WriteLanes = Lanes;
   } else {
@@ -2219,7 +2249,7 @@ JoinVals::analyzeValue(unsigned ValNo, JoinVals &Other) {
     assert(DefMI != nullptr);
     if (SubRangeJoin) {
       // We don't care about the lanes when joining subregister ranges.
-      V.WriteLanes = V.ValidLanes = LaneBitmask(1);
+      V.WriteLanes = V.ValidLanes = LaneBitmask::getLane(0);
       if (DefMI->isImplicitDef()) {
         V.ValidLanes = LaneBitmask::getNone();
         V.ErasableImplicitDef = true;

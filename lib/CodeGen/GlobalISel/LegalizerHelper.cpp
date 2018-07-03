@@ -99,23 +99,19 @@ static RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size) {
   llvm_unreachable("Unknown libcall function");
 }
 
-LegalizerHelper::LegalizeResult llvm::replaceWithLibcall(
-    MachineInstr &MI, MachineIRBuilder &MIRBuilder, RTLIB::Libcall Libcall,
-    const CallLowering::ArgInfo &Result, ArrayRef<CallLowering::ArgInfo> Args) {
+LegalizerHelper::LegalizeResult
+llvm::createLibcall(MachineIRBuilder &MIRBuilder, RTLIB::Libcall Libcall,
+                    const CallLowering::ArgInfo &Result,
+                    ArrayRef<CallLowering::ArgInfo> Args) {
   auto &CLI = *MIRBuilder.getMF().getSubtarget().getCallLowering();
   auto &TLI = *MIRBuilder.getMF().getSubtarget().getTargetLowering();
   const char *Name = TLI.getLibcallName(Libcall);
+
   MIRBuilder.getMF().getFrameInfo().setHasCalls(true);
-  MIRBuilder.setInstr(MI);
   if (!CLI.lowerCall(MIRBuilder, TLI.getLibcallCallingConv(Libcall),
                      MachineOperand::CreateES(Name), Result, Args))
     return LegalizerHelper::UnableToLegalize;
 
-  // We're about to remove MI, so move the insert point after it.
-  MIRBuilder.setInsertPt(MIRBuilder.getMBB(),
-                         std::next(MIRBuilder.getInsertPt()));
-
-  MI.eraseFromParent();
   return LegalizerHelper::Legalized;
 }
 
@@ -123,10 +119,9 @@ static LegalizerHelper::LegalizeResult
 simpleLibcall(MachineInstr &MI, MachineIRBuilder &MIRBuilder, unsigned Size,
               Type *OpType) {
   auto Libcall = getRTLibDesc(MI.getOpcode(), Size);
-  return replaceWithLibcall(MI, MIRBuilder, Libcall,
-                            {MI.getOperand(0).getReg(), OpType},
-                            {{MI.getOperand(1).getReg(), OpType},
-                             {MI.getOperand(2).getReg(), OpType}});
+  return createLibcall(MIRBuilder, Libcall, {MI.getOperand(0).getReg(), OpType},
+                       {{MI.getOperand(1).getReg(), OpType},
+                        {MI.getOperand(2).getReg(), OpType}});
 }
 
 LegalizerHelper::LegalizeResult
@@ -134,6 +129,8 @@ LegalizerHelper::libcall(MachineInstr &MI) {
   LLT LLTy = MRI.getType(MI.getOperand(0).getReg());
   unsigned Size = LLTy.getSizeInBits();
   auto &Ctx = MIRBuilder.getMF().getFunction()->getContext();
+
+  MIRBuilder.setInstr(MI);
 
   switch (MI.getOpcode()) {
   default:
@@ -143,15 +140,24 @@ LegalizerHelper::libcall(MachineInstr &MI) {
   case TargetOpcode::G_SREM:
   case TargetOpcode::G_UREM: {
     Type *HLTy = Type::getInt32Ty(Ctx);
-    return simpleLibcall(MI, MIRBuilder, Size, HLTy);
+    auto Status = simpleLibcall(MI, MIRBuilder, Size, HLTy);
+    if (Status != Legalized)
+      return Status;
+    break;
   }
   case TargetOpcode::G_FADD:
   case TargetOpcode::G_FPOW:
   case TargetOpcode::G_FREM: {
     Type *HLTy = Size == 64 ? Type::getDoubleTy(Ctx) : Type::getFloatTy(Ctx);
-    return simpleLibcall(MI, MIRBuilder, Size, HLTy);
+    auto Status = simpleLibcall(MI, MIRBuilder, Size, HLTy);
+    if (Status != Legalized)
+      return Status;
+    break;
   }
   }
+
+  MI.eraseFromParent();
+  return Legalized;
 }
 
 LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
@@ -427,9 +433,12 @@ LegalizerHelper::widenScalar(MachineInstr &MI, unsigned TypeIdx, LLT WideTy) {
   }
   case TargetOpcode::G_SDIV:
   case TargetOpcode::G_UDIV:
+  case TargetOpcode::G_SREM:
+  case TargetOpcode::G_UREM:
   case TargetOpcode::G_ASHR:
   case TargetOpcode::G_LSHR: {
     unsigned ExtOp = MI.getOpcode() == TargetOpcode::G_SDIV ||
+                             MI.getOpcode() == TargetOpcode::G_SREM ||
                              MI.getOpcode() == TargetOpcode::G_ASHR
                          ? TargetOpcode::G_SEXT
                          : TargetOpcode::G_ZEXT;
@@ -588,22 +597,58 @@ LegalizerHelper::widenScalar(MachineInstr &MI, unsigned TypeIdx, LLT WideTy) {
     MI.eraseFromParent();
     return Legalized;
   }
+  case TargetOpcode::G_FCMP: {
+    unsigned Op0Ext, Op1Ext, DstReg;
+    unsigned Cmp1 = MI.getOperand(2).getReg();
+    unsigned Cmp2 = MI.getOperand(3).getReg();
+    if (TypeIdx == 0) {
+      Op0Ext = Cmp1;
+      Op1Ext = Cmp2;
+      DstReg = MRI.createGenericVirtualRegister(WideTy);
+    } else {
+      Op0Ext = MRI.createGenericVirtualRegister(WideTy);
+      Op1Ext = MRI.createGenericVirtualRegister(WideTy);
+      DstReg = MI.getOperand(0).getReg();
+      MIRBuilder.buildInstr(TargetOpcode::G_FPEXT, Op0Ext, Cmp1);
+      MIRBuilder.buildInstr(TargetOpcode::G_FPEXT, Op1Ext, Cmp2);
+    }
+    MIRBuilder.buildFCmp(
+        static_cast<CmpInst::Predicate>(MI.getOperand(1).getPredicate()),
+        DstReg, Op0Ext, Op1Ext);
+    if (TypeIdx == 0)
+      MIRBuilder.buildInstr(TargetOpcode::G_TRUNC, MI.getOperand(0).getReg(),
+                            DstReg);
+    MI.eraseFromParent();
+    return Legalized;
+  }
   case TargetOpcode::G_ICMP: {
-    assert(TypeIdx == 1 && "unable to legalize predicate");
     bool IsSigned = CmpInst::isSigned(
         static_cast<CmpInst::Predicate>(MI.getOperand(1).getPredicate()));
-    unsigned Op0Ext = MRI.createGenericVirtualRegister(WideTy);
-    unsigned Op1Ext = MRI.createGenericVirtualRegister(WideTy);
-    if (IsSigned) {
-      MIRBuilder.buildSExt(Op0Ext, MI.getOperand(2).getReg());
-      MIRBuilder.buildSExt(Op1Ext, MI.getOperand(3).getReg());
+    unsigned Cmp1 = MI.getOperand(2).getReg();
+    unsigned Cmp2 = MI.getOperand(3).getReg();
+    unsigned Op0Ext, Op1Ext, DstReg;
+    if (TypeIdx == 0) {
+      Op0Ext = Cmp1;
+      Op1Ext = Cmp2;
+      DstReg = MRI.createGenericVirtualRegister(WideTy);
     } else {
-      MIRBuilder.buildZExt(Op0Ext, MI.getOperand(2).getReg());
-      MIRBuilder.buildZExt(Op1Ext, MI.getOperand(3).getReg());
+      Op0Ext = MRI.createGenericVirtualRegister(WideTy);
+      Op1Ext = MRI.createGenericVirtualRegister(WideTy);
+      DstReg = MI.getOperand(0).getReg();
+      if (IsSigned) {
+        MIRBuilder.buildSExt(Op0Ext, Cmp1);
+        MIRBuilder.buildSExt(Op1Ext, Cmp2);
+      } else {
+        MIRBuilder.buildZExt(Op0Ext, Cmp1);
+        MIRBuilder.buildZExt(Op1Ext, Cmp2);
+      }
     }
     MIRBuilder.buildICmp(
         static_cast<CmpInst::Predicate>(MI.getOperand(1).getPredicate()),
-        MI.getOperand(0).getReg(), Op0Ext, Op1Ext);
+        DstReg, Op0Ext, Op1Ext);
+    if (TypeIdx == 0)
+      MIRBuilder.buildInstr(TargetOpcode::G_TRUNC, MI.getOperand(0).getReg(),
+                            DstReg);
     MI.eraseFromParent();
     return Legalized;
   }

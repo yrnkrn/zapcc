@@ -1,4 +1,4 @@
-; RUN: llc -march=amdgcn -mtriple=amdgcn-amd-amdhsa -mattr=-promote-alloca -verify-machineinstrs < %s | FileCheck -enable-var-scope -check-prefix=HSA -check-prefix=CI %s
+; RUN: llc -march=amdgcn -mtriple=amdgcn-amd-amdhsa -mcpu=kaveri -mattr=-promote-alloca -verify-machineinstrs < %s | FileCheck -enable-var-scope -check-prefix=HSA -check-prefix=CI %s
 ; RUN: llc -march=amdgcn -mtriple=amdgcn-amd-amdhsa -mcpu=gfx900 -mattr=-promote-alloca -verify-machineinstrs < %s | FileCheck -enable-var-scope -check-prefix=HSA -check-prefix=GFX9 %s
 
 ; HSA-LABEL: {{^}}use_group_to_flat_addrspacecast:
@@ -10,20 +10,22 @@
 ; CI-DAG: s_load_dword [[PTR:s[0-9]+]], s[6:7], 0x0{{$}}
 ; CI-DAG: s_load_dword [[APERTURE:s[0-9]+]], s[4:5], 0x10{{$}}
 ; CI-DAG: v_mov_b32_e32 [[VAPERTURE:v[0-9]+]], [[APERTURE]]
+; CI-DAG: v_cmp_ne_u32_e64 vcc, [[PTR]], -1
+; CI-DAG: v_cndmask_b32_e32 v[[HI:[0-9]+]], 0, [[VAPERTURE]], vcc
+; CI-DAG: v_mov_b32_e32 [[VPTR:v[0-9]+]], [[PTR]]
+; CI-DAG: v_cndmask_b32_e32 v[[LO:[0-9]+]], 0, [[VPTR]]
 
+; HSA-DAG: v_mov_b32_e32 [[K:v[0-9]+]], 7
 ; GFX9-DAG: s_load_dword [[PTR:s[0-9]+]], s[4:5], 0x0{{$}}
 ; GFX9-DAG: s_getreg_b32 [[SSRC_SHARED:s[0-9]+]], hwreg(15, 16, 16)
 ; GFX9-DAG: s_lshl_b32 [[SSRC_SHARED_BASE:s[0-9]+]], [[SSRC_SHARED]], 16
 ; GFX9-DAG: v_mov_b32_e32 [[VAPERTURE:v[0-9]+]], [[SSRC_SHARED_BASE]]
 
 ; GFX9-XXX: v_mov_b32_e32 [[VAPERTURE:v[0-9]+]], src_shared_base
-
-; HSA-DAG: v_mov_b32_e32 [[VPTR:v[0-9]+]], [[PTR]]
-
-; HSA-DAG: v_cmp_ne_u32_e64 vcc, [[PTR]], -1
-; HSA-DAG: v_cndmask_b32_e32 v[[HI:[0-9]+]], 0, [[VAPERTURE]]
-; HSA-DAG: v_cndmask_b32_e32 v[[LO:[0-9]+]], 0, [[VPTR]]
-; HSA-DAG: v_mov_b32_e32 [[K:v[0-9]+]], 7
+; GFX9: v_cmp_ne_u32_e64 vcc, [[PTR]], -1
+; GFX9: v_cndmask_b32_e32 v[[HI:[0-9]+]], 0, [[VAPERTURE]], vcc
+; GFX9-DAG: v_mov_b32_e32 [[VPTR:v[0-9]+]], [[PTR]]
+; GFX9-DAG: v_cndmask_b32_e32 v[[LO:[0-9]+]], 0, [[VPTR]]
 
 ; HSA: flat_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, [[K]]
 
@@ -48,6 +50,12 @@ define amdgpu_kernel void @use_group_to_flat_addrspacecast(i32 addrspace(3)* %pt
 ; CI-DAG: s_load_dword [[APERTURE:s[0-9]+]], s[4:5], 0x11{{$}}
 ; CI-DAG: v_mov_b32_e32 [[VAPERTURE:v[0-9]+]], [[APERTURE]]
 
+; CI-DAG: v_mov_b32_e32 [[K:v[0-9]+]], 7
+; CI-DAG: v_cmp_ne_u32_e64 vcc, [[PTR]], 0
+; CI-DAG: v_cndmask_b32_e32 v[[HI:[0-9]+]], 0, [[VAPERTURE]], vcc
+; CI-DAG: v_mov_b32_e32 [[VPTR:v[0-9]+]], [[PTR]]
+; CI-DAG: v_cndmask_b32_e32 v[[LO:[0-9]+]], 0, [[VPTR]]
+
 ; GFX9-DAG: s_load_dword [[PTR:s[0-9]+]], s[4:5], 0x0{{$}}
 ; GFX9-DAG: s_getreg_b32 [[SSRC_PRIVATE:s[0-9]+]], hwreg(15, 0, 16)
 ; GFX9-DAG: s_lshl_b32 [[SSRC_PRIVATE_BASE:s[0-9]+]], [[SSRC_PRIVATE]], 16
@@ -55,12 +63,11 @@ define amdgpu_kernel void @use_group_to_flat_addrspacecast(i32 addrspace(3)* %pt
 
 ; GFX9-XXX: v_mov_b32_e32 [[VAPERTURE:v[0-9]+]], src_private_base
 
-; HSA-DAG: v_mov_b32_e32 [[VPTR:v[0-9]+]], [[PTR]]
-
-; HSA-DAG: v_cmp_ne_u32_e64 vcc, [[PTR]], 0
-; HSA-DAG: v_cndmask_b32_e32 v[[HI:[0-9]+]], 0, [[VAPERTURE]]
-; HSA-DAG: v_cndmask_b32_e32 v[[LO:[0-9]+]], 0, [[VPTR]]
-; HSA-DAG: v_mov_b32_e32 [[K:v[0-9]+]], 7
+; GFX9-DAG: v_mov_b32_e32 [[K:v[0-9]+]], 7
+; GFX9: v_cmp_ne_u32_e64 vcc, [[PTR]], 0
+; GFX9: v_cndmask_b32_e32 v[[HI:[0-9]+]], 0, [[VAPERTURE]], vcc
+; GFX9: v_mov_b32_e32 [[VPTR:v[0-9]+]], [[PTR]]
+; GFX9-DAG: v_cndmask_b32_e32 v[[LO:[0-9]+]], 0, [[VPTR]]
 
 ; HSA: flat_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, [[K]]
 
@@ -140,7 +147,7 @@ define amdgpu_kernel void @use_flat_to_private_addrspacecast(i32 addrspace(4)* %
 ; HSA-DAG: v_mov_b32_e32 v[[VPTRLO:[0-9]+]], s[[PTRLO]]
 ; HSA-DAG: v_mov_b32_e32 v[[VPTRHI:[0-9]+]], s[[PTRHI]]
 ; HSA-DAG: v_mov_b32_e32 [[K:v[0-9]+]], 0
-; HSA: flat_store_dword v{{\[}}[[VPTRLO]]:[[VPTRHI]]{{\]}}, [[K]]
+; HSA: {{flat|global}}_store_dword v{{\[}}[[VPTRLO]]:[[VPTRHI]]{{\]}}, [[K]]
 define amdgpu_kernel void @use_flat_to_global_addrspacecast(i32 addrspace(4)* %ptr) #0 {
   %ftos = addrspacecast i32 addrspace(4)* %ptr to i32 addrspace(1)*
   store volatile i32 0, i32 addrspace(1)* %ftos
@@ -169,7 +176,7 @@ define amdgpu_kernel void @use_flat_to_constant_addrspacecast(i32 addrspace(4)* 
 
 ; HSA-DAG: v_mov_b32_e32 v[[LO:[0-9]+]], 0{{$}}
 ; HSA-DAG: v_mov_b32_e32 v[[K:[0-9]+]], 7{{$}}
-; HSA: flat_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, v[[K]]
+; HSA: {{flat|global}}_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, v[[K]]
 define amdgpu_kernel void @cast_0_group_to_flat_addrspacecast() #0 {
   %cast = addrspacecast i32 addrspace(3)* null to i32 addrspace(4)*
   store volatile i32 7, i32 addrspace(4)* %cast
@@ -190,7 +197,7 @@ define amdgpu_kernel void @cast_0_flat_to_group_addrspacecast() #0 {
 ; HSA: v_mov_b32_e32 v[[LO:[0-9]+]], 0{{$}}
 ; HSA: v_mov_b32_e32 v[[K:[0-9]+]], 7{{$}}
 ; HSA: v_mov_b32_e32 v[[HI:[0-9]+]], 0{{$}}
-; HSA: flat_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, v[[K]]
+; HSA: {{flat|global}}_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, v[[K]]
 define amdgpu_kernel void @cast_neg1_group_to_flat_addrspacecast() #0 {
   %cast = addrspacecast i32 addrspace(3)* inttoptr (i32 -1 to i32 addrspace(3)*) to i32 addrspace(4)*
   store volatile i32 7, i32 addrspace(4)* %cast
@@ -215,7 +222,7 @@ define amdgpu_kernel void @cast_neg1_flat_to_group_addrspacecast() #0 {
 ; HSA-DAG: v_mov_b32_e32 v[[LO:[0-9]+]], 0{{$}}
 ; HSA-DAG: v_mov_b32_e32 v[[K:[0-9]+]], 7{{$}}
 ; HSA: v_mov_b32_e32 v[[HI:[0-9]+]], 0{{$}}
-; HSA: flat_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, v[[K]]
+; HSA: {{flat|global}}_store_dword v{{\[}}[[LO]]:[[HI]]{{\]}}, v[[K]]
 define amdgpu_kernel void @cast_0_private_to_flat_addrspacecast() #0 {
   %cast = addrspacecast i32* null to i32 addrspace(4)*
   store volatile i32 7, i32 addrspace(4)* %cast
@@ -235,7 +242,7 @@ define amdgpu_kernel void @cast_0_flat_to_private_addrspacecast() #0 {
 ; specialize away generic pointer accesses.
 
 ; HSA-LABEL: {{^}}branch_use_flat_i32:
-; HSA: flat_store_dword {{v\[[0-9]+:[0-9]+\]}}, {{v[0-9]+}}
+; HSA: {{flat|global}}_store_dword {{v\[[0-9]+:[0-9]+\]}}, {{v[0-9]+}}
 ; HSA: s_endpgm
 define amdgpu_kernel void @branch_use_flat_i32(i32 addrspace(1)* noalias %out, i32 addrspace(1)* %gptr, i32 addrspace(3)* %lptr, i32 %x, i32 %c) #0 {
 entry:
@@ -267,9 +274,9 @@ end:
 ; GFX9: s_add_u32 flat_scratch_lo, s6, s9
 ; GFX9: s_addc_u32 flat_scratch_hi, s7, 0
 
-; HSA: flat_store_dword
+; HSA: {{flat|global}}_store_dword
 ; HSA: s_barrier
-; HSA: flat_load_dword
+; HSA: {{flat|global}}_load_dword
 define amdgpu_kernel void @store_flat_scratch(i32 addrspace(1)* noalias %out, i32) #0 {
   %alloca = alloca i32, i32 9, align 4
   %x = call i32 @llvm.amdgcn.workitem.id.x() #2

@@ -326,13 +326,30 @@ raw_ostream &raw_ostream::operator<<(const formatv_object_base &Obj) {
 }
 
 raw_ostream &raw_ostream::operator<<(const FormattedString &FS) {
-  unsigned Len = FS.Str.size(); 
-  int PadAmount = FS.Width - Len;
-  if (FS.RightJustify && (PadAmount > 0))
+  if (FS.Str.size() >= FS.Width || FS.Justify == FormattedString::JustifyNone) {
+    this->operator<<(FS.Str);
+    return *this;
+  }
+  const size_t Difference = FS.Width - FS.Str.size();
+  switch (FS.Justify) {
+  case FormattedString::JustifyLeft:
+    this->operator<<(FS.Str);
+    this->indent(Difference);
+    break;
+  case FormattedString::JustifyRight:
+    this->indent(Difference);
+    this->operator<<(FS.Str);
+    break;
+  case FormattedString::JustifyCenter: {
+    int PadAmount = Difference / 2;
     this->indent(PadAmount);
-  this->operator<<(FS.Str);
-  if (!FS.RightJustify && (PadAmount > 0))
-    this->indent(PadAmount);
+    this->operator<<(FS.Str);
+    this->indent(Difference - PadAmount);
+    break;
+  }
+  default:
+    llvm_unreachable("Bad Justification");
+  }
   return *this;
 }
 
@@ -496,11 +513,13 @@ raw_fd_ostream::raw_fd_ostream(int fd, bool shouldClose, bool unbuffered)
     ShouldClose = false;
     return;
   }
-  // We do not want to close STDOUT as there may have been several uses of it
-  // such as the case: llc %s -o=- -pass-remarks-output=- -filetype=asm
-  // which cause multiple closes of STDOUT_FILENO and/or use-after-close of it.
-  // Using dup() in getFD doesn't work as we end up with original STDOUT_FILENO
-  // open anyhow.
+
+  // Do not attempt to close stdout or stderr. We used to try to maintain the
+  // property that tools that support writing file to stdout should not also
+  // write informational output to stdout, but in practice we were never able to
+  // maintain this invariant. Many features have been added to LLVM and clang
+  // (-fdump-record-layouts, optimization remarks, etc) that print to stdout, so
+  // users must simply be aware that mixed output and remarks is a possibility.
   if (FD <= STDERR_FILENO)
     ShouldClose = false;
 
@@ -705,10 +724,7 @@ bool raw_fd_ostream::has_colors() const {
 /// outs() - This returns a reference to a raw_ostream for standard output.
 /// Use it like: outs() << "foo" << "bar";
 raw_ostream &llvm::outs() {
-  // Set buffer settings to model stdout behavior.  Delete the file descriptor
-  // when the program exits, forcing error detection.  This means that if you
-  // ever call outs(), you can't open another raw_fd_ostream on stdout, as we'll
-  // close stdout twice and print an error the second time.
+  // Set buffer settings to model stdout behavior.
   std::error_code EC;
   static raw_fd_ostream S("-", EC, sys::fs::F_None);
   assert(!EC);

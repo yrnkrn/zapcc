@@ -885,46 +885,44 @@ MicrosoftCXXABI::getRecordArgABI(const CXXRecordDecl *RD) const {
     return RAA_Default;
 
   case llvm::Triple::x86_64:
-    // Win64 passes objects with non-trivial copy ctors indirectly.
-    if (RD->hasNonTrivialCopyConstructor())
-      return RAA_Indirect;
-
-    // If an object has a destructor, we'd really like to pass it indirectly
+    // If a class has a destructor, we'd really like to pass it indirectly
     // because it allows us to elide copies.  Unfortunately, MSVC makes that
     // impossible for small types, which it will pass in a single register or
     // stack slot. Most objects with dtors are large-ish, so handle that early.
     // We can't call out all large objects as being indirect because there are
     // multiple x64 calling conventions and the C++ ABI code shouldn't dictate
     // how we pass large POD types.
+    //
+    // Note: This permits small classes with nontrivial destructors to be
+    // passed in registers, which is non-conforming.
     if (RD->hasNonTrivialDestructor() &&
         getContext().getTypeSize(RD->getTypeForDecl()) > 64)
       return RAA_Indirect;
 
-    // If this is true, the implicit copy constructor that Sema would have
-    // created would not be deleted. FIXME: We should provide a more direct way
-    // for CodeGen to ask whether the constructor was deleted.
-    if (!RD->hasUserDeclaredCopyConstructor() &&
-        !RD->hasUserDeclaredMoveConstructor() &&
-        !RD->needsOverloadResolutionForMoveConstructor() &&
-        !RD->hasUserDeclaredMoveAssignment() &&
-        !RD->needsOverloadResolutionForMoveAssignment())
-      return RAA_Default;
-
-    // Otherwise, Sema should have created an implicit copy constructor if
-    // needed.
-    assert(!RD->needsImplicitCopyConstructor());
-
-    // We have to make sure the trivial copy constructor isn't deleted.
-    for (const CXXConstructorDecl *CD : RD->ctors()) {
-      if (CD->isCopyConstructor()) {
-        assert(CD->isTrivial());
-        // We had at least one undeleted trivial copy ctor.  Return directly.
-        if (!CD->isDeleted())
-          return RAA_Default;
+    // If a class has at least one non-deleted, trivial copy constructor, it
+    // is passed according to the C ABI. Otherwise, it is passed indirectly.
+    //
+    // Note: This permits classes with non-trivial copy or move ctors to be
+    // passed in registers, so long as they *also* have a trivial copy ctor,
+    // which is non-conforming.
+    if (RD->needsImplicitCopyConstructor()) {
+      // If the copy ctor has not yet been declared, we can read its triviality
+      // off the AST.
+      if (!RD->defaultedCopyConstructorIsDeleted() &&
+          RD->hasTrivialCopyConstructor())
+        return RAA_Default;
+    } else {
+      // Otherwise, we need to find the copy constructor(s) and ask.
+      for (const CXXConstructorDecl *CD : RD->ctors()) {
+        if (CD->isCopyConstructor()) {
+          // We had at least one nondeleted trivial copy ctor.  Return directly.
+          if (!CD->isDeleted() && CD->isTrivial())
+            return RAA_Default;
+        }
       }
     }
 
-    // The trivial copy constructor was deleted.  Return indirectly.
+    // We have no trivial, non-deleted copy constructor.
     return RAA_Indirect;
   }
 
@@ -2536,11 +2534,12 @@ void MicrosoftCXXABI::EmitGuardedInit(CodeGenFunction &CGF, const VarDecl &D,
     // Test our bit from the guard variable.
     llvm::ConstantInt *Bit = llvm::ConstantInt::get(GuardTy, 1ULL << GuardNum);
     llvm::LoadInst *LI = Builder.CreateLoad(GuardAddr);
-    llvm::Value *IsInitialized =
-        Builder.CreateICmpNE(Builder.CreateAnd(LI, Bit), Zero);
+    llvm::Value *NeedsInit =
+        Builder.CreateICmpEQ(Builder.CreateAnd(LI, Bit), Zero);
     llvm::BasicBlock *InitBlock = CGF.createBasicBlock("init");
     llvm::BasicBlock *EndBlock = CGF.createBasicBlock("init.end");
-    Builder.CreateCondBr(IsInitialized, EndBlock, InitBlock);
+    CGF.EmitCXXGuardedInitBranch(NeedsInit, InitBlock, EndBlock,
+                                 CodeGenFunction::GuardKind::VariableGuard, &D);
 
     // Set our bit in the guard variable and emit the initializer and add a global
     // destructor if appropriate.
@@ -2575,7 +2574,8 @@ void MicrosoftCXXABI::EmitGuardedInit(CodeGenFunction &CGF, const VarDecl &D,
         Builder.CreateICmpSGT(FirstGuardLoad, InitThreadEpoch);
     llvm::BasicBlock *AttemptInitBlock = CGF.createBasicBlock("init.attempt");
     llvm::BasicBlock *EndBlock = CGF.createBasicBlock("init.end");
-    Builder.CreateCondBr(IsUninitialized, AttemptInitBlock, EndBlock);
+    CGF.EmitCXXGuardedInitBranch(IsUninitialized, AttemptInitBlock, EndBlock,
+                                 CodeGenFunction::GuardKind::VariableGuard, &D);
 
     // This BasicBlock attempts to determine whether or not this thread is
     // responsible for doing the initialization.
@@ -3498,6 +3498,8 @@ static llvm::GlobalValue::LinkageTypes getLinkageForRTTI(QualType Ty) {
     return llvm::GlobalValue::InternalLinkage;
 
   case VisibleNoLinkage:
+  case ModuleInternalLinkage:
+  case ModuleLinkage:
   case ExternalLinkage:
     return llvm::GlobalValue::LinkOnceODRLinkage;
   }

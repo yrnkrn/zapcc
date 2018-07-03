@@ -51,12 +51,8 @@ class VOP3Common <dag outs, dag ins, string asm = "",
 
   let VOP3 = 1;
 
-  let AsmMatchConverter =
-    !if(!eq(VOP3Only,1),
-        "cvtVOP3",
-        !if(!eq(HasMods,1), "cvtVOP3_2_mod", ""));
-
   let AsmVariantName = AMDGPUAsmVariants.VOP3;
+  let AsmMatchConverter = !if(!eq(HasMods,1), "cvtVOP3", "");
 
   let isCodeGenOnly = 0;
 
@@ -69,8 +65,13 @@ class VOP3Common <dag outs, dag ins, string asm = "",
 }
 
 class VOP3_Pseudo <string opName, VOPProfile P, list<dag> pattern = [],
-                   bit VOP3Only = 0, bit isVOP3P = 0> :
-  InstSI <P.Outs64, !if(!and(isVOP3P, P.IsPacked), P.InsVOP3P, P.Ins64), "", pattern>,
+                   bit VOP3Only = 0, bit isVOP3P = 0, bit isVop3OpSel = 0> :
+  InstSI <P.Outs64,
+          !if(isVop3OpSel,
+              P.InsVOP3OpSel,
+              !if(!and(isVOP3P, P.IsPacked), P.InsVOP3P, P.Ins64)),
+          "",
+          pattern>,
   VOP <opName>,
   SIMCInstr<opName#"_e64", SIEncodingFamily.NONE>,
   MnemonicAlias<opName#"_e64", opName> {
@@ -78,9 +79,12 @@ class VOP3_Pseudo <string opName, VOPProfile P, list<dag> pattern = [],
   let isPseudo = 1;
   let isCodeGenOnly = 1;
   let UseNamedOperandTable = 1;
+  let VOP3_OPSEL = isVop3OpSel;
 
   string Mnemonic = opName;
-  string AsmOperands = !if(!and(isVOP3P, P.IsPacked), P.AsmVOP3P, P.Asm64);
+  string AsmOperands = !if(isVop3OpSel,
+                           P.AsmVOP3OpSel,
+                           !if(!and(isVOP3P, P.IsPacked), P.AsmVOP3P, P.Asm64));
 
   let Size = 8;
   let mayLoad = 0;
@@ -106,13 +110,11 @@ class VOP3_Pseudo <string opName, VOPProfile P, list<dag> pattern = [],
 
   let AsmVariantName = AMDGPUAsmVariants.VOP3;
   let AsmMatchConverter =
-    !if(!eq(VOP3Only,1),
-        !if(!and(P.IsPacked, isVOP3P), "cvtVOP3P", "cvtVOP3"),
-        !if(!eq(P.HasModifiers, 1),
-            "cvtVOP3_2_mod",
-            !if(!eq(P.HasOMod, 1), "cvtVOP3OMod", "")
-        )
-    );
+    !if(!and(P.IsPacked, isVOP3P),
+        "cvtVOP3P",
+        !if(!or(P.HasModifiers, !or(P.HasOMod, P.HasIntClamp)),
+            "cvtVOP3",
+            ""));
 
   VOPProfile Pfl = P;
 }
@@ -142,6 +144,8 @@ class VOP3_Real <VOP3_Pseudo ps, int EncodingFamily> :
   let TSFlags            = ps.TSFlags;
   let UseNamedOperandTable = ps.UseNamedOperandTable;
   let Uses                 = ps.Uses;
+
+  VOPProfile Pfl = ps.Pfl;
 }
 
 // XXX - Is there any reason to distingusih this from regular VOP3
@@ -150,11 +154,11 @@ class VOP3P_Real<VOP3P_Pseudo ps, int EncodingFamily> :
   VOP3_Real<ps, EncodingFamily>;
 
 class VOP3a<VOPProfile P> : Enc64 {
-  bits<2> src0_modifiers;
+  bits<4> src0_modifiers;
   bits<9> src0;
-  bits<2> src1_modifiers;
+  bits<3> src1_modifiers;
   bits<9> src1;
-  bits<2> src2_modifiers;
+  bits<3> src2_modifiers;
   bits<9> src2;
   bits<1> clamp;
   bits<2> omod;
@@ -191,6 +195,32 @@ class VOP3e_si <bits<9> op, VOPProfile P> : VOP3a_si <op, P> {
 class VOP3e_vi <bits<10> op, VOPProfile P> : VOP3a_vi <op, P> {
   bits<8> vdst;
   let Inst{7-0} = !if(P.EmitDst, vdst{7-0}, 0);
+}
+
+class VOP3OpSel_gfx9 <bits<10> op, VOPProfile P> : VOP3e_vi <op, P> {
+  let Inst{11} = !if(P.HasSrc0, src0_modifiers{2}, 0);
+  let Inst{12} = !if(P.HasSrc1, src1_modifiers{2}, 0);
+  let Inst{13} = !if(P.HasSrc2, src2_modifiers{2}, 0);
+  let Inst{14} = !if(P.HasDst,  src0_modifiers{3}, 0);
+}
+
+// NB: For V_INTERP* opcodes, src0 is encoded as src1 and vice versa
+class VOP3Interp_vi <bits<10> op, VOPProfile P> : VOP3e_vi <op, P> {
+  bits<2> attrchan;
+  bits<6> attr;
+  bits<1> high;
+
+  let Inst{8}     = 0; // No modifiers for src0
+  let Inst{61}    = 0;
+
+  let Inst{9}     = !if(P.HasSrc0Mods, src0_modifiers{1}, 0);
+  let Inst{62}    = !if(P.HasSrc0Mods, src0_modifiers{0}, 0);
+
+  let Inst{37-32} = attr;
+  let Inst{39-38} = attrchan;
+  let Inst{40}    = !if(P.HasHigh, high, 0);
+
+  let Inst{49-41} = src0;
 }
 
 class VOP3be <VOPProfile P> : Enc64 {
@@ -480,6 +510,8 @@ class VOP_DPP <string OpName, VOPProfile P> :
   let AssemblerPredicate = !if(P.HasExt, HasDPP, DisableInst);
   let AsmVariantName = !if(P.HasExt, AMDGPUAsmVariants.DPP,
                                      AMDGPUAsmVariants.Disable);
+  let Constraints = !if(P.NumSrcArgs, "$old = $vdst", "");
+  let DisableEncoding = !if(P.NumSrcArgs, "$old", "");
   let DecoderNamespace = "DPP";
 }
 

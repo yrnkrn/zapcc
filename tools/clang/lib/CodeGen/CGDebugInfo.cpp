@@ -18,6 +18,7 @@
 #include "CGRecordLayout.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
+#include "ConstantEmitter.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclObjC.h"
@@ -28,6 +29,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Version.h"
 #include "clang/Frontend/CodeGenOptions.h"
+#include "clang/Frontend/FrontendOptions.h"
 #include "clang/Lex/HeaderSearchOptions.h"
 #include "clang/Lex/ModuleMap.h"
 #include "clang/Lex/PreprocessorOptions.h"
@@ -218,6 +220,19 @@ llvm::DIScope *CGDebugInfo::getContextDescriptor(const Decl *Context,
   return Default;
 }
 
+PrintingPolicy CGDebugInfo::getPrintingPolicy() const {
+  PrintingPolicy PP = CGM.getContext().getPrintingPolicy();
+
+  // If we're emitting codeview, it's important to try to match MSVC's naming so
+  // that visualizers written for MSVC will trigger for our class names. In
+  // particular, we can't have spaces between arguments of standard templates
+  // like basic_string and vector.
+  if (CGM.getCodeGenOpts().EmitCodeView)
+    PP.MSVCFormatting = true;
+
+  return PP;
+}
+
 StringRef CGDebugInfo::getFunctionName(const FunctionDecl *FD) {
   assert(FD && "Invalid FunctionDecl!");
   IdentifierInfo *FII = FD->getIdentifier();
@@ -238,18 +253,16 @@ StringRef CGDebugInfo::getFunctionName(const FunctionDecl *FD) {
 
   SmallString<128> NS;
   llvm::raw_svector_ostream OS(NS);
-  PrintingPolicy Policy(CGM.getLangOpts());
-  Policy.MSVCFormatting = CGM.getCodeGenOpts().EmitCodeView;
   if (!UseQualifiedName)
     FD->printName(OS);
   else
-    FD->printQualifiedName(OS, Policy);
+    FD->printQualifiedName(OS, getPrintingPolicy());
 
   // Add any template specialization args.
   if (Info) {
     const TemplateArgumentList *TArgs = Info->TemplateArguments;
     TemplateSpecializationType::PrintTemplateArgumentList(OS, TArgs->asArray(),
-                                                          Policy);
+                                                          getPrintingPolicy());
   }
 
   // Copy this name on the side and use its reference.
@@ -296,7 +309,7 @@ StringRef CGDebugInfo::getClassName(const RecordDecl *RD) {
   if (isa<ClassTemplateSpecializationDecl>(RD)) {
     SmallString<128> Name;
     llvm::raw_svector_ostream OS(Name);
-    RD->getNameForDiagnostic(OS, CGM.getContext().getPrintingPolicy(),
+    RD->getNameForDiagnostic(OS, getPrintingPolicy(),
                              /*Qualified*/ false);
 
     // Copy this name on the side and use its reference.
@@ -483,6 +496,16 @@ void CGDebugInfo::CreateCompileUnit() {
       llvm::sys::path::append(MainFileDirSS, MainFileName);
       MainFileName = MainFileDirSS.str();
     }
+    // If the main file name provided is identical to the input file name, and
+    // if the input file is a preprocessed source, use the module name for
+    // debug info. The module name comes from the name specified in the first
+    // linemarker if the input is a preprocessed source.
+    if (MainFile->getName() == MainFileName &&
+        FrontendOptions::getInputKindForExtension(
+            MainFile->getName().rsplit('.').second)
+            .isPreprocessed())
+      MainFileName = CGM.getModule().getName().str();
+
     CSKind = computeChecksum(SM.getMainFileID(), Checksum);
   }
 
@@ -535,17 +558,17 @@ void CGDebugInfo::CreateCompileUnit() {
     TheCU->replaceSourceLanguage(LangTag);
     TheCU->replaceFilename(remapDIPath(MainFileName),
                            remapDIPath(getCurrentDirname()));
-  } else
+  } else {
+  auto &CGOpts = CGM.getCodeGenOpts();
   TheCU = DBuilder.createCompileUnit(
       LangTag,
       DBuilder.createFile(remapDIPath(MainFileName),
                           remapDIPath(getCurrentDirname()), CSKind, Checksum),
-      Producer, LO.Optimize, CGM.getCodeGenOpts().DwarfDebugFlags, RuntimeVers,
-      CGM.getCodeGenOpts().EnableSplitDwarf
-          ? ""
-          : CGM.getCodeGenOpts().SplitDwarfFile,
-      EmissionKind, 0 /* DWOid */, CGM.getCodeGenOpts().SplitDwarfInlining,
-      CGM.getCodeGenOpts().DebugInfoForProfiling);
+      Producer, LO.Optimize || CGOpts.PrepareForLTO || CGOpts.EmitSummaryIndex,
+      CGOpts.DwarfDebugFlags, RuntimeVers,
+      CGOpts.EnableSplitDwarf ? "" : CGOpts.SplitDwarfFile, EmissionKind,
+      0 /* DWOid */, CGOpts.SplitDwarfInlining, CGOpts.DebugInfoForProfiling);
+  }
 }
 
 llvm::DIType *CGDebugInfo::CreateType(const BuiltinType *BT) {
@@ -918,12 +941,11 @@ llvm::DIType *CGDebugInfo::CreateType(const TemplateSpecializationType *Ty,
 
   SmallString<128> NS;
   llvm::raw_svector_ostream OS(NS);
-  Ty->getTemplateName().print(OS, CGM.getContext().getPrintingPolicy(),
+  Ty->getTemplateName().print(OS, getPrintingPolicy(),
                               /*qualified*/ false);
 
   TemplateSpecializationType::PrintTemplateArgumentList(
-      OS, Ty->template_arguments(),
-      CGM.getContext().getPrintingPolicy());
+      OS, Ty->template_arguments(), getPrintingPolicy());
 
   auto *AliasDecl = cast<TypeAliasTemplateDecl>(
       Ty->getTemplateName().getAsTemplateDecl())->getTemplatedDecl();
@@ -965,7 +987,7 @@ static unsigned getDwarfCC(CallingConv CC) {
     return llvm::dwarf::DW_CC_BORLAND_pascal;
 
   // FIXME: Create new DW_CC_ codes for these calling conventions.
-  case CC_X86_64Win64:
+  case CC_Win64:
   case CC_X86_64SysV:
   case CC_AAPCS:
   case CC_AAPCS_VFP:
@@ -1183,13 +1205,13 @@ void CGDebugInfo::CollectRecordNormalField(
   elements.push_back(FieldType);
 }
 
-void CGDebugInfo::CollectRecordNestedRecord(
-    const RecordDecl *RD, SmallVectorImpl<llvm::Metadata *> &elements) {
-  QualType Ty = CGM.getContext().getTypeDeclType(RD);
+void CGDebugInfo::CollectRecordNestedType(
+    const TypeDecl *TD, SmallVectorImpl<llvm::Metadata *> &elements) {
+  QualType Ty = CGM.getContext().getTypeDeclType(TD);
   // Injected class names are not considered nested records.
   if (isa<InjectedClassNameType>(Ty))
     return;
-  SourceLocation Loc = RD->getLocation();
+  SourceLocation Loc = TD->getLocation();
   llvm::DIType *nestedType = getOrCreateType(Ty, getOrCreateFile(Loc));
   elements.push_back(nestedType);
 }
@@ -1205,9 +1227,9 @@ void CGDebugInfo::CollectRecordFields(
   else {
     const ASTRecordLayout &layout = CGM.getContext().getASTRecordLayout(record);
 
-    // Debug info for nested records is included in the member list only for
+    // Debug info for nested types is included in the member list only for
     // CodeView.
-    bool IncludeNestedRecords = CGM.getCodeGenOpts().EmitCodeView;
+    bool IncludeNestedTypes = CGM.getCodeGenOpts().EmitCodeView;
 
     // Field number for non-static fields.
     unsigned fieldNo = 0;
@@ -1234,10 +1256,12 @@ void CGDebugInfo::CollectRecordFields(
 
         // Bump field number for next field.
         ++fieldNo;
-      } else if (const auto *nestedRec = dyn_cast<CXXRecordDecl>(I))
-        if (IncludeNestedRecords && !nestedRec->isImplicit() &&
-            nestedRec->getDeclContext() == record)
-          CollectRecordNestedRecord(nestedRec, elements);
+      } else if (IncludeNestedTypes) {
+        if (const auto *nestedType = dyn_cast<TypeDecl>(I))
+          if (!nestedType->isImplicit() &&
+              nestedType->getDeclContext() == record)
+            CollectRecordNestedType(nestedType, elements);
+      }
   }
 }
 
@@ -1599,7 +1623,7 @@ CGDebugInfo::CollectTemplateParams(const TemplateParameterList *TPList,
       QualType T = E->getType();
       if (E->isGLValue())
         T = CGM.getContext().getLValueReferenceType(T);
-      llvm::Constant *V = CGM.EmitConstantExpr(E, T);
+      llvm::Constant *V = ConstantEmitter(CGM).emitAbstract(E, T);
       assert(V && "Expression in template argument isn't constant");
       llvm::DIType *TTy = getOrCreateType(T, Unit);
       TemplateParams.push_back(DBuilder.createTemplateValueParameter(
@@ -1775,6 +1799,29 @@ static bool isClassOrMethodDLLImport(const CXXRecordDecl *RD) {
   return false;
 }
 
+/// Does a type definition exist in an imported clang module?
+static bool isDefinedInClangModule(const RecordDecl *RD) {
+  // Only definitions that where imported from an AST file come from a module.
+  if (!RD || !RD->isFromASTFile())
+    return false;
+  // Anonymous entities cannot be addressed. Treat them as not from module.
+  if (!RD->isExternallyVisible() && RD->getName().empty())
+    return false;
+  if (auto *CXXDecl = dyn_cast<CXXRecordDecl>(RD)) {
+    if (!CXXDecl->isCompleteDefinition())
+      return false;
+    auto TemplateKind = CXXDecl->getTemplateSpecializationKind();
+    if (TemplateKind != TSK_Undeclared) {
+      // This is a template, check the origin of the first member.
+      if (CXXDecl->field_begin() == CXXDecl->field_end())
+        return TemplateKind == TSK_ExplicitInstantiationDeclaration;
+      if (!CXXDecl->field_begin()->isFromASTFile())
+        return false;
+    }
+  }
+  return true;
+}
+
 void CGDebugInfo::completeClassData(const RecordDecl *RD) {
   if (auto *CXXRD = dyn_cast<CXXRecordDecl>(RD))
     if (CXXRD->isDynamicClass() &&
@@ -1782,6 +1829,10 @@ void CGDebugInfo::completeClassData(const RecordDecl *RD) {
             llvm::GlobalValue::AvailableExternallyLinkage &&
         !isClassOrMethodDLLImport(CXXRD))
       return;
+
+  if (DebugTypeExtRefs && isDefinedInClangModule(RD->getDefinition()))
+    return;
+
   completeClass(RD);
 }
 
@@ -1806,29 +1857,6 @@ static bool hasExplicitMemberDefinition(CXXRecordDecl::method_iterator I,
           !MD->getMemberSpecializationInfo()->isExplicitSpecialization())
         return true;
   return false;
-}
-
-/// Does a type definition exist in an imported clang module?
-static bool isDefinedInClangModule(const RecordDecl *RD) {
-  // Only definitions that where imported from an AST file come from a module.
-  if (!RD || !RD->isFromASTFile())
-    return false;
-  // Anonymous entities cannot be addressed. Treat them as not from module.
-  if (!RD->isExternallyVisible() && RD->getName().empty())
-    return false;
-  if (auto *CXXDecl = dyn_cast<CXXRecordDecl>(RD)) {
-    if (!CXXDecl->isCompleteDefinition())
-      return false;
-    auto TemplateKind = CXXDecl->getTemplateSpecializationKind();
-    if (TemplateKind != TSK_Undeclared) {
-      // This is a template, check the origin of the first member.
-      if (CXXDecl->field_begin() == CXXDecl->field_end())
-        return TemplateKind == TSK_ExplicitInstantiationDeclaration;
-      if (!CXXDecl->field_begin()->isFromASTFile())
-        return false;
-    }
-  }
-  return true;
 }
 
 static bool shouldOmitDefinition(codegenoptions::DebugInfoKind DebugKind,
@@ -3804,7 +3832,7 @@ void CGDebugInfo::EmitDeclareOfBlockLiteralArgVariable(const CGBlockInfo &block,
   if (LocalAddr) {
     // Insert an llvm.dbg.value into the current block.
     DBuilder.insertDbgValueIntrinsic(
-        LocalAddr, 0, debugVar, DBuilder.createExpression(),
+        LocalAddr, debugVar, DBuilder.createExpression(),
         llvm::DebugLoc::get(line, column, scope, CurInlinedAt),
         Builder.GetInsertBlock());
   }
@@ -3979,10 +4007,10 @@ void CGDebugInfo::EmitUsingDirective(const UsingDirectiveDecl &UD) {
   const NamespaceDecl *NSDecl = UD.getNominatedNamespace();
   if (!NSDecl->isAnonymousNamespace() ||
       CGM.getCodeGenOpts().DebugExplicitImport) {
+    auto Loc = UD.getLocation();
     DBuilder.createImportedModule(
         getCurrentContextDescriptor(cast<Decl>(UD.getDeclContext())),
-        getOrCreateNamespace(NSDecl),
-        getLineNumber(UD.getLocation()));
+        getOrCreateNamespace(NSDecl), getOrCreateFile(Loc), getLineNumber(Loc));
   }
 }
 
@@ -4005,10 +4033,12 @@ void CGDebugInfo::EmitUsingDecl(const UsingDecl &UD) {
       if (AT->getDeducedType().isNull())
         return;
   if (llvm::DINode *Target =
-          getDeclarationOrDefinition(USD.getUnderlyingDecl()))
+          getDeclarationOrDefinition(USD.getUnderlyingDecl())) {
+    auto Loc = USD.getLocation();
     DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(USD.getDeclContext())), Target,
-        getLineNumber(USD.getLocation()));
+        getOrCreateFile(Loc), getLineNumber(Loc));
+  }
 }
 
 void CGDebugInfo::EmitImportDecl(const ImportDecl &ID) {
@@ -4016,10 +4046,11 @@ void CGDebugInfo::EmitImportDecl(const ImportDecl &ID) {
     return;
   if (Module *M = ID.getImportedModule()) {
     auto Info = ExternalASTSource::ASTSourceDescriptor(*M);
+    auto Loc = ID.getLocation();
     DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(ID.getDeclContext())),
-        getOrCreateModuleRef(Info, DebugTypeExtRefs),
-        getLineNumber(ID.getLocation()));
+        getOrCreateModuleRef(Info, DebugTypeExtRefs), getOrCreateFile(Loc),
+        getLineNumber(Loc));
   }
 }
 
@@ -4031,18 +4062,19 @@ CGDebugInfo::EmitNamespaceAlias(const NamespaceAliasDecl &NA) {
   if (VH)
     return cast<llvm::DIImportedEntity>(VH);
   llvm::DIImportedEntity *R;
+  auto Loc = NA.getLocation();
   if (const auto *Underlying =
           dyn_cast<NamespaceAliasDecl>(NA.getAliasedNamespace()))
     // This could cache & dedup here rather than relying on metadata deduping.
     R = DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(NA.getDeclContext())),
-        EmitNamespaceAlias(*Underlying), getLineNumber(NA.getLocation()),
-        NA.getName());
+        EmitNamespaceAlias(*Underlying), getOrCreateFile(Loc),
+        getLineNumber(Loc), NA.getName());
   else
     R = DBuilder.createImportedDeclaration(
         getCurrentContextDescriptor(cast<Decl>(NA.getDeclContext())),
         getOrCreateNamespace(cast<NamespaceDecl>(NA.getAliasedNamespace())),
-        getLineNumber(NA.getLocation()), NA.getName());
+        getOrCreateFile(Loc), getLineNumber(Loc), NA.getName());
   VH.reset(R);
   return R;
 }

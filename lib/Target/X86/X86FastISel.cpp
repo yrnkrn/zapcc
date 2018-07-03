@@ -329,10 +329,6 @@ bool X86FastISel::X86FastEmitLoad(EVT VT, X86AddressMode &AM,
   switch (VT.getSimpleVT().SimpleTy) {
   default: return false;
   case MVT::i1:
-    // TODO: Support this properly.
-    if (Subtarget->hasAVX512())
-      return false;
-    LLVM_FALLTHROUGH;
   case MVT::i8:
     Opc = X86::MOV8rm;
     RC  = &X86::GR8RegClass;
@@ -510,16 +506,6 @@ bool X86FastISel::X86FastEmitStore(EVT VT, unsigned ValReg, bool ValIsKill,
   case MVT::f80: // No f80 support yet.
   default: return false;
   case MVT::i1: {
-    // In case ValReg is a K register, COPY to a GPR
-    if (MRI.getRegClass(ValReg) == &X86::VK1RegClass) {
-      unsigned KValReg = ValReg;
-      ValReg = createResultReg(&X86::GR32RegClass);
-      BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
-              TII.get(TargetOpcode::COPY), ValReg)
-          .addReg(KValReg);
-      ValReg = fastEmitInst_extractsubreg(MVT::i8, ValReg, /*Kill=*/true,
-                                          X86::sub_8bit);
-    }
     // Mask out all but lowest bit.
     unsigned AndResult = createResultReg(&X86::GR8RegClass);
     BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc,
@@ -1077,10 +1063,6 @@ bool X86FastISel::X86SelectCallAddress(const Value *V, X86AddressMode &AM) {
         (AM.Base.Reg != 0 || AM.IndexReg != 0))
       return false;
 
-    // Can't handle DLL Import.
-    if (GV->hasDLLImportStorageClass())
-      return false;
-
     // Can't handle TLS.
     if (const GlobalVariable *GVar = dyn_cast<GlobalVariable>(GV))
       if (GVar->isThreadLocal())
@@ -1089,8 +1071,9 @@ bool X86FastISel::X86SelectCallAddress(const Value *V, X86AddressMode &AM) {
     // Okay, we've committed to selecting this global. Set up the basic address.
     AM.GV = GV;
 
-    // No ABI requires an extra load for anything other than DLLImport, which
-    // we rejected above. Return a direct reference to the global.
+    // Return a direct reference to the global. Fastisel can handle calls to
+    // functions that require loads, such as dllimport and nonlazybind
+    // functions.
     if (Subtarget->isPICStyleRIPRel()) {
       // Use rip-relative addressing if we can.  Above we verified that the
       // base and index registers are unused.
@@ -1187,7 +1170,7 @@ bool X86FastISel::X86SelectRet(const Instruction *I) {
       CC != CallingConv::X86_StdCall &&
       CC != CallingConv::X86_ThisCall &&
       CC != CallingConv::X86_64_SysV &&
-      CC != CallingConv::X86_64_Win64)
+      CC != CallingConv::Win64)
     return false;
 
   // Don't handle popping bytes if they don't fit the ret's immediate.
@@ -3039,6 +3022,9 @@ bool X86FastISel::fastLowerArguments() {
   if (!Subtarget->is64Bit())
     return false;
 
+  if (Subtarget->useSoftFloat())
+    return false;
+
   // Only handle simple cases. i.e. Up to 6 i32/i64 scalar arguments.
   unsigned GPRCnt = 0;
   unsigned FPRCnt = 0;
@@ -3168,7 +3154,7 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   case CallingConv::X86_FastCall:
   case CallingConv::X86_StdCall:
   case CallingConv::X86_ThisCall:
-  case CallingConv::X86_64_Win64:
+  case CallingConv::Win64:
   case CallingConv::X86_64_SysV:
     break;
   }
@@ -3452,19 +3438,28 @@ bool X86FastISel::fastLowerCall(CallLoweringInfo &CLI) {
   } else {
     // Direct call.
     assert(GV && "Not a direct call");
-    unsigned CallOpc = Is64Bit ? X86::CALL64pcrel32 : X86::CALLpcrel32;
-
     // See if we need any target-specific flags on the GV operand.
     unsigned char OpFlags = Subtarget->classifyGlobalFunctionReference(GV);
     // Ignore NonLazyBind attribute in FastISel
     if (OpFlags == X86II::MO_GOTPCREL)
       OpFlags = 0;
 
+    // This will be a direct call, or an indirect call through memory for
+    // NonLazyBind calls or dllimport calls.
+    bool NeedLoad = OpFlags == X86II::MO_DLLIMPORT;
+    unsigned CallOpc = NeedLoad
+                           ? (Is64Bit ? X86::CALL64m : X86::CALL32m)
+                           : (Is64Bit ? X86::CALL64pcrel32 : X86::CALLpcrel32);
+
     MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DbgLoc, TII.get(CallOpc));
+    if (NeedLoad)
+      MIB.addReg(Is64Bit ? X86::RIP : 0).addImm(1).addReg(0);
     if (Symbol)
       MIB.addSym(Symbol, OpFlags);
     else
       MIB.addGlobalAddress(GV, 0, OpFlags);
+    if (NeedLoad)
+      MIB.addReg(0);
   }
 
   // Add a register mask operand representing the call-preserved registers.

@@ -739,7 +739,7 @@ void Verifier::visitNamedMDNode(const NamedMDNode &NMD) {
   // There used to be various other llvm.dbg.* nodes, but we don't support
   // upgrading them and we want to reserve the namespace for future uses.
   if (NMD.getName().startswith("llvm.dbg."))
-    AssertDI(NMD.getName() == "llvm.dbg.cu",
+    AssertDI(NMD.getName() == "llvm.dbg.cu" || NMD.getName() == "llvm.dbg.mir",
              "unrecognized named metadata node in the llvm.dbg namespace",
              &NMD);
   for (const MDNode *MD : NMD.operands()) {
@@ -1153,6 +1153,7 @@ void Verifier::visitDIGlobalVariable(const DIGlobalVariable &N) {
 
   AssertDI(N.getTag() == dwarf::DW_TAG_variable, "invalid tag", &N);
   AssertDI(!N.getName().empty(), "missing global variable name", &N);
+  AssertDI(N.getType(), "missing global variable type", &N);
   if (auto *Member = N.getRawStaticDataMemberDeclaration()) {
     AssertDI(isa<DIDerivedType>(Member),
              "invalid static data member declaration", &N, Member);
@@ -1175,8 +1176,6 @@ void Verifier::visitDIExpression(const DIExpression &N) {
 void Verifier::visitDIGlobalVariableExpression(
     const DIGlobalVariableExpression &GVE) {
   AssertDI(GVE.getVariable(), "missing variable");
-  if (auto *Var = GVE.getVariable())
-    visitDIGlobalVariable(*Var);
   if (auto *Expr = GVE.getExpression())
     visitDIExpression(*Expr);
 }
@@ -1380,6 +1379,7 @@ static bool isFuncOnlyAttr(Attribute::AttrKind Kind) {
   case Attribute::InaccessibleMemOrArgMemOnly:
   case Attribute::AllocSize:
   case Attribute::Speculatable:
+  case Attribute::StrictFP:
     return true;
   default:
     break;
@@ -2507,15 +2507,13 @@ void Verifier::visitPtrToIntInst(PtrToIntInst &I) {
   Type *SrcTy = I.getOperand(0)->getType();
   Type *DestTy = I.getType();
 
-  Assert(SrcTy->getScalarType()->isPointerTy(),
-         "PtrToInt source must be pointer", &I);
+  Assert(SrcTy->isPtrOrPtrVectorTy(), "PtrToInt source must be pointer", &I);
 
   if (auto *PTy = dyn_cast<PointerType>(SrcTy->getScalarType()))
     Assert(!DL.isNonIntegralPointerType(PTy),
            "ptrtoint not supported for non-integral pointers");
 
-  Assert(DestTy->getScalarType()->isIntegerTy(),
-         "PtrToInt result must be integral", &I);
+  Assert(DestTy->isIntOrIntVectorTy(), "PtrToInt result must be integral", &I);
   Assert(SrcTy->isVectorTy() == DestTy->isVectorTy(), "PtrToInt type mismatch",
          &I);
 
@@ -2534,10 +2532,9 @@ void Verifier::visitIntToPtrInst(IntToPtrInst &I) {
   Type *SrcTy = I.getOperand(0)->getType();
   Type *DestTy = I.getType();
 
-  Assert(SrcTy->getScalarType()->isIntegerTy(),
+  Assert(SrcTy->isIntOrIntVectorTy(),
          "IntToPtr source must be an integral", &I);
-  Assert(DestTy->getScalarType()->isPointerTy(),
-         "IntToPtr result must be a pointer", &I);
+  Assert(DestTy->isPtrOrPtrVectorTy(), "IntToPtr result must be a pointer", &I);
 
   if (auto *PTy = dyn_cast<PointerType>(DestTy->getScalarType()))
     Assert(!DL.isNonIntegralPointerType(PTy),
@@ -2955,11 +2952,10 @@ void Verifier::visitICmpInst(ICmpInst &IC) {
   Assert(Op0Ty == Op1Ty,
          "Both operands to ICmp instruction are not of the same type!", &IC);
   // Check that the operands are the right type
-  Assert(Op0Ty->isIntOrIntVectorTy() || Op0Ty->getScalarType()->isPointerTy(),
+  Assert(Op0Ty->isIntOrIntVectorTy() || Op0Ty->isPtrOrPtrVectorTy(),
          "Invalid operand types for ICmp instruction", &IC);
   // Check that the predicate is valid.
-  Assert(IC.getPredicate() >= CmpInst::FIRST_ICMP_PREDICATE &&
-             IC.getPredicate() <= CmpInst::LAST_ICMP_PREDICATE,
+  Assert(IC.isIntPredicate(),
          "Invalid predicate in ICmp instruction!", &IC);
 
   visitInstruction(IC);
@@ -2975,8 +2971,7 @@ void Verifier::visitFCmpInst(FCmpInst &FC) {
   Assert(Op0Ty->isFPOrFPVectorTy(),
          "Invalid operand types for FCmp instruction", &FC);
   // Check that the predicate is valid.
-  Assert(FC.getPredicate() >= CmpInst::FIRST_FCMP_PREDICATE &&
-             FC.getPredicate() <= CmpInst::LAST_FCMP_PREDICATE,
+  Assert(FC.isFPPredicate(),
          "Invalid predicate in FCmp instruction!", &FC);
 
   visitInstruction(FC);
@@ -3014,7 +3009,7 @@ void Verifier::visitGetElementPtrInst(GetElementPtrInst &GEP) {
       GetElementPtrInst::getIndexedType(GEP.getSourceElementType(), Idxs);
   Assert(ElTy, "Invalid indices for GEP pointer type!", &GEP);
 
-  Assert(GEP.getType()->getScalarType()->isPointerTy() &&
+  Assert(GEP.getType()->isPtrOrPtrVectorTy() &&
              GEP.getResultElementType() == ElTy,
          "GEP is not of right type for indices!", &GEP, ElTy);
 
@@ -3030,7 +3025,7 @@ void Verifier::visitGetElementPtrInst(GetElementPtrInst &GEP) {
         unsigned IndexWidth = IndexTy->getVectorNumElements();
         Assert(IndexWidth == GEPWidth, "Invalid GEP index vector width", &GEP);
       }
-      Assert(IndexTy->getScalarType()->isIntegerTy(),
+      Assert(IndexTy->isIntOrIntVectorTy(),
              "All GEP indices should be of integer type");
     }
   }
@@ -3116,7 +3111,7 @@ void Verifier::visitLoadInst(LoadInst &LI) {
            ElTy, &LI);
     checkAtomicMemAccessSize(ElTy, &LI);
   } else {
-    Assert(LI.getSynchScope() == CrossThread,
+    Assert(LI.getSyncScopeID() == SyncScope::System,
            "Non-atomic load cannot have SynchronizationScope specified", &LI);
   }
 
@@ -3145,7 +3140,7 @@ void Verifier::visitStoreInst(StoreInst &SI) {
            ElTy, &SI);
     checkAtomicMemAccessSize(ElTy, &SI);
   } else {
-    Assert(SI.getSynchScope() == CrossThread,
+    Assert(SI.getSyncScopeID() == SyncScope::System,
            "Non-atomic store cannot have SynchronizationScope specified", &SI);
   }
   visitInstruction(SI);
@@ -4052,6 +4047,73 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
            "incorrect alignment of the source argument", CS);
     break;
   }
+  case Intrinsic::memmove_element_unordered_atomic: {
+    auto *MI = cast<ElementUnorderedAtomicMemMoveInst>(CS.getInstruction());
+
+    ConstantInt *ElementSizeCI =
+        dyn_cast<ConstantInt>(MI->getRawElementSizeInBytes());
+    Assert(ElementSizeCI,
+           "element size of the element-wise unordered atomic memory "
+           "intrinsic must be a constant int",
+           CS);
+    const APInt &ElementSizeVal = ElementSizeCI->getValue();
+    Assert(ElementSizeVal.isPowerOf2(),
+           "element size of the element-wise atomic memory intrinsic "
+           "must be a power of 2",
+           CS);
+
+    if (auto *LengthCI = dyn_cast<ConstantInt>(MI->getLength())) {
+      uint64_t Length = LengthCI->getZExtValue();
+      uint64_t ElementSize = MI->getElementSizeInBytes();
+      Assert((Length % ElementSize) == 0,
+             "constant length must be a multiple of the element size in the "
+             "element-wise atomic memory intrinsic",
+             CS);
+    }
+
+    auto IsValidAlignment = [&](uint64_t Alignment) {
+      return isPowerOf2_64(Alignment) && ElementSizeVal.ule(Alignment);
+    };
+    uint64_t DstAlignment = CS.getParamAlignment(0),
+             SrcAlignment = CS.getParamAlignment(1);
+    Assert(IsValidAlignment(DstAlignment),
+           "incorrect alignment of the destination argument", CS);
+    Assert(IsValidAlignment(SrcAlignment),
+           "incorrect alignment of the source argument", CS);
+    break;
+  }
+  case Intrinsic::memset_element_unordered_atomic: {
+    auto *MI = cast<ElementUnorderedAtomicMemSetInst>(CS.getInstruction());
+
+    ConstantInt *ElementSizeCI =
+        dyn_cast<ConstantInt>(MI->getRawElementSizeInBytes());
+    Assert(ElementSizeCI,
+           "element size of the element-wise unordered atomic memory "
+           "intrinsic must be a constant int",
+           CS);
+    const APInt &ElementSizeVal = ElementSizeCI->getValue();
+    Assert(ElementSizeVal.isPowerOf2(),
+           "element size of the element-wise atomic memory intrinsic "
+           "must be a power of 2",
+           CS);
+
+    if (auto *LengthCI = dyn_cast<ConstantInt>(MI->getLength())) {
+      uint64_t Length = LengthCI->getZExtValue();
+      uint64_t ElementSize = MI->getElementSizeInBytes();
+      Assert((Length % ElementSize) == 0,
+             "constant length must be a multiple of the element size in the "
+             "element-wise atomic memory intrinsic",
+             CS);
+    }
+
+    auto IsValidAlignment = [&](uint64_t Alignment) {
+      return isPowerOf2_64(Alignment) && ElementSizeVal.ule(Alignment);
+    };
+    uint64_t DstAlignment = CS.getParamAlignment(0);
+    Assert(IsValidAlignment(DstAlignment),
+           "incorrect alignment of the destination argument", CS);
+    break;
+  }
   case Intrinsic::gcroot:
   case Intrinsic::gcwrite:
   case Intrinsic::gcread:
@@ -4256,7 +4318,7 @@ void Verifier::visitIntrinsicCallSite(Intrinsic::ID ID, CallSite CS) {
     // relocated pointer. It can be casted to the correct type later if it's
     // desired. However, they must have the same address space and 'vectorness'
     GCRelocateInst &Relocate = cast<GCRelocateInst>(*CS.getInstruction());
-    Assert(Relocate.getDerivedPtr()->getType()->getScalarType()->isPointerTy(),
+    Assert(Relocate.getDerivedPtr()->getType()->isPtrOrPtrVectorTy(),
            "gc.relocate: relocated value must be a gc pointer", CS);
 
     auto ResultType = CS.getType();

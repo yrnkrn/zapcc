@@ -2918,8 +2918,11 @@ struct MemorySanitizerVisitor : public InstVisitor<MemorySanitizerVisitor> {
     if (ClDumpStrictInstructions)
       dumpInst(I);
     DEBUG(dbgs() << "DEFAULT: " << I << "\n");
-    for (size_t i = 0, n = I.getNumOperands(); i < n; i++)
-      insertShadowCheck(I.getOperand(i), &I);
+    for (size_t i = 0, n = I.getNumOperands(); i < n; i++) {
+      Value *Operand = I.getOperand(i);
+      if (Operand->getType()->isSized())
+        insertShadowCheck(Operand, &I);
+    }
     setShadow(&I, getCleanShadow(&I));
     setOrigin(&I, getCleanOrigin());
   }
@@ -3036,7 +3039,7 @@ struct VarArgAMD64Helper : public VarArgHelper {
   }
 
   void visitVAStartInst(VAStartInst &I) override {
-    if (F.getCallingConv() == CallingConv::X86_64_Win64)
+    if (F.getCallingConv() == CallingConv::Win64)
       return;
     IRBuilder<> IRB(&I);
     VAStartInstrumentationList.push_back(&I);
@@ -3050,7 +3053,7 @@ struct VarArgAMD64Helper : public VarArgHelper {
   }
 
   void visitVACopyInst(VACopyInst &I) override {
-    if (F.getCallingConv() == CallingConv::X86_64_Win64)
+    if (F.getCallingConv() == CallingConv::Win64)
       return;
     IRBuilder<> IRB(&I);
     Value *VAListTag = I.getArgOperand(0);

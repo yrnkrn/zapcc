@@ -10,8 +10,11 @@
 
 static volatile int Sink;
 
+void Foo() {
+  Sink++;
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
-  if (Size > 64) return 0;
   int8_t Ids[256];
   memset(Ids, -1, sizeof(Ids));
   for (size_t i = 0; i < Size; i++)
@@ -21,8 +24,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   int U = Ids[(unsigned char)'U'];
   int Z = Ids[(unsigned char)'Z'];
   if (F >= 0 && U > F && Z > U) {
-    Sink++;
-    //fprintf(stderr, "IDS: %d %d %d\n", F, U, Z);
+    Foo();
   }
   return 0;
 }

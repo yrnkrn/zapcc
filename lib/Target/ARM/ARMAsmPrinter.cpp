@@ -476,11 +476,7 @@ void ARMAsmPrinter::EmitStartOfAsmFile(Module &M) {
   // Use the triple's architecture and subarchitecture to determine
   // if we're thumb for the purposes of the top level code16 assembler
   // flag.
-  bool isThumb = TT.getArch() == Triple::thumb ||
-                 TT.getArch() == Triple::thumbeb ||
-                 TT.getSubArch() == Triple::ARMSubArch_v7m ||
-                 TT.getSubArch() == Triple::ARMSubArch_v6m;
-  if (!M.getModuleInlineAsm().empty() && isThumb)
+  if (!M.getModuleInlineAsm().empty() && TT.isThumb())
     OutStreamer->EmitAssemblerFlag(MCAF_Code16);
 }
 
@@ -1103,6 +1099,7 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
     case ARM::tPUSH:
       // Special case here: no src & dst reg, but two extra imp ops.
       StartOp = 2; NumOffset = 2;
+      LLVM_FALLTHROUGH;
     case ARM::STMDB_UPD:
     case ARM::t2STMDB_UPD:
     case ARM::VSTMDDB_UPD:

@@ -40,14 +40,21 @@ static Reloc::Model getEffectiveRelocModel(Optional<Reloc::Model> RM) {
   return RM.hasValue() ? *RM : Reloc::Static;
 }
 
+static CodeModel::Model getEffectiveCodeModel(Optional<CodeModel::Model> CM) {
+  if (CM)
+    return *CM;
+  return CodeModel::Small;
+}
+
 AVRTargetMachine::AVRTargetMachine(const Target &T, const Triple &TT,
                                    StringRef CPU, StringRef FS,
                                    const TargetOptions &Options,
-                                   Optional<Reloc::Model> RM, CodeModel::Model CM,
-                                   CodeGenOpt::Level OL)
-    : LLVMTargetMachine(
-          T, AVRDataLayout, TT,
-          getCPU(CPU), FS, Options, getEffectiveRelocModel(RM), CM, OL),
+                                   Optional<Reloc::Model> RM,
+                                   Optional<CodeModel::Model> CM,
+                                   CodeGenOpt::Level OL, bool JIT)
+    : LLVMTargetMachine(T, AVRDataLayout, TT, getCPU(CPU), FS, Options,
+                        getEffectiveRelocModel(RM), getEffectiveCodeModel(CM),
+                        OL),
       SubTarget(TT, getCPU(CPU), FS, *this) {
   this->TLOF = make_unique<AVRTargetObjectFile>();
   initAsmInfo();
@@ -66,6 +73,7 @@ public:
 
   bool addInstSelector() override;
   void addPreSched2() override;
+  void addPreEmitPass() override;
   void addPreRegAlloc() override;
 };
 } // namespace
@@ -80,7 +88,6 @@ extern "C" void LLVMInitializeAVRTarget() {
 
   auto &PR = *PassRegistry::getPassRegistry();
   initializeAVRExpandPseudoPass(PR);
-  initializeAVRInstrumentFunctionsPass(PR);
   initializeAVRRelaxMemPass(PR);
 }
 
@@ -113,6 +120,11 @@ void AVRPassConfig::addPreRegAlloc() {
 void AVRPassConfig::addPreSched2() {
   addPass(createAVRRelaxMemPass());
   addPass(createAVRExpandPseudoPass());
+}
+
+void AVRPassConfig::addPreEmitPass() {
+  // Must run branch selection immediately preceding the asm printer.
+  addPass(&BranchRelaxationPassID);
 }
 
 } // end of namespace llvm

@@ -15,6 +15,7 @@
 
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/DebugInfo/PDB/Native/RawConstants.h"
 
 #include <string>
 
@@ -26,6 +27,8 @@ class LazyRandomTypeCollection;
 }
 
 namespace pdb {
+class GSIHashTable;
+
 class DumpOutputStyle : public OutputStyle {
 public:
   DumpOutputStyle(PDBFile &File);
@@ -46,9 +49,14 @@ private:
   Error dumpModules();
   Error dumpModuleFiles();
   Error dumpModuleSyms();
+  Error dumpGlobals();
   Error dumpPublics();
+  Error dumpSymbolsFromGSI(const GSIHashTable &Table, bool HashExtras);
+  Error dumpSectionHeaders();
   Error dumpSectionContribs();
   Error dumpSectionMap();
+
+  void dumpSectionHeaders(StringRef Label, DbgHeaderType Type);
 
   PDBFile &File;
   LinePrinter P;

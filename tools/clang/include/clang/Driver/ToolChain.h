@@ -217,6 +217,17 @@ public:
     return nullptr;
   }
 
+  /// TranslateOpenMPTargetArgs - Create a new derived argument list for
+  /// that contains the OpenMP target specific flags passed via
+  /// -Xopenmp-target -opt=val OR -Xopenmp-target=<triple> -opt=val
+  /// Translation occurs only when the \p DeviceOffloadKind is specified.
+  ///
+  /// \param DeviceOffloadKind - The device offload kind used for the
+  /// translation.
+  virtual llvm::opt::DerivedArgList *
+  TranslateOpenMPTargetArgs(const llvm::opt::DerivedArgList &Args,
+      Action::OffloadKind DeviceOffloadKind) const;
+
   /// Choose a tool to use to handle the action \p JA.
   ///
   /// This can be overridden when a particular ToolChain needs to use
@@ -298,6 +309,8 @@ public:
     return ToolChain::CST_Libstdcxx;
   }
 
+  virtual std::string getCompilerRTPath() const;
+
   virtual std::string getCompilerRT(const llvm::opt::ArgList &Args,
                                     StringRef Component,
                                     bool Shared = false) const;
@@ -315,7 +328,7 @@ public:
 
   /// IsUnwindTablesDefault - Does this tool chain use -funwind-tables
   /// by default.
-  virtual bool IsUnwindTablesDefault() const;
+  virtual bool IsUnwindTablesDefault(const llvm::opt::ArgList &Args) const;
 
   /// \brief Test whether this toolchain defaults to PIC.
   virtual bool isPICDefault() const = 0;
@@ -411,7 +424,8 @@ public:
 
   /// \brief Add options that need to be passed to cc1 for this target.
   virtual void addClangTargetOptions(const llvm::opt::ArgList &DriverArgs,
-                                     llvm::opt::ArgStringList &CC1Args) const;
+                                     llvm::opt::ArgStringList &CC1Args,
+                                     Action::OffloadKind DeviceOffloadKind) const;
 
   /// \brief Add warning options that need to be passed to cc1 for this target.
   virtual void addClangWarningOptions(llvm::opt::ArgStringList &CC1Args) const;
@@ -430,6 +444,10 @@ public:
   virtual void
   AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
                                llvm::opt::ArgStringList &CC1Args) const;
+
+  /// Returns if the C++ standard library should be linked in.
+  /// Note that e.g. -lm should still be linked even if this returns false.
+  bool ShouldLinkCXXStdlib(const llvm::opt::ArgList &Args) const;
 
   /// AddCXXStdlibLibArgs - Add the system specific linker arguments to use
   /// for the given C++ standard library type.

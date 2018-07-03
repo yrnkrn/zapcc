@@ -66,6 +66,16 @@ static bool startsNextParameter(const FormatToken &Current,
            !Style.BreakBeforeInheritanceComma));
 }
 
+static bool opensProtoMessageField(const FormatToken &LessTok,
+                                   const FormatStyle &Style) {
+  if (LessTok.isNot(tok::less))
+    return false;
+  return Style.Language == FormatStyle::LK_TextProto ||
+         (Style.Language == FormatStyle::LK_Proto &&
+          (LessTok.NestingLevel > 0 ||
+           (LessTok.Previous && LessTok.Previous->is(tok::equal))));
+}
+
 ContinuationIndenter::ContinuationIndenter(const FormatStyle &Style,
                                            const AdditionalKeywords &Keywords,
                                            const SourceManager &SourceMgr,
@@ -93,6 +103,13 @@ LineState ContinuationIndenter::getInitialState(unsigned FirstIndent,
   State.StartOfLineLevel = 0;
   State.LowestLevelOnLine = 0;
   State.IgnoreStackForComparison = false;
+
+  if (Style.Language == FormatStyle::LK_TextProto) {
+    // We need this in order to deal with the bin packing of text fields at
+    // global scope.
+    State.Stack.back().AvoidBinPacking = true;
+    State.Stack.back().BreakBeforeParameter = true;
+  }
 
   // The first token has already been indented and thus consumed.
   moveStateToNextToken(State, DryRun, /*Newline=*/false);
@@ -176,7 +193,8 @@ bool ContinuationIndenter::mustBreak(const LineState &State) {
     return true;
   if (((Previous.is(TT_DictLiteral) && Previous.is(tok::l_brace)) ||
        (Previous.is(TT_ArrayInitializerLSquare) &&
-        Previous.ParameterCount > 1)) &&
+        Previous.ParameterCount > 1) ||
+       opensProtoMessageField(Previous, Style)) &&
       Style.ColumnLimit > 0 &&
       getLengthToMatchingParen(Previous) + State.Column - 1 >
           getColumnLimit(State))
@@ -501,13 +519,6 @@ void ContinuationIndenter::addTokenOnCurrentLine(LineState &State, bool DryRun,
   }
 }
 
-static bool lessOpensProtoMessageField(const FormatToken &LessTok,
-                                       const LineState &State) {
-  assert(LessTok.is(tok::less));
-  return LessTok.NestingLevel > 0 ||
-         (LessTok.Previous && LessTok.Previous->is(tok::equal));
-}
-
 unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
                                                  bool DryRun) {
   FormatToken &Current = *State.NextToken;
@@ -650,9 +661,7 @@ unsigned ContinuationIndenter::addTokenOnNewLine(LineState &State,
   // before the corresponding } or ].
   if (PreviousNonComment &&
       (PreviousNonComment->isOneOf(tok::l_brace, TT_ArrayInitializerLSquare) ||
-      (Style.Language == FormatStyle::LK_Proto &&
-       PreviousNonComment->is(tok::less) &&
-       lessOpensProtoMessageField(*PreviousNonComment, State)) ||
+       opensProtoMessageField(*PreviousNonComment, Style) ||
        (PreviousNonComment->is(TT_TemplateString) &&
         PreviousNonComment->opensScope())))
     State.Stack.back().BreakBeforeClosingBrace = true;
@@ -695,7 +704,9 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
     return Current.NestingLevel == 0 ? State.FirstIndent
                                      : State.Stack.back().Indent;
   if ((Current.isOneOf(tok::r_brace, tok::r_square) ||
-       (Current.is(tok::greater) && Style.Language == FormatStyle::LK_Proto)) &&
+       (Current.is(tok::greater) &&
+        (Style.Language == FormatStyle::LK_Proto ||
+         Style.Language == FormatStyle::LK_TextProto))) &&
       State.Stack.size() > 1) {
     if (Current.closesBlockOrBlockTypeList(Style))
       return State.Stack[State.Stack.size() - 2].NestedBlockIndent;
@@ -720,7 +731,10 @@ unsigned ContinuationIndenter::getNewLineColumn(const LineState &State) {
   if (NextNonComment->is(TT_TemplateString) && NextNonComment->closesScope())
     return State.Stack[State.Stack.size() - 2].LastSpace;
   if (Current.is(tok::identifier) && Current.Next &&
-      Current.Next->is(TT_DictLiteral))
+      (Current.Next->is(TT_DictLiteral) ||
+       ((Style.Language == FormatStyle::LK_Proto ||
+         Style.Language == FormatStyle::LK_TextProto) &&
+        Current.Next->isOneOf(TT_TemplateOpener, tok::l_brace))))
     return State.Stack.back().Indent;
   if (NextNonComment->is(TT_ObjCStringLiteral) &&
       State.StartOfStringLiteral != 0)
@@ -1050,8 +1064,7 @@ void ContinuationIndenter::moveStatePastScopeOpener(LineState &State,
   unsigned NestedBlockIndent = std::max(State.Stack.back().StartOfFunctionCall,
                                         State.Stack.back().NestedBlockIndent);
   if (Current.isOneOf(tok::l_brace, TT_ArrayInitializerLSquare) ||
-      (Style.Language == FormatStyle::LK_Proto && Current.is(tok::less) &&
-       lessOpensProtoMessageField(Current, State))) {
+      opensProtoMessageField(Current, Style)) {
     if (Current.opensBlockOrBlockTypeList(Style)) {
       NewIndent = Style.IndentWidth +
                   std::min(State.Column, State.Stack.back().NestedBlockIndent);
@@ -1064,7 +1077,9 @@ void ContinuationIndenter::moveStatePastScopeOpener(LineState &State,
                        Current.MatchingParen->Previous->is(tok::comma);
     AvoidBinPacking =
         EndsInComma || Current.is(TT_DictLiteral) ||
-        Style.Language == FormatStyle::LK_Proto || !Style.BinPackArguments ||
+        Style.Language == FormatStyle::LK_Proto ||
+        Style.Language == FormatStyle::LK_TextProto ||
+        !Style.BinPackArguments ||
         (NextNoComment &&
          NextNoComment->isOneOf(TT_DesignatedInitializerPeriod,
                                 TT_DesignatedInitializerLSquare));
@@ -1302,6 +1317,7 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
   bool ReflowInProgress = false;
   unsigned Penalty = 0;
   unsigned RemainingTokenColumns = 0;
+  unsigned TailOffset = 0;
   for (unsigned LineIndex = 0, EndIndex = Token->getLineCount();
        LineIndex != EndIndex; ++LineIndex) {
     BreakableToken::Split SplitBefore(StringRef::npos, 0);
@@ -1310,7 +1326,7 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
                                           RemainingSpace, CommentPragmasRegex);
     }
     ReflowInProgress = SplitBefore.first != StringRef::npos;
-    unsigned TailOffset =
+    TailOffset =
         ReflowInProgress ? (SplitBefore.first + SplitBefore.second) : 0;
     if (!DryRun)
       Token->replaceWhitespaceBefore(LineIndex, RemainingTokenColumns,
@@ -1365,6 +1381,16 @@ unsigned ContinuationIndenter::breakProtrudingToken(const FormatToken &Current,
       ReflowInProgress = true;
       BreakInserted = true;
     }
+  }
+
+  BreakableToken::Split SplitAfterLastLine =
+      Token->getSplitAfterLastLine(TailOffset, ColumnLimit);
+  if (SplitAfterLastLine.first != StringRef::npos) {
+    if (!DryRun)
+      Token->replaceWhitespaceAfterLastLine(TailOffset, SplitAfterLastLine,
+                                            Whitespaces);
+    RemainingTokenColumns = Token->getLineLengthAfterSplitAfterLastLine(
+        TailOffset, SplitAfterLastLine);
   }
 
   State.Column = RemainingTokenColumns;

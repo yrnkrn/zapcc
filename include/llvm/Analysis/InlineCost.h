@@ -139,6 +139,10 @@ struct InlineParams {
   /// Threshold to use when the callsite is considered hot.
   Optional<int> HotCallSiteThreshold;
 
+  /// Threshold to use when the callsite is considered hot relative to function
+  /// entry.
+  Optional<int> LocallyHotCallSiteThreshold;
+
   /// Threshold to use when the callsite is considered cold.
   Optional<int> ColdCallSiteThreshold;
 };
@@ -160,7 +164,7 @@ InlineParams getInlineParams(int Threshold);
 /// the -Oz flag.
 InlineParams getInlineParams(unsigned OptLevel, unsigned SizeOptLevel);
 
-/// Return the cost associated with a callsite, including paramater passing
+/// Return the cost associated with a callsite, including parameter passing
 /// and the call/return instruction.
 int getCallsiteCost(CallSite CS, const DataLayout &DL);
 

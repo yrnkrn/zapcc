@@ -579,7 +579,7 @@ let IntrProperties = [IntrNoMem, IntrSpeculatable] in {
                                        llvm_metadata_ty,
                                        llvm_metadata_ty]>;
   def int_dbg_value        : Intrinsic<[],
-                                       [llvm_metadata_ty, llvm_i64_ty,
+                                       [llvm_metadata_ty,
                                         llvm_metadata_ty,
                                         llvm_metadata_ty]>;
 }
@@ -872,6 +872,22 @@ def int_memcpy_element_unordered_atomic
                   IntrArgMemOnly, NoCapture<0>, NoCapture<1>, WriteOnly<0>,
                   ReadOnly<1>
                 ]>;
+
+// @llvm.memmove.element.unordered.atomic.*(dest, src, length, elementsize)
+def int_memmove_element_unordered_atomic
+    : Intrinsic<[],
+                [
+                  llvm_anyptr_ty, llvm_anyptr_ty, llvm_anyint_ty, llvm_i32_ty
+                ],
+                [
+                  IntrArgMemOnly, NoCapture<0>, NoCapture<1>, WriteOnly<0>,
+                  ReadOnly<1>
+                ]>;
+
+// @llvm.memset.element.unordered.atomic.*(dest, value, length, elementsize)
+def int_memset_element_unordered_atomic
+    : Intrinsic<[], [ llvm_anyptr_ty, llvm_i8_ty, llvm_anyint_ty, llvm_i32_ty ],
+                [ IntrArgMemOnly, NoCapture<0>, WriteOnly<0> ]>;
 
 //===------------------------ Reduction Intrinsics ------------------------===//
 //

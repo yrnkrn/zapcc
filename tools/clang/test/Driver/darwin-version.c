@@ -26,6 +26,8 @@
 
 // RUN: %clang -target armv7-apple-ios11.1 -c -### %s 2>&1 | \
 // RUN: FileCheck --check-prefix=CHECK-VERSION-IOS7 %s
+// RUN: %clang -target armv7-apple-ios9 -Wno-missing-sysroot -isysroot SDKs/iPhoneOS11.0.sdk -c -### %s 2>&1 | \
+// RUN: FileCheck --check-prefix=CHECK-VERSION-IOS7 %s
 // CHECK-VERSION-IOS7: thumbv7-apple-ios10.99.99
 
 // RUN: env IPHONEOS_DEPLOYMENT_TARGET=11.0 \
@@ -44,6 +46,10 @@
 // RUN: %clang -target arm64-apple-ios11.1 -c -### %s 2>&1 | \
 // RUN: FileCheck --check-prefix=CHECK-VERSION-IOS11 %s
 // CHECK-VERSION-IOS11: arm64-apple-ios11.1.0
+
+// RUN: %clang -target armv7-apple-ios9.0 -miphoneos-version-min=11.0 -c -Wno-invalid-ios-deployment-target -### %s 2>&1 | \
+// RUN: FileCheck --check-prefix=CHECK-VERSION-IOS12 %s
+// CHECK-VERSION-IOS12: thumbv7-apple-ios11.0.0
 
 // RUN: %clang -target i686-apple-darwin8 -c %s -### 2>&1 | \
 // RUN:   FileCheck --check-prefix=CHECK-VERSION-OSX4 %s
@@ -121,3 +127,15 @@
 // RUN:   %clang -target i386-apple-darwin9 -c %s -### 2>&1 | \
 // RUN:   FileCheck --check-prefix=CHECK-VERSION-WATCHOSSIM %s
 // CHECK-VERSION-WATCHOSSIM: "i386-apple-watchos2.0.0"
+
+// RUN: %clang -target x86_64-apple-ios11.0.0 -c %s -### 2>&1 | \
+// RUN: FileCheck --check-prefix=CHECK-VERSION-IOS-TARGET %s
+// CHECK-VERSION-IOS-TARGET: "x86_64-apple-ios11.0.0"
+
+// RUN: %clang -target x86_64-apple-tvos11.0 -c %s -### 2>&1 | \
+// RUN: FileCheck --check-prefix=CHECK-VERSION-TVOS-TARGET %s
+// CHECK-VERSION-TVOS-TARGET: "x86_64-apple-tvos11.0.0"
+
+// RUN: %clang -target x86_64-apple-watchos4.0 -c %s -### 2>&1 | \
+// RUN: FileCheck --check-prefix=CHECK-VERSION-WATCHOS-TARGET %s
+// CHECK-VERSION-WATCHOS-TARGET: "x86_64-apple-watchos4.0.0"

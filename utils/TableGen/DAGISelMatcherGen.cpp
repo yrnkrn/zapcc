@@ -305,7 +305,7 @@ void MatcherGen::EmitOperatorMatchCode(const TreePatternNode *N,
   const SDNodeInfo &CInfo = CGP.getSDNodeInfo(N->getOperator());
 
   // If this is an 'and R, 1234' where the operation is AND/OR and the RHS is
-  // a constant without a predicate fn that has more that one bit set, handle
+  // a constant without a predicate fn that has more than one bit set, handle
   // this as a special case.  This is usually for targets that have special
   // handling of certain large constants (e.g. alpha with it's 8/16/32-bit
   // handling stuff).  Using these instructions is often far more efficient
@@ -886,7 +886,7 @@ EmitResultInstructionAsOperand(const TreePatternNode *N,
   assert((!ResultVTs.empty() || TreeHasOutGlue || NodeHasChain) &&
          "Node has no result");
 
-  AddMatcher(new EmitNodeMatcher(II.Namespace+"::"+II.TheDef->getName().str(),
+  AddMatcher(new EmitNodeMatcher(II.Namespace.str()+"::"+II.TheDef->getName().str(),
                                  ResultVTs, InstOps,
                                  NodeHasChain, TreeHasInGlue, TreeHasOutGlue,
                                  NodeHasMemRefs, NumFixedArityOperands,

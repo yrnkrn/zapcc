@@ -381,7 +381,8 @@ if( MSVC )
 
 elseif( LLVM_COMPILER_IS_GCC_COMPATIBLE )
   append_if(LLVM_ENABLE_WERROR "-Werror" CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
-  #add_flag_if_supported("-Werror=date-time" WERROR_DATE_TIME)
+  append_if(LLVM_ENABLE_WERROR "-Wno-error" CMAKE_REQUIRED_FLAGS)
+  add_flag_if_supported("-Werror=date-time" WERROR_DATE_TIME)
   if (LLVM_ENABLE_CXX1Y)
     check_cxx_compiler_flag("-std=c++1y" CXX_SUPPORTS_CXX1Y)
     append_if(CXX_SUPPORTS_CXX1Y "-std=c++1y" CMAKE_CXX_FLAGS)
@@ -391,7 +392,7 @@ elseif( LLVM_COMPILER_IS_GCC_COMPATIBLE )
   else()
     check_cxx_compiler_flag("-std=c++11" CXX_SUPPORTS_CXX11)
     if (CXX_SUPPORTS_CXX11)
-      if (CYGWIN)
+      if (CYGWIN OR MINGW)
         # MinGW and Cygwin are a bit stricter and lack things like
         # 'strdup', 'stricmp', etc in c++11 mode.
         append("-std=gnu++11" CMAKE_CXX_FLAGS)
@@ -686,8 +687,8 @@ endif()
 # lld doesn't print colored diagnostics when invoked from Ninja
 if (UNIX AND CMAKE_GENERATOR STREQUAL "Ninja")
   include(CheckLinkerFlag)
-  check_linker_flag("-Wl,-color-diagnostics" LINKER_SUPPORTS_COLOR_DIAGNOSTICS)
-  append_if(LINKER_SUPPORTS_COLOR_DIAGNOSTICS "-Wl,-color-diagnostics"
+  check_linker_flag("-Wl,--color-diagnostics" LINKER_SUPPORTS_COLOR_DIAGNOSTICS)
+  append_if(LINKER_SUPPORTS_COLOR_DIAGNOSTICS "-Wl,--color-diagnostics"
     CMAKE_EXE_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
 endif()
 

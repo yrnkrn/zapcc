@@ -710,9 +710,9 @@ define void @avg_v64i8(<64 x i8>* %a, <64 x i8>* %b) {
 ;
 ; AVX512BW-LABEL: avg_v64i8:
 ; AVX512BW:       # BB#0:
-; AVX512BW-NEXT:    vmovdqu8 (%rsi), %zmm0
+; AVX512BW-NEXT:    vmovdqa64 (%rsi), %zmm0
 ; AVX512BW-NEXT:    vpavgb (%rdi), %zmm0, %zmm0
-; AVX512BW-NEXT:    vmovdqu8 %zmm0, (%rax)
+; AVX512BW-NEXT:    vmovdqu32 %zmm0, (%rax)
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
   %1 = load <64 x i8>, <64 x i8>* %a
@@ -1099,9 +1099,9 @@ define void @avg_v32i16(<32 x i16>* %a, <32 x i16>* %b) {
 ;
 ; AVX512BW-LABEL: avg_v32i16:
 ; AVX512BW:       # BB#0:
-; AVX512BW-NEXT:    vmovdqu16 (%rsi), %zmm0
+; AVX512BW-NEXT:    vmovdqa64 (%rsi), %zmm0
 ; AVX512BW-NEXT:    vpavgw (%rdi), %zmm0, %zmm0
-; AVX512BW-NEXT:    vmovdqu16 %zmm0, (%rax)
+; AVX512BW-NEXT:    vmovdqu32 %zmm0, (%rax)
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
   %1 = load <32 x i16>, <32 x i16>* %a
@@ -1732,9 +1732,9 @@ define void @avg_v64i8_2(<64 x i8>* %a, <64 x i8>* %b) {
 ;
 ; AVX512BW-LABEL: avg_v64i8_2:
 ; AVX512BW:       # BB#0:
-; AVX512BW-NEXT:    vmovdqu8 (%rsi), %zmm0
+; AVX512BW-NEXT:    vmovdqa64 (%rsi), %zmm0
 ; AVX512BW-NEXT:    vpavgb %zmm0, %zmm0, %zmm0
-; AVX512BW-NEXT:    vmovdqu8 %zmm0, (%rax)
+; AVX512BW-NEXT:    vmovdqu32 %zmm0, (%rax)
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
   %1 = load <64 x i8>, <64 x i8>* %a
@@ -2122,9 +2122,9 @@ define void @avg_v32i16_2(<32 x i16>* %a, <32 x i16>* %b) {
 ;
 ; AVX512BW-LABEL: avg_v32i16_2:
 ; AVX512BW:       # BB#0:
-; AVX512BW-NEXT:    vmovdqu16 (%rdi), %zmm0
+; AVX512BW-NEXT:    vmovdqa64 (%rdi), %zmm0
 ; AVX512BW-NEXT:    vpavgw (%rsi), %zmm0, %zmm0
-; AVX512BW-NEXT:    vmovdqu16 %zmm0, (%rax)
+; AVX512BW-NEXT:    vmovdqu32 %zmm0, (%rax)
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
   %1 = load <32 x i16>, <32 x i16>* %a
@@ -2624,7 +2624,8 @@ define void @avg_v64i8_const(<64 x i8>* %a) {
 ; AVX512F-NEXT:    vpmovzxbd {{.*#+}} zmm1 = mem[0],zero,zero,zero,mem[1],zero,zero,zero,mem[2],zero,zero,zero,mem[3],zero,zero,zero,mem[4],zero,zero,zero,mem[5],zero,zero,zero,mem[6],zero,zero,zero,mem[7],zero,zero,zero,mem[8],zero,zero,zero,mem[9],zero,zero,zero,mem[10],zero,zero,zero,mem[11],zero,zero,zero,mem[12],zero,zero,zero,mem[13],zero,zero,zero,mem[14],zero,zero,zero,mem[15],zero,zero,zero
 ; AVX512F-NEXT:    vpmovzxbd {{.*#+}} zmm2 = mem[0],zero,zero,zero,mem[1],zero,zero,zero,mem[2],zero,zero,zero,mem[3],zero,zero,zero,mem[4],zero,zero,zero,mem[5],zero,zero,zero,mem[6],zero,zero,zero,mem[7],zero,zero,zero,mem[8],zero,zero,zero,mem[9],zero,zero,zero,mem[10],zero,zero,zero,mem[11],zero,zero,zero,mem[12],zero,zero,zero,mem[13],zero,zero,zero,mem[14],zero,zero,zero,mem[15],zero,zero,zero
 ; AVX512F-NEXT:    vpmovzxbd {{.*#+}} zmm3 = mem[0],zero,zero,zero,mem[1],zero,zero,zero,mem[2],zero,zero,zero,mem[3],zero,zero,zero,mem[4],zero,zero,zero,mem[5],zero,zero,zero,mem[6],zero,zero,zero,mem[7],zero,zero,zero,mem[8],zero,zero,zero,mem[9],zero,zero,zero,mem[10],zero,zero,zero,mem[11],zero,zero,zero,mem[12],zero,zero,zero,mem[13],zero,zero,zero,mem[14],zero,zero,zero,mem[15],zero,zero,zero
-; AVX512F-NEXT:    vbroadcasti64x4 {{.*#+}} zmm4 = mem[0,1,2,3,0,1,2,3]
+; AVX512F-NEXT:    vbroadcasti64x4 {{.*#+}} zmm4 = [1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8]
+; AVX512F-NEXT:    # zmm4 = mem[0,1,2,3,0,1,2,3]
 ; AVX512F-NEXT:    vpaddd %zmm4, %zmm3, %zmm3
 ; AVX512F-NEXT:    vpaddd %zmm4, %zmm2, %zmm2
 ; AVX512F-NEXT:    vpaddd %zmm4, %zmm1, %zmm1
@@ -2646,9 +2647,9 @@ define void @avg_v64i8_const(<64 x i8>* %a) {
 ;
 ; AVX512BW-LABEL: avg_v64i8_const:
 ; AVX512BW:       # BB#0:
-; AVX512BW-NEXT:    vmovdqu8 (%rdi), %zmm0
+; AVX512BW-NEXT:    vmovdqa64 (%rdi), %zmm0
 ; AVX512BW-NEXT:    vpavgb {{.*}}(%rip), %zmm0, %zmm0
-; AVX512BW-NEXT:    vmovdqu8 %zmm0, (%rax)
+; AVX512BW-NEXT:    vmovdqu32 %zmm0, (%rax)
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
   %1 = load <64 x i8>, <64 x i8>* %a
@@ -2941,7 +2942,8 @@ define void @avg_v32i16_const(<32 x i16>* %a) {
 ; AVX512F:       # BB#0:
 ; AVX512F-NEXT:    vpmovzxwd {{.*#+}} zmm0 = mem[0],zero,mem[1],zero,mem[2],zero,mem[3],zero,mem[4],zero,mem[5],zero,mem[6],zero,mem[7],zero,mem[8],zero,mem[9],zero,mem[10],zero,mem[11],zero,mem[12],zero,mem[13],zero,mem[14],zero,mem[15],zero
 ; AVX512F-NEXT:    vpmovzxwd {{.*#+}} zmm1 = mem[0],zero,mem[1],zero,mem[2],zero,mem[3],zero,mem[4],zero,mem[5],zero,mem[6],zero,mem[7],zero,mem[8],zero,mem[9],zero,mem[10],zero,mem[11],zero,mem[12],zero,mem[13],zero,mem[14],zero,mem[15],zero
-; AVX512F-NEXT:    vbroadcasti64x4 {{.*#+}} zmm2 = mem[0,1,2,3,0,1,2,3]
+; AVX512F-NEXT:    vbroadcasti64x4 {{.*#+}} zmm2 = [1,2,3,4,5,6,7,8,1,2,3,4,5,6,7,8]
+; AVX512F-NEXT:    # zmm2 = mem[0,1,2,3,0,1,2,3]
 ; AVX512F-NEXT:    vpaddd %zmm2, %zmm1, %zmm1
 ; AVX512F-NEXT:    vpaddd %zmm2, %zmm0, %zmm0
 ; AVX512F-NEXT:    vpsrld $1, %zmm0, %zmm0
@@ -2953,9 +2955,9 @@ define void @avg_v32i16_const(<32 x i16>* %a) {
 ;
 ; AVX512BW-LABEL: avg_v32i16_const:
 ; AVX512BW:       # BB#0:
-; AVX512BW-NEXT:    vmovdqu16 (%rdi), %zmm0
+; AVX512BW-NEXT:    vmovdqa64 (%rdi), %zmm0
 ; AVX512BW-NEXT:    vpavgw {{.*}}(%rip), %zmm0, %zmm0
-; AVX512BW-NEXT:    vmovdqu16 %zmm0, (%rax)
+; AVX512BW-NEXT:    vmovdqu32 %zmm0, (%rax)
 ; AVX512BW-NEXT:    vzeroupper
 ; AVX512BW-NEXT:    retq
   %1 = load <32 x i16>, <32 x i16>* %a

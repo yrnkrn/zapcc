@@ -148,7 +148,6 @@ unsigned SIRegisterInfo::reservedStackPtrOffsetReg(
 
 BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
-  Reserved.set(AMDGPU::INDIRECT_BASE_ADDR);
 
   // EXEC_LO and EXEC_HI could be allocated and used as regular register, but
   // this seems likely to result in bugs, so I'm marking them as reserved.
@@ -207,7 +206,11 @@ BitVector SIRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     assert(!isSubRegister(ScratchRSrcReg, ScratchWaveOffsetReg));
   }
 
+  // We have to assume the SP is needed in case there are calls in the function,
+  // which is detected after the function is lowered. If we aren't really going
+  // to need SP, don't bother reserving it.
   unsigned StackPtrReg = MFI->getStackPtrOffsetReg();
+
   if (StackPtrReg != AMDGPU::NoRegister) {
     reserveRegisterTuples(Reserved, StackPtrReg);
     assert(!isSubRegister(ScratchRSrcReg, StackPtrReg));
@@ -233,8 +236,15 @@ bool SIRegisterInfo::requiresRegisterScavenging(const MachineFunction &Fn) const
   return true;
 }
 
-bool SIRegisterInfo::requiresFrameIndexScavenging(const MachineFunction &MF) const {
-  return MF.getFrameInfo().hasStackObjects();
+bool SIRegisterInfo::requiresFrameIndexScavenging(
+  const MachineFunction &MF) const {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  if (MFI.hasStackObjects())
+    return true;
+
+  // May need to deal with callee saved registers.
+  const SIMachineFunctionInfo *Info = MF.getInfo<SIMachineFunctionInfo>();
+  return !Info->isEntryFunction();
 }
 
 bool SIRegisterInfo::requiresFrameIndexReplacementScavenging(
@@ -468,17 +478,16 @@ static bool buildMUBUFOffsetLoadStore(const SIInstrInfo *TII,
   if (LoadStoreOp == -1)
     return false;
 
-  unsigned Reg = TII->getNamedOperand(*MI, AMDGPU::OpName::vdata)->getReg();
-
+  const MachineOperand *Reg = TII->getNamedOperand(*MI, AMDGPU::OpName::vdata);
   BuildMI(*MBB, MI, DL, TII->get(LoadStoreOp))
-      .addReg(Reg, getDefRegState(!IsStore))
-      .add(*TII->getNamedOperand(*MI, AMDGPU::OpName::srsrc))
-      .add(*TII->getNamedOperand(*MI, AMDGPU::OpName::soffset))
-      .addImm(Offset)
-      .addImm(0) // glc
-      .addImm(0) // slc
-      .addImm(0) // tfe
-      .setMemRefs(MI->memoperands_begin(), MI->memoperands_end());
+    .add(*Reg)
+    .add(*TII->getNamedOperand(*MI, AMDGPU::OpName::srsrc))
+    .add(*TII->getNamedOperand(*MI, AMDGPU::OpName::soffset))
+    .addImm(Offset)
+    .addImm(0) // glc
+    .addImm(0) // slc
+    .addImm(0) // tfe
+    .setMemRefs(MI->memoperands_begin(), MI->memoperands_end());
   return true;
 }
 
@@ -1271,8 +1280,7 @@ const TargetRegisterClass *SIRegisterInfo::getSubRegClass(
     return RC;
 
   // We can assume that each lane corresponds to one 32-bit register.
-  LaneBitmask::Type Mask = getSubRegIndexLaneMask(SubIdx).getAsInteger();
-  unsigned Count = countPopulation(Mask);
+  unsigned Count = getSubRegIndexLaneMask(SubIdx).getNumLanes();
   if (isSGPRClass(RC)) {
     switch (Count) {
     case 1:
@@ -1328,61 +1336,6 @@ bool SIRegisterInfo::shouldRewriteCopySrc(
 
   // Plain copy.
   return getCommonSubClass(DefRC, SrcRC) != nullptr;
-}
-
-// FIXME: Most of these are flexible with HSA and we don't need to reserve them
-// as input registers if unused. Whether the dispatch ptr is necessary should be
-// easy to detect from used intrinsics. Scratch setup is harder to know.
-unsigned SIRegisterInfo::getPreloadedValue(const MachineFunction &MF,
-                                           enum PreloadedValue Value) const {
-
-  const SIMachineFunctionInfo *MFI = MF.getInfo<SIMachineFunctionInfo>();
-  const SISubtarget &ST = MF.getSubtarget<SISubtarget>();
-  (void)ST;
-  switch (Value) {
-  case SIRegisterInfo::WORKGROUP_ID_X:
-    assert(MFI->hasWorkGroupIDX());
-    return MFI->WorkGroupIDXSystemSGPR;
-  case SIRegisterInfo::WORKGROUP_ID_Y:
-    assert(MFI->hasWorkGroupIDY());
-    return MFI->WorkGroupIDYSystemSGPR;
-  case SIRegisterInfo::WORKGROUP_ID_Z:
-    assert(MFI->hasWorkGroupIDZ());
-    return MFI->WorkGroupIDZSystemSGPR;
-  case SIRegisterInfo::PRIVATE_SEGMENT_WAVE_BYTE_OFFSET:
-    return MFI->PrivateSegmentWaveByteOffsetSystemSGPR;
-  case SIRegisterInfo::PRIVATE_SEGMENT_BUFFER:
-    assert(MFI->hasPrivateSegmentBuffer());
-    return MFI->PrivateSegmentBufferUserSGPR;
-  case SIRegisterInfo::IMPLICIT_BUFFER_PTR:
-    assert(MFI->hasImplicitBufferPtr());
-    return MFI->ImplicitBufferPtrUserSGPR;
-  case SIRegisterInfo::KERNARG_SEGMENT_PTR:
-    assert(MFI->hasKernargSegmentPtr());
-    return MFI->KernargSegmentPtrUserSGPR;
-  case SIRegisterInfo::DISPATCH_ID:
-    assert(MFI->hasDispatchID());
-    return MFI->DispatchIDUserSGPR;
-  case SIRegisterInfo::FLAT_SCRATCH_INIT:
-    assert(MFI->hasFlatScratchInit());
-    return MFI->FlatScratchInitUserSGPR;
-  case SIRegisterInfo::DISPATCH_PTR:
-    assert(MFI->hasDispatchPtr());
-    return MFI->DispatchPtrUserSGPR;
-  case SIRegisterInfo::QUEUE_PTR:
-    assert(MFI->hasQueuePtr());
-    return MFI->QueuePtrUserSGPR;
-  case SIRegisterInfo::WORKITEM_ID_X:
-    assert(MFI->hasWorkItemIDX());
-    return AMDGPU::VGPR0;
-  case SIRegisterInfo::WORKITEM_ID_Y:
-    assert(MFI->hasWorkItemIDY());
-    return AMDGPU::VGPR1;
-  case SIRegisterInfo::WORKITEM_ID_Z:
-    assert(MFI->hasWorkItemIDZ());
-    return AMDGPU::VGPR2;
-  }
-  llvm_unreachable("unexpected preloaded value type");
 }
 
 /// \brief Returns a register that is not used at any point in the function.

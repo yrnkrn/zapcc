@@ -284,9 +284,41 @@ cl::opt<bool> NoEnumDefs("no-enum-definitions",
 }
 
 namespace diff {
-cl::list<std::string> InputFilenames(cl::Positional,
-                                     cl::desc("<first> <second>"),
-                                     cl::OneOrMore, cl::sub(DiffSubcommand));
+cl::opt<bool> PrintValueColumns(
+    "values", cl::init(true),
+    cl::desc("Print one column for each PDB with the field value"),
+    cl::Optional, cl::sub(DiffSubcommand));
+cl::opt<bool>
+    PrintResultColumn("result", cl::init(false),
+                      cl::desc("Print a column with the result status"),
+                      cl::Optional, cl::sub(DiffSubcommand));
+
+cl::list<std::string>
+    RawModiEquivalences("modi-equivalence", cl::ZeroOrMore,
+                        cl::value_desc("left,right"),
+                        cl::desc("Modules with the specified indices will be "
+                                 "treated as referring to the same module"),
+                        cl::sub(DiffSubcommand));
+
+cl::opt<std::string> LeftRoot(
+    "left-bin-root", cl::Optional,
+    cl::desc("Treats the specified path as the root of the tree containing "
+             "binaries referenced by the left PDB.  The root is stripped from "
+             "embedded paths when doing equality comparisons."),
+    cl::sub(DiffSubcommand));
+cl::opt<std::string> RightRoot(
+    "right-bin-root", cl::Optional,
+    cl::desc("Treats the specified path as the root of the tree containing "
+             "binaries referenced by the right PDB.  The root is stripped from "
+             "embedded paths when doing equality comparisons"),
+    cl::sub(DiffSubcommand));
+
+cl::opt<std::string> Left(cl::Positional, cl::desc("<left>"),
+                          cl::sub(DiffSubcommand));
+cl::opt<std::string> Right(cl::Positional, cl::desc("<right>"),
+                           cl::sub(DiffSubcommand));
+
+llvm::DenseMap<uint32_t, uint32_t> Equivalences;
 }
 
 cl::OptionCategory FileOptions("Module & File Options");
@@ -319,6 +351,8 @@ cl::list<std::string>
 
 cl::opt<bool> NameMap("name-map", cl::desc("Dump bytes of PDB Name Map"),
                       cl::sub(BytesSubcommand), cl::cat(PdbBytes));
+cl::opt<bool> Fpm("fpm", cl::desc("Dump free page map"),
+                  cl::sub(BytesSubcommand), cl::cat(MsfBytes));
 
 cl::opt<bool> SectionContributions("sc", cl::desc("Dump section contributions"),
                                    cl::sub(BytesSubcommand), cl::cat(DbiBytes));
@@ -399,7 +433,7 @@ cl::opt<bool> DumpTypeExtras("type-extras",
                              cl::cat(TypeOptions), cl::sub(DumpSubcommand));
 
 cl::list<uint32_t> DumpTypeIndex(
-    "type-index", cl::ZeroOrMore,
+    "type-index", cl::ZeroOrMore, cl::CommaSeparated,
     cl::desc("only dump types with the specified hexadecimal type index"),
     cl::cat(TypeOptions), cl::sub(DumpSubcommand));
 
@@ -415,7 +449,7 @@ cl::opt<bool> DumpIdExtras("id-extras",
                            cl::desc("dump id hashes and index offsets"),
                            cl::cat(TypeOptions), cl::sub(DumpSubcommand));
 cl::list<uint32_t> DumpIdIndex(
-    "id-index", cl::ZeroOrMore,
+    "id-index", cl::ZeroOrMore, cl::CommaSeparated,
     cl::desc("only dump ids with the specified hexadecimal type index"),
     cl::cat(TypeOptions), cl::sub(DumpSubcommand));
 
@@ -427,8 +461,15 @@ cl::opt<bool> DumpTypeDependents(
     cl::cat(TypeOptions), cl::sub(DumpSubcommand));
 
 // SYMBOL OPTIONS
+cl::opt<bool> DumpGlobals("globals", cl::desc("dump Globals symbol records"),
+                          cl::cat(SymbolOptions), cl::sub(DumpSubcommand));
+cl::opt<bool> DumpGlobalExtras("global-extras", cl::desc("dump Globals hashes"),
+                               cl::cat(SymbolOptions), cl::sub(DumpSubcommand));
 cl::opt<bool> DumpPublics("publics", cl::desc("dump Publics stream data"),
                           cl::cat(SymbolOptions), cl::sub(DumpSubcommand));
+cl::opt<bool> DumpPublicExtras("public-extras",
+                               cl::desc("dump Publics hashes and address maps"),
+                               cl::cat(SymbolOptions), cl::sub(DumpSubcommand));
 cl::opt<bool> DumpSymbols("symbols", cl::desc("dump module symbols"),
                           cl::cat(SymbolOptions), cl::sub(DumpSubcommand));
 
@@ -462,6 +503,10 @@ cl::opt<bool> DumpXme(
     cl::desc(
         "dump cross module exports (DEBUG_S_CROSSSCOPEEXPORTS subsection)"),
     cl::cat(FileOptions), cl::sub(DumpSubcommand));
+cl::opt<uint32_t> DumpModi("modi", cl::Optional,
+                           cl::desc("For all options that iterate over "
+                                    "modules, limit to the specified module"),
+                           cl::cat(FileOptions), cl::sub(DumpSubcommand));
 
 // MISCELLANEOUS OPTIONS
 cl::opt<bool> DumpStringTable("string-table", cl::desc("dump PDB String Table"),
@@ -473,6 +518,9 @@ cl::opt<bool> DumpSectionContribs("section-contribs",
                                   cl::sub(DumpSubcommand));
 cl::opt<bool> DumpSectionMap("section-map", cl::desc("dump section map"),
                              cl::cat(MiscOptions), cl::sub(DumpSubcommand));
+cl::opt<bool> DumpSectionHeaders("section-headers",
+                                 cl::desc("Dump image section headers"),
+                                 cl::cat(MiscOptions), cl::sub(DumpSubcommand));
 
 cl::opt<bool> RawAll("all", cl::desc("Implies most other options."),
                      cl::cat(MiscOptions), cl::sub(DumpSubcommand));
@@ -933,8 +981,8 @@ static void mergePdbs() {
     SmallVector<TypeIndex, 128> IdMap;
     if (File.hasPDBTpiStream()) {
       auto &Tpi = ExitOnErr(File.getPDBTpiStream());
-      ExitOnErr(codeview::mergeTypeRecords(MergedTpi, TypeMap, nullptr,
-                                           Tpi.typeArray()));
+      ExitOnErr(
+          codeview::mergeTypeRecords(MergedTpi, TypeMap, Tpi.typeArray()));
     }
     if (File.hasPDBIpiStream()) {
       auto &Ipi = ExitOnErr(File.getPDBIpiStream());
@@ -1040,12 +1088,14 @@ int main(int argc_, const char *argv_[]) {
       opts::dump::DumpXme = true;
       opts::dump::DumpXmi = true;
       opts::dump::DumpIds = true;
+      opts::dump::DumpGlobals = true;
       opts::dump::DumpPublics = true;
       opts::dump::DumpSectionContribs = true;
       opts::dump::DumpSectionMap = true;
       opts::dump::DumpStreams = true;
       opts::dump::DumpStreamBlocks = true;
       opts::dump::DumpStringTable = true;
+      opts::dump::DumpSectionHeaders = true;
       opts::dump::DumpSummary = true;
       opts::dump::DumpSymbols = true;
       opts::dump::DumpIds = true;
@@ -1078,6 +1128,11 @@ int main(int argc_, const char *argv_[]) {
 
     if (opts::pdb2yaml::DumpModules)
       opts::pdb2yaml::DbiStream = true;
+  }
+  if (opts::DiffSubcommand) {
+    if (!opts::diff::PrintResultColumn && !opts::diff::PrintValueColumns) {
+      llvm::errs() << "WARNING: No diff columns specified\n";
+    }
   }
 
   llvm::sys::InitializeCOMRAII COM(llvm::sys::COMThreadingMode::MultiThreaded);
@@ -1137,11 +1192,20 @@ int main(int argc_, const char *argv_[]) {
     std::for_each(opts::bytes::InputFilenames.begin(),
                   opts::bytes::InputFilenames.end(), dumpBytes);
   } else if (opts::DiffSubcommand) {
-    if (opts::diff::InputFilenames.size() != 2) {
-      errs() << "diff subcommand expects exactly 2 arguments.\n";
-      exit(1);
+    for (StringRef S : opts::diff::RawModiEquivalences) {
+      StringRef Left;
+      StringRef Right;
+      std::tie(Left, Right) = S.split(',');
+      uint32_t X, Y;
+      if (!to_integer(Left, X) || !to_integer(Right, Y)) {
+        errs() << formatv("invalid value {0} specified for modi equivalence\n",
+                          S);
+        exit(1);
+      }
+      opts::diff::Equivalences[X] = Y;
     }
-    diff(opts::diff::InputFilenames[0], opts::diff::InputFilenames[1]);
+
+    diff(opts::diff::Left, opts::diff::Right);
   } else if (opts::MergeSubcommand) {
     if (opts::merge::InputFilenames.size() < 2) {
       errs() << "merge subcommand requires at least 2 input files.\n";

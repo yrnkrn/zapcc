@@ -496,3 +496,32 @@ void localStructuredBindingAndRef() {
 }
 
 }
+
+template<typename T>
+struct Guided { T t; };
+// CHECK: [[@LINE-1]]:8 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Def | rel: 0
+// CHECK-NEXT: [[@LINE-2]]:19 | field/C++ | t | c:@ST>1#T@Guided@FI@t | <no-cgname> | Def,RelChild | rel: 1
+// CHECK-NEXT: RelChild | Guided | c:@ST>1#T@Guided
+Guided(double) -> Guided<float>;
+// CHECK: [[@LINE-1]]:19 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Ref | rel: 0
+// CHECK-NEXT: [[@LINE-2]]:1 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Ref | rel: 0
+auto guided = Guided{1.0};
+// CHECK: [[@LINE-1]]:6 | variable/C | guided | c:@guided | _guided | Def | rel: 0
+// CHECK-NEXT: [[@LINE-2]]:15 | struct(Gen)/C++ | Guided | c:@ST>1#T@Guided | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | guided | c:@guided
+
+namespace rd33122110 {
+
+struct Outer {
+    template<typename T>
+    struct Nested { };
+};
+
+}
+
+template<>
+struct rd33122110::Outer::Nested<int>;
+// CHECK: [[@LINE-1]]:8 | namespace/C++ | rd33122110 | c:@N@rd33122110 | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | Nested | c:@N@rd33122110@S@Outer@S@Nested>#I
+// CHECK: [[@LINE-3]]:20 | struct/C++ | Outer | c:@N@rd33122110@S@Outer | <no-cgname> | Ref,RelCont | rel: 1
+// CHECK-NEXT: RelCont | Nested | c:@N@rd33122110@S@Outer@S@Nested>#I

@@ -13,7 +13,7 @@
 using namespace llvm;
 using namespace llvm::pdb;
 
-NativeRawSymbol::NativeRawSymbol(NativeSession &PDBSession, uint32_t SymbolId)
+NativeRawSymbol::NativeRawSymbol(NativeSession &PDBSession, SymIndexId SymbolId)
     : Session(PDBSession), SymbolId(SymbolId) {}
 
 void NativeRawSymbol::dump(raw_ostream &OS, int Indent) const {}
@@ -323,9 +323,7 @@ PDB_SymType NativeRawSymbol::getSymTag() const {
   return PDB_SymType::None;
 }
 
-PDB_UniqueId NativeRawSymbol::getGuid() const {
-  return PDB_UniqueId{{0}};
-}
+codeview::GUID NativeRawSymbol::getGuid() const { return codeview::GUID{{0}}; }
 
 int32_t NativeRawSymbol::getOffset() const {
   return 0;

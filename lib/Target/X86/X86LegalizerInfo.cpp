@@ -22,10 +22,6 @@
 using namespace llvm;
 using namespace TargetOpcode;
 
-#ifndef LLVM_BUILD_GLOBAL_ISEL
-#error "You shouldn't build this"
-#endif
-
 X86LegalizerInfo::X86LegalizerInfo(const X86Subtarget &STI,
                                    const X86TargetMachine &TM)
     : Subtarget(STI), TM(TM) {
@@ -69,6 +65,7 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
     for (auto Ty : {s8, s16, s32, p0})
       setAction({MemOp, Ty}, Legal);
 
+    setAction({MemOp, s1}, WidenScalar);
     // And everything's fine in addrspace 0.
     setAction({MemOp, 1, p0}, Legal);
   }
@@ -91,8 +88,10 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
   setAction({TargetOpcode::G_CONSTANT, s64}, NarrowScalar);
 
   // Extensions
-  setAction({G_ZEXT, s32}, Legal);
-  setAction({G_SEXT, s32}, Legal);
+  for (auto Ty : {s8, s16, s32}) {
+    setAction({G_ZEXT, Ty}, Legal);
+    setAction({G_SEXT, Ty}, Legal);
+  }
 
   for (auto Ty : {s1, s8, s16}) {
     setAction({G_ZEXT, 1, Ty}, Legal);
@@ -126,6 +125,7 @@ void X86LegalizerInfo::setLegalizerInfo64bit() {
     for (auto Ty : {s8, s16, s32, s64, p0})
       setAction({MemOp, Ty}, Legal);
 
+    setAction({MemOp, s1}, WidenScalar);
     // And everything's fine in addrspace 0.
     setAction({MemOp, 1, p0}, Legal);
   }
@@ -148,7 +148,7 @@ void X86LegalizerInfo::setLegalizerInfo64bit() {
   setAction({TargetOpcode::G_CONSTANT, s1}, WidenScalar);
 
   // Extensions
-  for (auto Ty : {s32, s64}) {
+  for (auto Ty : {s8, s16, s32, s64}) {
     setAction({G_ZEXT, Ty}, Legal);
     setAction({G_SEXT, Ty}, Legal);
   }

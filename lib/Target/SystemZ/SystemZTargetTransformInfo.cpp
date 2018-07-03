@@ -292,6 +292,19 @@ void SystemZTTIImpl::getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
   UP.Force = true;
 }
 
+
+bool SystemZTTIImpl::isLSRCostLess(TargetTransformInfo::LSRCost &C1,
+                                   TargetTransformInfo::LSRCost &C2) {
+  // SystemZ specific: check instruction count (first), and don't care about
+  // ImmCost, since offsets are checked explicitly.
+  return std::tie(C1.Insns, C1.NumRegs, C1.AddRecCost,
+                  C1.NumIVMuls, C1.NumBaseAdds,
+                  C1.ScaleCost, C1.SetupCost) <
+    std::tie(C2.Insns, C2.NumRegs, C2.AddRecCost,
+             C2.NumIVMuls, C2.NumBaseAdds,
+             C2.ScaleCost, C2.SetupCost);
+}
+
 unsigned SystemZTTIImpl::getNumberOfRegisters(bool Vector) {
   if (!Vector)
     // Discount the stack pointer.  Also leave out %r0, since it can't
@@ -372,6 +385,9 @@ int SystemZTTIImpl::getArithmeticInstrCost(
         Opcode == Instruction::FMul || Opcode == Instruction::FDiv) {
       switch (ScalarBits) {
       case 32: {
+        // The vector enhancements facility 1 provides v4f32 instructions.
+        if (ST->hasVectorEnhancements1())
+          return NumVectors;
         // Return the cost of multiple scalar invocation plus the cost of
         // inserting and extracting the values.
         unsigned ScalarCost = getArithmeticInstrCost(Opcode, Ty->getScalarType());
@@ -779,15 +795,14 @@ int SystemZTTIImpl::
 getVectorInstrCost(unsigned Opcode, Type *Val, unsigned Index) {
   // vlvgp will insert two grs into a vector register, so only count half the
   // number of instructions.
-  if (Opcode == Instruction::InsertElement &&
-      Val->getScalarType()->isIntegerTy(64))
+  if (Opcode == Instruction::InsertElement && Val->isIntOrIntVectorTy(64))
     return ((Index % 2 == 0) ? 1 : 0);
 
   if (Opcode == Instruction::ExtractElement) {
     int Cost = ((Val->getScalarSizeInBits() == 1) ? 2 /*+test-under-mask*/ : 1);
 
     // Give a slight penalty for moving out of vector pipeline to FXU unit.
-    if (Index == 0 && Val->getScalarType()->isIntegerTy())
+    if (Index == 0 && Val->isIntOrIntVectorTy())
       Cost += 1;
 
     return Cost;

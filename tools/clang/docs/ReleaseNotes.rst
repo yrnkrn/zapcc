@@ -1,5 +1,5 @@
 =======================================
-Clang 5.0.0 (In-Progress) Release Notes
+Clang 6.0.0 (In-Progress) Release Notes
 =======================================
 
 .. contents::
@@ -10,7 +10,7 @@ Written by the `LLVM Team <http://llvm.org/>`_
 
 .. warning::
 
-   These are in-progress notes for the upcoming Clang 5 release.
+   These are in-progress notes for the upcoming Clang 6 release.
    Release notes for previous releases can be found on
    `the Download Page <http://releases.llvm.org/download.html>`_.
 
@@ -18,7 +18,7 @@ Introduction
 ============
 
 This document contains the release notes for the Clang C/C++/Objective-C
-frontend, part of the LLVM Compiler Infrastructure, release 5.0.0. Here we
+frontend, part of the LLVM Compiler Infrastructure, release 6.0.0. Here we
 describe the status of Clang in some detail, including major
 improvements from the previous release and new feature work. For the
 general LLVM release notes, see `the LLVM
@@ -36,7 +36,7 @@ main Clang web page, this document applies to the *next* release, not
 the current one. To see the release notes for a specific release, please
 see the `releases page <http://llvm.org/releases/>`_.
 
-What's New in Clang 5.0.0?
+What's New in Clang 6.0.0?
 ==========================
 
 Some of the major new features and improvements to Clang are listed
@@ -52,13 +52,30 @@ Major New Features
 Improvements to Clang's diagnostics
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
--  -Wunused-lambda-capture warns when a variable explicitly captured
-   by a lambda is not used in the body of the lambda.
+- ``-Wpragma-pack`` is a new warning that warns in the following cases:
+
+  - When a translation unit is missing terminating ``#pragma pack (pop)``
+    directives.
+
+  - When leaving an included file that changes the current alignment value,
+    i.e. when the alignment before ``#include`` is different to the alignment
+    after ``#include``.
+
+  - ``-Wpragma-pack-suspicious-include`` (disabled by default) warns on an
+    ``#include`` when the included file contains structures or unions affected by
+    a non-default alignment that has been specified using a ``#pragma pack``
+    directive prior to the ``#include``.
+
+Non-comprehensive list of changes in this release
+-------------------------------------------------
+
+- Bitrig OS was merged back into OpenBSD, so Bitrig support has been 
+  removed from Clang/LLVM.
 
 New Compiler Flags
 ------------------
 
-The option ....
+- --autocomplete was implemented to obtain a list of flags and its arguments. This is used for shell autocompletion.
 
 Deprecated Compiler Flags
 -------------------------
@@ -66,9 +83,7 @@ Deprecated Compiler Flags
 The following options are deprecated and ignored. They will be removed in
 future versions of Clang.
 
-- -fslp-vectorize-aggressive used to enable the BB vectorizing pass. They have been superseeded
-  by the normal SLP vectorizer.
-- -fno-slp-vectorize-aggressive used to be the default behavior of clang.
+- ...
 
 New Pragmas in Clang
 -----------------------
@@ -79,7 +94,10 @@ Clang now supports the ...
 Attribute Changes in Clang
 --------------------------
 
--  ...
+- The presence of __attribute__((availability(...))) on a declaration no longer
+  implies default visibility for that declaration on macOS.
+
+- ...
 
 Windows Support
 ---------------
@@ -136,55 +154,41 @@ this section should help get you past the largest hurdles of upgrading.
 AST Matchers
 ------------
 
-...
+The hasDeclaration matcher now works the same for Type and QualType and only
+ever looks through one level of sugaring in a limited number of cases.
 
+There are two main patterns affected by this:
+
+-  qualType(hasDeclaration(recordDecl(...))): previously, we would look through
+   sugar like TypedefType to get at the underlying recordDecl; now, we need
+   to explicitly remove the sugaring:
+   qualType(hasUnqualifiedDesugaredType(hasDeclaration(recordDecl(...))))
+
+-  hasType(recordDecl(...)): hasType internally uses hasDeclaration; previously,
+   this matcher used to match for example TypedefTypes of the RecordType, but
+   after the change they don't; to fix, use:
+
+::
+   hasType(hasUnqualifiedDesugaredType(
+       recordType(hasDeclaration(recordDecl(...)))))
+
+-  templateSpecializationType(hasDeclaration(classTemplateDecl(...))):
+   previously, we would directly match the underlying ClassTemplateDecl;
+   now, we can explicitly match the ClassTemplateSpecializationDecl, but that
+   requires to explicitly get the ClassTemplateDecl:
+
+::
+   templateSpecializationType(hasDeclaration(
+       classTemplateSpecializationDecl(
+           hasSpecializedTemplate(classTemplateDecl(...)))))
 
 clang-format
 ------------
 
-* Option **BreakBeforeInheritanceComma** added to break before ``:`` and ``,``  in case of
-  multiple inheritance in a class declaration. Enabled by default in the Mozilla coding style.
+...
 
-  +---------------------+----------------------------------------+
-  | true                | false                                  |
-  +=====================+========================================+
-  | .. code-block:: c++ | .. code-block:: c++                    |
-  |                     |                                        |
-  |   class MyClass     |   class MyClass : public X, public Y { |
-  |       : public X    |   };                                   |
-  |       , public Y {  |                                        |
-  |   };                |                                        |
-  +---------------------+----------------------------------------+
-
-* Align block comment decorations.
-
-  +----------------------+---------------------+
-  | Before               | After               |
-  +======================+=====================+
-  |  .. code-block:: c++ | .. code-block:: c++ |
-  |                      |                     |
-  |    /* line 1         |   /* line 1         |
-  |      * line 2        |    * line 2         |
-  |     */               |    */               |
-  +----------------------+---------------------+
-
-* The :doc:`ClangFormatStyleOptions` documentation provides detailed examples for most options.
-
-* Namespace end comments are now added or updated automatically.
-
-  +---------------------+---------------------+
-  | Before              | After               |
-  +=====================+=====================+
-  | .. code-block:: c++ | .. code-block:: c++ |
-  |                     |                     |
-  |   namespace A {     |   namespace A {     |
-  |   int i;            |   int i;            |
-  |   int j;            |   int j;            |
-  |   }                 |   }                 |
-  +---------------------+---------------------+
-
-* Comment reflow support added. Overly long comment lines will now be reflown with the rest of
-  the paragraph instead of just broken. Option **ReflowComments** added and enabled by default.
+* Option -verbose added to the command line.
+  Shows the list of processed files.
 
 libclang
 --------
@@ -200,27 +204,7 @@ Static Analyzer
 Undefined Behavior Sanitizer (UBSan)
 ------------------------------------
 
-- The Undefined Behavior Sanitizer has a new check for pointer overflow. This
-  check is on by default. The flag to control this functionality is
-  -fsanitize=pointer-overflow.
-
-  Pointer overflow is an indicator of undefined behavior: when a pointer
-  indexing expression wraps around the address space, or produces other
-  unexpected results, its result may not point to a valid object.
-
-- UBSan has several new checks which detect violations of nullability
-  annotations. These checks are off by default. The flag to control this group
-  of checks is -fsanitize=nullability. The checks can be individially enabled
-  by -fsanitize=nullability-arg (which checks calls),
-  -fsanitize=nullability-assign (which checks assignments), and
-  -fsanitize=nullability-return (which checks return statements).
-
-- UBSan can now detect invalid loads from bitfields and from ObjC BOOLs.
-
-- UBSan can now avoid emitting unnecessary type checks in C++ class methods and
-  in several other cases where the result is known at compile-time. UBSan can
-  also avoid emitting unnecessary overflow checks in arithmetic expressions
-  with promoted integer operands.
+...
 
 Core Analysis Improvements
 ==========================

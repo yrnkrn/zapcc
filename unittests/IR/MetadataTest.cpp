@@ -2116,29 +2116,35 @@ TEST_F(DIImportedEntityTest, get) {
   unsigned Tag = dwarf::DW_TAG_imported_module;
   DIScope *Scope = getSubprogram();
   DINode *Entity = getCompositeType();
+  DIFile *File = getFile();
   unsigned Line = 5;
   StringRef Name = "name";
 
-  auto *N = DIImportedEntity::get(Context, Tag, Scope, Entity, Line, Name);
+  auto *N =
+      DIImportedEntity::get(Context, Tag, Scope, Entity, File, Line, Name);
 
   EXPECT_EQ(Tag, N->getTag());
   EXPECT_EQ(Scope, N->getScope());
   EXPECT_EQ(Entity, N->getEntity());
+  EXPECT_EQ(File, N->getFile());
   EXPECT_EQ(Line, N->getLine());
   EXPECT_EQ(Name, N->getName());
-  EXPECT_EQ(N, DIImportedEntity::get(Context, Tag, Scope, Entity, Line, Name));
+  EXPECT_EQ(
+      N, DIImportedEntity::get(Context, Tag, Scope, Entity, File, Line, Name));
 
   EXPECT_NE(N,
             DIImportedEntity::get(Context, dwarf::DW_TAG_imported_declaration,
-                                  Scope, Entity, Line, Name));
+                                  Scope, Entity, File, Line, Name));
   EXPECT_NE(N, DIImportedEntity::get(Context, Tag, getSubprogram(), Entity,
-                                     Line, Name));
+                                     File, Line, Name));
   EXPECT_NE(N, DIImportedEntity::get(Context, Tag, Scope, getCompositeType(),
-                                     Line, Name));
-  EXPECT_NE(N,
-            DIImportedEntity::get(Context, Tag, Scope, Entity, Line + 1, Name));
-  EXPECT_NE(N,
-            DIImportedEntity::get(Context, Tag, Scope, Entity, Line, "other"));
+                                     File, Line, Name));
+  EXPECT_NE(N, DIImportedEntity::get(Context, Tag, Scope, Entity, nullptr, Line,
+                                     Name));
+  EXPECT_NE(N, DIImportedEntity::get(Context, Tag, Scope, Entity, File,
+                                     Line + 1, Name));
+  EXPECT_NE(N, DIImportedEntity::get(Context, Tag, Scope, Entity, File, Line,
+                                     "other"));
 
   TempDIImportedEntity Temp = N->clone();
   EXPECT_EQ(N, MDNode::replaceWithUniqued(std::move(Temp)));
@@ -2460,8 +2466,12 @@ TEST_F(DistinctMDOperandPlaceholderTest, replaceUseWithNoUser) {
   DistinctMDOperandPlaceholder(7).replaceUseWith(MDTuple::get(Context, None));
 }
 
-#ifndef NDEBUG
-#ifdef GTEST_HAS_DEATH_TEST
+// Test various assertions in metadata tracking. Don't run these tests if gtest
+// will use SEH to recover from them. Two of these tests get halfway through
+// inserting metadata into DenseMaps for tracking purposes, and then they
+// assert, and we attempt to destroy an LLVMContext with broken invariants,
+// leading to infinite loops.
+#if defined(GTEST_HAS_DEATH_TEST) && !defined(NDEBUG) && !defined(GTEST_HAS_SEH)
 TEST_F(DistinctMDOperandPlaceholderTest, MetadataAsValue) {
   // This shouldn't crash.
   DistinctMDOperandPlaceholder PH(7);
@@ -2502,7 +2512,6 @@ TEST_F(DistinctMDOperandPlaceholderTest, TrackingMDRefAndDistinctMDNode) {
                  "Placeholders can only be used once");
   }
 }
-#endif
 #endif
 
 } // end namespace

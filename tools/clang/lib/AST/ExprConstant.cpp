@@ -537,7 +537,7 @@ namespace {
   /// rules.  For example, the RHS of (0 && foo()) is not evaluated.  We can
   /// evaluate the expression regardless of what the RHS is, but C only allows
   /// certain things in certain situations.
-  struct LLVM_ALIGNAS(/*alignof(uint64_t)*/ 8) EvalInfo {
+  struct EvalInfo {
     ASTContext &Ctx;
 
     /// EvalStatus - Contains information about the evaluation.
@@ -977,24 +977,23 @@ namespace {
   /// RAII object used to optionally suppress diagnostics and side-effects from
   /// a speculative evaluation.
   class SpeculativeEvaluationRAII {
-    /// Pair of EvalInfo, and a bit that stores whether or not we were
-    /// speculatively evaluating when we created this RAII.
-    llvm::PointerIntPair<EvalInfo *, 1, bool> InfoAndOldSpecEval;
-    Expr::EvalStatus Old;
+    EvalInfo *Info = nullptr;
+    Expr::EvalStatus OldStatus;
+    bool OldIsSpeculativelyEvaluating;
 
     void moveFromAndCancel(SpeculativeEvaluationRAII &&Other) {
-      InfoAndOldSpecEval = Other.InfoAndOldSpecEval;
-      Old = Other.Old;
-      Other.InfoAndOldSpecEval.setPointer(nullptr);
+      Info = Other.Info;
+      OldStatus = Other.OldStatus;
+      OldIsSpeculativelyEvaluating = Other.OldIsSpeculativelyEvaluating;
+      Other.Info = nullptr;
     }
 
     void maybeRestoreState() {
-      EvalInfo *Info = InfoAndOldSpecEval.getPointer();
       if (!Info)
         return;
 
-      Info->EvalStatus = Old;
-      Info->IsSpeculativelyEvaluating = InfoAndOldSpecEval.getInt();
+      Info->EvalStatus = OldStatus;
+      Info->IsSpeculativelyEvaluating = OldIsSpeculativelyEvaluating;
     }
 
   public:
@@ -1002,8 +1001,8 @@ namespace {
 
     SpeculativeEvaluationRAII(
         EvalInfo &Info, SmallVectorImpl<PartialDiagnosticAt> *NewDiag = nullptr)
-        : InfoAndOldSpecEval(&Info, Info.IsSpeculativelyEvaluating),
-          Old(Info.EvalStatus) {
+        : Info(&Info), OldStatus(Info.EvalStatus),
+          OldIsSpeculativelyEvaluating(Info.IsSpeculativelyEvaluating) {
       Info.EvalStatus.Diag = NewDiag;
       Info.IsSpeculativelyEvaluating = true;
     }
@@ -1665,6 +1664,19 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
   return true;
 }
 
+/// Member pointers are constant expressions unless they point to a
+/// non-virtual dllimport member function.
+static bool CheckMemberPointerConstantExpression(EvalInfo &Info,
+                                                 SourceLocation Loc,
+                                                 QualType Type,
+                                                 const APValue &Value) {
+  const ValueDecl *Member = Value.getMemberPointerDecl();
+  const auto *FD = dyn_cast_or_null<CXXMethodDecl>(Member);
+  if (!FD)
+    return true;
+  return FD->isVirtual() || !FD->hasAttr<DLLImportAttr>();
+}
+
 /// Check that this core constant expression is of literal type, and if not,
 /// produce an appropriate diagnostic.
 static bool CheckLiteralType(EvalInfo &Info, const Expr *E,
@@ -1756,6 +1768,9 @@ static bool CheckConstantExpression(EvalInfo &Info, SourceLocation DiagLoc,
     LVal.setFrom(Info.Ctx, Value);
     return CheckLValueConstantExpression(Info, DiagLoc, Type, LVal);
   }
+
+  if (Value.isMemberPointer())
+    return CheckMemberPointerConstantExpression(Info, DiagLoc, Type, Value);
 
   // Everything else is fine.
   return true;
@@ -9508,7 +9523,7 @@ bool ComplexExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   case BO_Mul:
     if (Result.isComplexFloat()) {
       // This is an implementation of complex multiplication according to the
-      // constraints laid out in C11 Annex G. The implemantion uses the
+      // constraints laid out in C11 Annex G. The implemention uses the
       // following naming scheme:
       //   (a + ib) * (c + id)
       ComplexValue LHS = Result;
@@ -9589,7 +9604,7 @@ bool ComplexExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
   case BO_Div:
     if (Result.isComplexFloat()) {
       // This is an implementation of complex division according to the
-      // constraints laid out in C11 Annex G. The implemantion uses the
+      // constraints laid out in C11 Annex G. The implemention uses the
       // following naming scheme:
       //   (a + ib) / (c + id)
       ComplexValue LHS = Result;

@@ -589,7 +589,7 @@ void InstrEmitter::EmitSubregNode(SDNode *Node,
     } else
       AddOperand(MIB, N0, 0, nullptr, VRBaseMap, /*IsDebug=*/false,
                  IsClone, IsCloned);
-    // Add the subregster being inserted
+    // Add the subregister being inserted
     AddOperand(MIB, N1, 0, nullptr, VRBaseMap, /*IsDebug=*/false,
                IsClone, IsCloned);
     MIB.addImm(SubIdx);
@@ -673,7 +673,6 @@ void InstrEmitter::EmitRegSequence(SDNode *Node,
 MachineInstr *
 InstrEmitter::EmitDbgValue(SDDbgValue *SD,
                            DenseMap<SDValue, unsigned> &VRBaseMap) {
-  uint64_t Offset = SD->getOffset();
   MDNode *Var = SD->getVariable();
   MDNode *Expr = SD->getExpression();
   DebugLoc DL = SD->getDebugLoc();
@@ -685,7 +684,7 @@ InstrEmitter::EmitDbgValue(SDDbgValue *SD,
     // EmitTargetCodeForFrameDebugValue is responsible for allocation.
     return BuildMI(*MF, DL, TII->get(TargetOpcode::DBG_VALUE))
         .addFrameIndex(SD->getFrameIx())
-        .addImm(Offset)
+        .addImm(0)
         .addMetadata(Var)
         .addMetadata(Expr);
   }
@@ -727,11 +726,9 @@ InstrEmitter::EmitDbgValue(SDDbgValue *SD,
 
   // Indirect addressing is indicated by an Imm as the second parameter.
   if (SD->isIndirect())
-    MIB.addImm(Offset);
-  else {
-    assert(Offset == 0 && "direct value cannot have an offset");
+    MIB.addImm(0U);
+  else
     MIB.addReg(0U, RegState::Debug);
-  }
 
   MIB.addMetadata(Var);
   MIB.addMetadata(Expr);

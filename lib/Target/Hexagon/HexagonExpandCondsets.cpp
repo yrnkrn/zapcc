@@ -1,4 +1,4 @@
-//===--- HexagonExpandCondsets.cpp ----------------------------------------===//
+//===- HexagonExpandCondsets.cpp ------------------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -86,8 +86,6 @@
 // however, is that finding the locations where the implicit uses need
 // to be added, and updating the live ranges will be more involved.
 
-#define DEBUG_TYPE "expand-condsets"
-
 #include "HexagonInstrInfo.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -105,16 +103,21 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
 #include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/Function.h"
+#include "llvm/MC/LaneBitmask.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 #include <cassert>
 #include <iterator>
 #include <set>
 #include <utility>
+
+#define DEBUG_TYPE "expand-condsets"
 
 using namespace llvm;
 
@@ -136,10 +139,7 @@ namespace {
   public:
     static char ID;
 
-    HexagonExpandCondsets() :
-        MachineFunctionPass(ID), HII(nullptr), TRI(nullptr), MRI(nullptr),
-        LIS(nullptr), CoaLimitActive(false),
-        TfrLimitActive(false), CoaCounter(0), TfrCounter(0) {
+    HexagonExpandCondsets() : MachineFunctionPass(ID) {
       if (OptCoaLimit.getPosition())
         CoaLimitActive = true, CoaLimit = OptCoaLimit;
       if (OptTfrLimit.getPosition())
@@ -161,14 +161,17 @@ namespace {
     bool runOnMachineFunction(MachineFunction &MF) override;
 
   private:
-    const HexagonInstrInfo *HII;
-    const TargetRegisterInfo *TRI;
+    const HexagonInstrInfo *HII = nullptr;
+    const TargetRegisterInfo *TRI = nullptr;
     MachineDominatorTree *MDT;
-    MachineRegisterInfo *MRI;
-    LiveIntervals *LIS;
-
-    bool CoaLimitActive, TfrLimitActive;
-    unsigned CoaLimit, TfrLimit, CoaCounter, TfrCounter;
+    MachineRegisterInfo *MRI = nullptr;
+    LiveIntervals *LIS = nullptr;
+    bool CoaLimitActive = false;
+    bool TfrLimitActive = false;
+    unsigned CoaLimit;
+    unsigned TfrLimit;
+    unsigned CoaCounter = 0;
+    unsigned TfrCounter = 0;
 
     struct RegisterRef {
       RegisterRef(const MachineOperand &Op) : Reg(Op.getReg()),
@@ -186,9 +189,10 @@ namespace {
       unsigned Reg, Sub;
     };
 
-    typedef DenseMap<unsigned,unsigned> ReferenceMap;
+    using ReferenceMap = DenseMap<unsigned, unsigned>;
     enum { Sub_Low = 0x1, Sub_High = 0x2, Sub_None = (Sub_Low | Sub_High) };
     enum { Exec_Then = 0x10, Exec_Else = 0x20 };
+
     unsigned getMaskForSub(unsigned Sub);
     bool isCondset(const MachineInstr &MI);
     LaneBitmask getLaneMask(unsigned Reg, unsigned Sub);
@@ -484,18 +488,33 @@ void HexagonExpandCondsets::updateDeadsInRange(unsigned Reg, LaneBitmask LM,
     if (!HII->isPredicated(*DefI))
       continue;
     // Construct the set of all necessary implicit uses, based on the def
-    // operands in the instruction.
-    std::set<RegisterRef> ImpUses;
-    for (auto &Op : DefI->operands())
-      if (Op.isReg() && Op.isDef() && DefRegs.count(Op))
-        ImpUses.insert(Op);
+    // operands in the instruction. We need to tie the implicit uses to
+    // the corresponding defs.
+    std::map<RegisterRef,unsigned> ImpUses;
+    for (unsigned i = 0, e = DefI->getNumOperands(); i != e; ++i) {
+      MachineOperand &Op = DefI->getOperand(i);
+      if (!Op.isReg() || !DefRegs.count(Op))
+        continue;
+      if (Op.isDef()) {
+        ImpUses.insert({Op, i});
+      } else {
+        // This function can be called for the same register with different
+        // lane masks. If the def in this instruction was for the whole
+        // register, we can get here more than once. Avoid adding multiple
+        // implicit uses (or adding an implicit use when an explicit one is
+        // present).
+        ImpUses.erase(Op);
+      }
+    }
     if (ImpUses.empty())
       continue;
     MachineFunction &MF = *DefI->getParent()->getParent();
-    for (RegisterRef R : ImpUses)
+    for (std::pair<RegisterRef, unsigned> P : ImpUses) {
+      RegisterRef R = P.first;
       MachineInstrBuilder(MF, DefI).addReg(R.Reg, RegState::Implicit, R.Sub);
+      DefI->tieOperands(P.second, DefI->getNumOperands()-1);
+    }
   }
-
 }
 
 void HexagonExpandCondsets::updateDeadFlags(unsigned Reg) {
@@ -1133,7 +1152,7 @@ bool HexagonExpandCondsets::coalesceRegisters(RegisterRef R1, RegisterRef R2) {
   MRI->replaceRegWith(R2.Reg, R1.Reg);
 
   // Move all live segments from L2 to L1.
-  typedef DenseMap<VNInfo*,VNInfo*> ValueInfoMap;
+  using ValueInfoMap = DenseMap<VNInfo *, VNInfo *>;
   ValueInfoMap VM;
   for (LiveInterval::iterator I = L2.begin(), E = L2.end(); I != E; ++I) {
     VNInfo *NewVN, *OldVN = I->valno;

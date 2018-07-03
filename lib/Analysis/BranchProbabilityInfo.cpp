@@ -1,4 +1,4 @@
-//===-- BranchProbabilityInfo.cpp - Branch Probability Analysis -----------===//
+//===- BranchProbabilityInfo.cpp - Branch Probability Analysis ------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -13,16 +13,32 @@
 
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/BranchProbability.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cstdint>
+#include <iterator>
+#include <utility>
 
 using namespace llvm;
 
@@ -480,7 +496,7 @@ bool BranchProbabilityInfo::calcZeroHeuristics(const BasicBlock *BB,
   if (Instruction *LHS = dyn_cast<Instruction>(CI->getOperand(0)))
     if (LHS->getOpcode() == Instruction::And)
       if (ConstantInt *AndRHS = dyn_cast<ConstantInt>(LHS->getOperand(1)))
-        if (AndRHS->getUniqueInteger().isPowerOf2())
+        if (AndRHS->getValue().isPowerOf2())
           return false;
 
   // Check if the LHS is the return value of a library function
@@ -538,7 +554,7 @@ bool BranchProbabilityInfo::calcZeroHeuristics(const BasicBlock *BB,
     // InstCombine canonicalizes X <= 0 into X < 1.
     // X <= 0   ->  Unlikely
     isProb = false;
-  } else if (CV->isAllOnesValue()) {
+  } else if (CV->isMinusOne()) {
     switch (CI->getPredicate()) {
     case CmpInst::ICMP_EQ:
       // X == -1  ->  Unlikely
@@ -722,7 +738,6 @@ raw_ostream &
 BranchProbabilityInfo::printEdgeProbability(raw_ostream &OS,
                                             const BasicBlock *Src,
                                             const BasicBlock *Dst) const {
-
   const BranchProbability Prob = getEdgeProbability(Src, Dst);
   OS << "edge " << Src->getName() << " -> " << Dst->getName()
      << " probability is " << Prob

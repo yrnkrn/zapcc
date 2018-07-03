@@ -1847,13 +1847,25 @@ static void emitConvertFuncs(CodeGenTarget &Target, StringRef ClassName,
   CvtOS << "  assert(Kind < CVT_NUM_SIGNATURES && \"Invalid signature!\");\n";
   CvtOS << "  const uint8_t *Converter = ConversionTable[Kind];\n";
   if (HasOptionalOperands) {
-    CvtOS << "  unsigned NumDefaults = 0;\n";
+    size_t MaxNumOperands = 0;
+    for (const auto &MI : Infos) {
+      MaxNumOperands = std::max(MaxNumOperands, MI->AsmOperands.size());
+    }
+    CvtOS << "  unsigned DefaultsOffset[" << (MaxNumOperands + 1)
+          << "] = { 0 };\n";
+    CvtOS << "  assert(OptionalOperandsMask.size() == " << (MaxNumOperands)
+          << ");\n";
+    CvtOS << "  for (unsigned i = 0, NumDefaults = 0; i < " << (MaxNumOperands)
+          << "; ++i) {\n";
+    CvtOS << "    DefaultsOffset[i + 1] = NumDefaults;\n";
+    CvtOS << "    NumDefaults += (OptionalOperandsMask[i] ? 1 : 0);\n";
+    CvtOS << "  }\n";
   }
   CvtOS << "  unsigned OpIdx;\n";
   CvtOS << "  Inst.setOpcode(Opcode);\n";
   CvtOS << "  for (const uint8_t *p = Converter; *p; p+= 2) {\n";
   if (HasOptionalOperands) {
-    CvtOS << "    OpIdx = *(p + 1) - NumDefaults;\n";
+    CvtOS << "    OpIdx = *(p + 1) - DefaultsOffset[*(p + 1)];\n";
   } else {
     CvtOS << "    OpIdx = *(p + 1);\n";
   }
@@ -1988,7 +2000,6 @@ static void emitConvertFuncs(CodeGenTarget &Target, StringRef ClassName,
                 << "        " << Op.Class->DefaultMethod << "()"
                 << "->" << Op.Class->RenderMethod << "(Inst, "
                 << OpInfo.MINumOperands << ");\n"
-                << "        ++NumDefaults;\n"
                 << "      } else {\n"
                 << "        static_cast<" << TargetOperandClass
                 << "&>(*Operands[OpIdx])." << Op.Class->RenderMethod
@@ -2222,7 +2233,7 @@ static void emitValidateOperandClass(AsmMatcherInfo &Info,
   OS << "    switch (Operand.getReg()) {\n";
   OS << "    default: OpKind = InvalidMatchClass; break;\n";
   for (const auto &RC : Info.RegisterClasses)
-    OS << "    case " << Info.Target.getName() << "::"
+    OS << "    case " << RC.first->getValueAsString("Namespace") << "::"
        << RC.first->getName() << ": OpKind = " << RC.second->Name
        << "; break;\n";
   OS << "    }\n";
@@ -2711,6 +2722,47 @@ static void emitCustomOperandParsing(raw_ostream &OS, CodeGenTarget &Target,
   OS << "}\n\n";
 }
 
+static void emitMnemonicSpellChecker(raw_ostream &OS, CodeGenTarget &Target,
+                                     unsigned VariantCount) {
+  OS << "std::string " << Target.getName() << "MnemonicSpellCheck(StringRef S, uint64_t FBS) {\n";
+  if (!VariantCount)
+    OS <<  "  return \"\";";
+  else {
+    OS << "  const unsigned MaxEditDist = 2;\n";
+    OS << "  std::vector<StringRef> Candidates;\n";
+    OS << "  StringRef Prev = \"\";\n";
+    OS << "  auto End = std::end(MatchTable0);\n";
+    OS << "\n";
+    OS << "  for (auto I = std::begin(MatchTable0); I < End; I++) {\n";
+    OS << "    // Ignore unsupported instructions.\n";
+    OS << "    if ((FBS & I->RequiredFeatures) != I->RequiredFeatures)\n";
+    OS << "      continue;\n";
+    OS << "\n";
+    OS << "    StringRef T = I->getMnemonic();\n";
+    OS << "    // Avoid recomputing the edit distance for the same string.\n";
+    OS << "    if (T.equals(Prev))\n";
+    OS << "      continue;\n";
+    OS << "\n";
+    OS << "    Prev = T;\n";
+    OS << "    unsigned Dist = S.edit_distance(T, false, MaxEditDist);\n";
+    OS << "    if (Dist <= MaxEditDist)\n";
+    OS << "      Candidates.push_back(T);\n";
+    OS << "  }\n";
+    OS << "\n";
+    OS << "  if (Candidates.empty())\n";
+    OS << "    return \"\";\n";
+    OS << "\n";
+    OS << "  std::string Res = \", did you mean: \";\n";
+    OS << "  unsigned i = 0;\n";
+    OS << "  for( ; i < Candidates.size() - 1; i++)\n";
+    OS << "    Res += Candidates[i].str() + \", \";\n";
+    OS << "  return Res + Candidates[i].str() + \"?\";\n";
+  }
+  OS << "}\n";
+  OS << "\n";
+}
+
+
 void AsmMatcherEmitter::run(raw_ostream &OS) {
   CodeGenTarget Target(Records);
   Record *AsmParser = Target.getAsmParser();
@@ -2948,7 +3000,7 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
       std::string LenMnemonic = char(MI->Mnemonic.size()) + MI->Mnemonic.str();
       OS << "  { " << StringTable.GetOrAddStringOffset(LenMnemonic, false)
          << " /* " << MI->Mnemonic << " */, "
-         << Target.getName() << "::"
+         << Target.getInstNamespace() << "::"
          << MI->getResultInst()->TheDef->getName() << ", "
          << MI->ConversionFnKind << ", ";
 
@@ -2973,6 +3025,8 @@ void AsmMatcherEmitter::run(raw_ostream &OS) {
 
     OS << "};\n\n";
   }
+
+  emitMnemonicSpellChecker(OS, Target, VariantCount);
 
   // Finally, build the match function.
   OS << "unsigned " << Target.getName() << ClassName << "::\n"

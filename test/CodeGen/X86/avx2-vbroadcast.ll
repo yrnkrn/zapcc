@@ -633,13 +633,13 @@ entry:
 define <8 x i32> @V111(<8 x i32> %in) nounwind uwtable readnone ssp {
 ; X32-AVX2-LABEL: V111:
 ; X32-AVX2:       ## BB#0: ## %entry
-; X32-AVX2-NEXT:    vpbroadcastd LCPI29_0, %ymm1
+; X32-AVX2-NEXT:    vpbroadcastd {{.*#+}} ymm1 = [2,2,2,2,2,2,2,2]
 ; X32-AVX2-NEXT:    vpaddd %ymm1, %ymm0, %ymm0
 ; X32-AVX2-NEXT:    retl
 ;
 ; X64-AVX2-LABEL: V111:
 ; X64-AVX2:       ## BB#0: ## %entry
-; X64-AVX2-NEXT:    vpbroadcastd {{.*}}(%rip), %ymm1
+; X64-AVX2-NEXT:    vpbroadcastd {{.*#+}} ymm1 = [2,2,2,2,2,2,2,2]
 ; X64-AVX2-NEXT:    vpaddd %ymm1, %ymm0, %ymm0
 ; X64-AVX2-NEXT:    retq
 ;
@@ -660,13 +660,13 @@ entry:
 define <8 x float> @V113(<8 x float> %in) nounwind uwtable readnone ssp {
 ; X32-AVX2-LABEL: V113:
 ; X32-AVX2:       ## BB#0: ## %entry
-; X32-AVX2-NEXT:    vbroadcastss LCPI30_0, %ymm1
+; X32-AVX2-NEXT:    vbroadcastss {{.*#+}} ymm1 = [-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125]
 ; X32-AVX2-NEXT:    vaddps %ymm1, %ymm0, %ymm0
 ; X32-AVX2-NEXT:    retl
 ;
 ; X64-AVX2-LABEL: V113:
 ; X64-AVX2:       ## BB#0: ## %entry
-; X64-AVX2-NEXT:    vbroadcastss {{.*}}(%rip), %ymm1
+; X64-AVX2-NEXT:    vbroadcastss {{.*#+}} ymm1 = [-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125,-0.0078125]
 ; X64-AVX2-NEXT:    vaddps %ymm1, %ymm0, %ymm0
 ; X64-AVX2-NEXT:    retq
 ;
@@ -687,12 +687,12 @@ entry:
 define <4 x float> @_e2(float* %ptr) nounwind uwtable readnone ssp {
 ; X32-LABEL: _e2:
 ; X32:       ## BB#0:
-; X32-NEXT:    vbroadcastss LCPI31_0, %xmm0
+; X32-NEXT:    vbroadcastss {{.*#+}} xmm0 = [-0.0078125,-0.0078125,-0.0078125,-0.0078125]
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: _e2:
 ; X64:       ## BB#0:
-; X64-NEXT:    vbroadcastss {{.*}}(%rip), %xmm0
+; X64-NEXT:    vbroadcastss {{.*#+}} xmm0 = [-0.0078125,-0.0078125,-0.0078125,-0.0078125]
 ; X64-NEXT:    retq
   %vecinit.i = insertelement <4 x float> undef, float        0xbf80000000000000, i32 0
   %vecinit2.i = insertelement <4 x float> %vecinit.i, float  0xbf80000000000000, i32 1
@@ -734,6 +734,7 @@ define void @crash() nounwind alwaysinline {
 ; X32-NEXT:  LBB33_1: ## %footer349VF
 ; X32-NEXT:    ## =>This Inner Loop Header: Depth=1
 ; X32-NEXT:    jmp LBB33_1
+; X32-NEXT:    ## -- End function
 ;
 ; X64-LABEL: crash:
 ; X64:       ## BB#0: ## %WGLoopsEntry
@@ -746,6 +747,7 @@ define void @crash() nounwind alwaysinline {
 ; X64-NEXT:  LBB33_1: ## %footer349VF
 ; X64-NEXT:    ## =>This Inner Loop Header: Depth=1
 ; X64-NEXT:    jmp LBB33_1
+; X64-NEXT:    ## -- End function
 WGLoopsEntry:
   br i1 undef, label %ret, label %footer329VF
 
@@ -1146,7 +1148,7 @@ define void @isel_crash_32b(i8* %cV_R.addr) {
 ; X32-NEXT:    andl $-32, %esp
 ; X32-NEXT:    subl $128, %esp
 ; X32-NEXT:    movl 8(%ebp), %eax
-; X32-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X32-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X32-NEXT:    vmovaps %ymm0, (%esp)
 ; X32-NEXT:    vpbroadcastb (%eax), %ymm1
 ; X32-NEXT:    vmovaps %ymm0, {{[0-9]+}}(%esp)
@@ -1168,7 +1170,7 @@ define void @isel_crash_32b(i8* %cV_R.addr) {
 ; X64-NEXT:    .cfi_def_cfa_register %rbp
 ; X64-NEXT:    andq $-32, %rsp
 ; X64-NEXT:    subq $128, %rsp
-; X64-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X64-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X64-NEXT:    vmovaps %ymm0, (%rsp)
 ; X64-NEXT:    movb (%rdi), %al
 ; X64-NEXT:    vmovd %eax, %xmm1
@@ -1248,7 +1250,7 @@ define void @isel_crash_16w(i16* %cV_R.addr) {
 ; X32-NEXT:    andl $-32, %esp
 ; X32-NEXT:    subl $128, %esp
 ; X32-NEXT:    movl 8(%ebp), %eax
-; X32-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X32-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X32-NEXT:    vmovaps %ymm0, (%esp)
 ; X32-NEXT:    vpbroadcastw (%eax), %ymm1
 ; X32-NEXT:    vmovaps %ymm0, {{[0-9]+}}(%esp)
@@ -1270,7 +1272,7 @@ define void @isel_crash_16w(i16* %cV_R.addr) {
 ; X64-NEXT:    .cfi_def_cfa_register %rbp
 ; X64-NEXT:    andq $-32, %rsp
 ; X64-NEXT:    subq $128, %rsp
-; X64-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X64-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X64-NEXT:    vmovaps %ymm0, (%rsp)
 ; X64-NEXT:    movw (%rdi), %ax
 ; X64-NEXT:    vmovd %eax, %xmm1
@@ -1360,7 +1362,7 @@ define void @isel_crash_8d(i32* %cV_R.addr) {
 ; X32-NEXT:    andl $-32, %esp
 ; X32-NEXT:    subl $128, %esp
 ; X32-NEXT:    movl 8(%ebp), %eax
-; X32-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X32-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X32-NEXT:    vmovaps %ymm0, (%esp)
 ; X32-NEXT:    vbroadcastss (%eax), %ymm1
 ; X32-NEXT:    vmovaps %ymm0, {{[0-9]+}}(%esp)
@@ -1382,7 +1384,7 @@ define void @isel_crash_8d(i32* %cV_R.addr) {
 ; X64-AVX2-NEXT:    .cfi_def_cfa_register %rbp
 ; X64-AVX2-NEXT:    andq $-32, %rsp
 ; X64-AVX2-NEXT:    subq $128, %rsp
-; X64-AVX2-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X64-AVX2-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X64-AVX2-NEXT:    vmovaps %ymm0, (%rsp)
 ; X64-AVX2-NEXT:    movl (%rdi), %eax
 ; X64-AVX2-NEXT:    vmovd %eax, %xmm1
@@ -1406,7 +1408,7 @@ define void @isel_crash_8d(i32* %cV_R.addr) {
 ; X64-AVX512VL-NEXT:    .cfi_def_cfa_register %rbp
 ; X64-AVX512VL-NEXT:    andq $-32, %rsp
 ; X64-AVX512VL-NEXT:    subq $128, %rsp
-; X64-AVX512VL-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X64-AVX512VL-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X64-AVX512VL-NEXT:    vmovaps %ymm0, (%rsp)
 ; X64-AVX512VL-NEXT:    movl (%rdi), %eax
 ; X64-AVX512VL-NEXT:    vpbroadcastd %eax, %ymm1
@@ -1499,7 +1501,7 @@ define void @isel_crash_4q(i64* %cV_R.addr) {
 ; X32-NEXT:    andl $-32, %esp
 ; X32-NEXT:    subl $128, %esp
 ; X32-NEXT:    movl 8(%ebp), %eax
-; X32-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X32-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X32-NEXT:    vmovaps %ymm0, (%esp)
 ; X32-NEXT:    movl (%eax), %ecx
 ; X32-NEXT:    movl 4(%eax), %eax
@@ -1527,7 +1529,7 @@ define void @isel_crash_4q(i64* %cV_R.addr) {
 ; X64-AVX2-NEXT:    .cfi_def_cfa_register %rbp
 ; X64-AVX2-NEXT:    andq $-32, %rsp
 ; X64-AVX2-NEXT:    subq $128, %rsp
-; X64-AVX2-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X64-AVX2-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X64-AVX2-NEXT:    vmovaps %ymm0, (%rsp)
 ; X64-AVX2-NEXT:    movq (%rdi), %rax
 ; X64-AVX2-NEXT:    vmovq %rax, %xmm1
@@ -1551,7 +1553,7 @@ define void @isel_crash_4q(i64* %cV_R.addr) {
 ; X64-AVX512VL-NEXT:    .cfi_def_cfa_register %rbp
 ; X64-AVX512VL-NEXT:    andq $-32, %rsp
 ; X64-AVX512VL-NEXT:    subq $128, %rsp
-; X64-AVX512VL-NEXT:    vxorps %ymm0, %ymm0, %ymm0
+; X64-AVX512VL-NEXT:    vxorps %xmm0, %xmm0, %xmm0
 ; X64-AVX512VL-NEXT:    vmovaps %ymm0, (%rsp)
 ; X64-AVX512VL-NEXT:    movq (%rdi), %rax
 ; X64-AVX512VL-NEXT:    vpbroadcastq %rax, %ymm1

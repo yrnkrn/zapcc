@@ -19,6 +19,7 @@
 #include "CGOpenMPRuntime.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
+#include "ConstantEmitter.h"
 #include "TargetInfo.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/CharUnits.h"
@@ -231,8 +232,8 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
     Name = getStaticDeclName(*this, D);
 
   llvm::Type *LTy = getTypes().ConvertTypeForMem(Ty);
-  unsigned AddrSpace =
-      GetGlobalVarAddressSpace(&D, getContext().getTargetAddressSpace(Ty));
+  unsigned AS = GetGlobalVarAddressSpace(&D);
+  unsigned TargetAS = getContext().getTargetAddressSpace(AS);
 
   // Local address space cannot have an initializer.
   llvm::Constant *Init = nullptr;
@@ -241,12 +242,9 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
   else
     Init = llvm::UndefValue::get(LTy);
 
-  llvm::GlobalVariable *GV =
-    new llvm::GlobalVariable(getModule(), LTy,
-                             Ty.isConstant(getContext()), Linkage,
-                             Init, Name, nullptr,
-                             llvm::GlobalVariable::NotThreadLocal,
-                             AddrSpace);
+  llvm::GlobalVariable *GV = new llvm::GlobalVariable(
+      getModule(), LTy, Ty.isConstant(getContext()), Linkage, Init, Name,
+      nullptr, llvm::GlobalVariable::NotThreadLocal, TargetAS);
   insertDeclGlobalValues(&D, GV);
   GV->setAlignment(getContext().getDeclAlign(&D).getQuantity());
   setGlobalVisibility(GV, &D);
@@ -265,11 +263,12 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
   }
 
   // Make sure the result is of the correct type.
-  unsigned ExpectedAddrSpace = getContext().getTargetAddressSpace(Ty);
+  unsigned ExpectedAS = Ty.getAddressSpace();
   llvm::Constant *Addr = GV;
-  if (AddrSpace != ExpectedAddrSpace) {
-    llvm::PointerType *PTy = llvm::PointerType::get(LTy, ExpectedAddrSpace);
-    Addr = llvm::ConstantExpr::getAddrSpaceCast(GV, PTy);
+  if (AS != ExpectedAS) {
+    Addr = getTargetCodeGenInfo().performAddrSpaceCast(
+        *this, GV, AS, ExpectedAS,
+        LTy->getPointerTo(getContext().getTargetAddressSpace(ExpectedAS)));
   }
 
   setStaticLocalDeclAddress(&D, Addr);
@@ -320,7 +319,8 @@ static bool hasNontrivialDestruction(QualType T) {
 llvm::GlobalVariable *
 CodeGenFunction::AddInitializerToStaticVarDecl(const VarDecl &D,
                                                llvm::GlobalVariable *GV) {
-  llvm::Constant *Init = CGM.EmitConstantInit(D, this);
+  ConstantEmitter emitter(*this);
+  llvm::Constant *Init = emitter.tryEmitForInitializer(D);
 
   // If constant emission failed, then this should be a C++ static
   // initializer.
@@ -367,6 +367,8 @@ CodeGenFunction::AddInitializerToStaticVarDecl(const VarDecl &D,
 
   GV->setConstant(CGM.isTypeConstant(D.getType(), true));
   GV->setInitializer(Init);
+
+  emitter.finalize(GV);
 
   if (hasNontrivialDestruction(D.getType()) && HaveInsertPoint()) {
     // We have a constant initializer, but a nontrivial destructor. We still
@@ -1249,7 +1251,7 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
   llvm::Constant *constant = nullptr;
   if (emission.IsConstantAggregate || D.isConstexpr()) {
     assert(!capturedByInit && "constant init contains a capturing block?");
-    constant = CGM.EmitConstantInit(D, this);
+    constant = ConstantEmitter(*this).tryEmitAbstractForInitializer(D);
   }
 
   if (!constant) {

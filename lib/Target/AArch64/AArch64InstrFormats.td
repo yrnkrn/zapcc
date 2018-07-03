@@ -189,6 +189,11 @@ def GPR32as64 : RegisterOperand<GPR32> {
 // are encoded as the eight bit value 'abcdefgh'.
 def SIMDImmType10Operand : AsmOperandClass { let Name = "SIMDImmType10"; }
 
+// Authenticated loads for v8.3 can have scaled 10-bit immediate offsets.
+def SImm10s8Operand : AsmOperandClass {
+  let Name = "SImm10s8";
+  let DiagnosticType = "InvalidMemoryIndexedSImm10";
+}
 
 //===----------------------------------------------------------------------===//
 // Operand Definitions.
@@ -214,6 +219,12 @@ def AdrOperand : AsmOperandClass {
 def adrlabel : Operand<i64> {
   let EncoderMethod = "getAdrLabelOpValue";
   let ParserMatchClass = AdrOperand;
+}
+
+def simm10Scaled : Operand<i64> {
+  let ParserMatchClass = SImm10s8Operand;
+  let DecoderMethod = "DecodeSImm<10>";
+  let PrintMethod = "printImmScale<8>";
 }
 
 // simm9 predicate - True if the immediate is in the range [-256, 255].
@@ -913,6 +924,17 @@ class CRmSystemI<Operand crmtype, bits<3> opc, string asm,
   let Inst{7-5} = opc;
 }
 
+class SystemNoOperands<bits<3> op2, string asm, list<dag> pattern = []>
+    : SimpleSystemI<0, (ins), asm, "", pattern>,
+      Sched<[]> {
+  bits<4> CRm;
+  let CRm = 0b0011;
+  let Inst{31-12} = 0b11010101000000110010;
+  let Inst{11-8} = CRm;
+  let Inst{7-5} = op2;
+  let Inst{4-0} = 0b11111;
+}
+
 // MRS/MSR system instructions. These have different operand classes because
 // a different subset of registers can be accessed through each instruction.
 def MRSSystemRegisterOperand : AsmOperandClass {
@@ -1096,6 +1118,84 @@ let mayLoad = 0, mayStore = 0, hasSideEffects = 1, isReturn = 1 in
 class SpecialReturn<bits<4> opc, string asm>
     : BaseBranchReg<opc, (outs), (ins), asm, "", []> {
   let Inst{9-5} = 0b11111;
+}
+
+let mayLoad = 1 in
+class RCPCLoad<bits<2> sz, string asm, RegisterClass RC>
+  : I<(outs RC:$Rt), (ins GPR64sp0:$Rn), asm, "\t$Rt, [$Rn]", "", []>,
+  Sched<[]> {
+  bits<5> Rn;
+  bits<5> Rt;
+  let Inst{31-30} = sz;
+  let Inst{29-10} = 0b11100010111111110000;
+  let Inst{9-5} = Rn;
+  let Inst{4-0} = Rt;
+}
+
+class AuthBase<bits<1> M, dag oops, dag iops, string asm, string operands,
+               list<dag> pattern>
+  : I<oops, iops, asm, operands, "", pattern>, Sched<[]> {
+  let Inst{31-25} = 0b1101011;
+  let Inst{20-11} = 0b1111100001;
+  let Inst{10} = M;
+  let Inst{4-0} = 0b11111;
+}
+
+class AuthBranchTwoOperands<bits<1> op, bits<1> M, string asm>
+  : AuthBase<M, (outs), (ins GPR64:$Rn, GPR64sp:$Rm), asm, "\t$Rn, $Rm", []> {
+  bits<5> Rn;
+  bits<5> Rm;
+  let Inst{24-22} = 0b100;
+  let Inst{21} = op;
+  let Inst{9-5} = Rn;
+  let Inst{4-0} = Rm;
+}
+
+class AuthOneOperand<bits<3> opc, bits<1> M, string asm>
+  : AuthBase<M, (outs), (ins GPR64:$Rn), asm, "\t$Rn", []> {
+  bits<5> Rn;
+  let Inst{24} = 0;
+  let Inst{23-21} = opc;
+  let Inst{9-5} = Rn;
+}
+
+class AuthReturn<bits<3> op, bits<1> M, string asm>
+  : AuthBase<M, (outs), (ins), asm, "", []> {
+  let Inst{24} = 0;
+  let Inst{23-21} = op;
+  let Inst{9-0} = 0b1111111111;
+}
+
+let mayLoad = 1 in
+class BaseAuthLoad<bit M, bit W, dag oops, dag iops, string asm,
+                   string operands, string cstr, Operand opr>
+  : I<oops, iops, asm, operands, "", []>, Sched<[]> {
+  bits<10> offset;
+  bits<5> Rn;
+  bits<5> Rt;
+  let Inst{31-24} = 0b11111000;
+  let Inst{23} = M;
+  let Inst{22} = offset{9};
+  let Inst{21} = 1;
+  let Inst{20-12} = offset{8-0};
+  let Inst{11} = W;
+  let Inst{10} = 1;
+  let Inst{9-5} = Rn;
+  let Inst{4-0} = Rt;
+}
+
+multiclass AuthLoad<bit M, string asm, Operand opr> {
+  def indexed   : BaseAuthLoad<M, 0, (outs GPR64:$Rt), (ins GPR64sp:$Rn, opr:$offset),
+                               asm, "\t$Rt, [$Rn, $offset]", "", opr>;
+  def writeback : BaseAuthLoad<M, 1, (outs GPR64sp:$wback, GPR64:$Rt),
+                               (ins GPR64sp:$Rn, opr:$offset),
+                               asm, "\t$Rt, [$Rn, $offset]!",
+                               "$Rn = $wback,@earlyclobber $wback", opr> {
+    let DecoderMethod = "DecodeAuthLoadWriteback";
+  }
+
+  def : InstAlias<asm # "\t$Rt, [$Rn]",
+                  (!cast<Instruction>(NAME # "indexed") GPR64:$Rt, GPR64sp:$Rn, 0)>;
 }
 
 //---
@@ -1318,6 +1418,46 @@ class OneWRegData<bits<3> opc, string asm, SDPatternOperator node>
 class OneXRegData<bits<3> opc, string asm, SDPatternOperator node>
     : BaseOneOperandData<opc, GPR64, asm, node> {
   let Inst{31} = 1;
+}
+
+class SignAuthOneData<bits<3> opcode_prefix, bits<2> opcode, string asm>
+  : I<(outs GPR64:$Rd), (ins GPR64sp:$Rn), asm, "\t$Rd, $Rn", "",
+      []>,
+    Sched<[WriteI, ReadI]> {
+  bits<5> Rd;
+  bits<5> Rn;
+  let Inst{31-15} = 0b11011010110000010;
+  let Inst{14-12} = opcode_prefix;
+  let Inst{11-10} = opcode;
+  let Inst{9-5} = Rn;
+  let Inst{4-0} = Rd;
+}
+
+class SignAuthZero<bits<3> opcode_prefix, bits<2> opcode, string asm>
+  : I<(outs GPR64:$Rd), (ins), asm, "\t$Rd", "", []>, Sched<[]> {
+  bits<5> Rd;
+  let Inst{31-15} = 0b11011010110000010;
+  let Inst{14-12} = opcode_prefix;
+  let Inst{11-10} = opcode;
+  let Inst{9-5} = 0b11111;
+  let Inst{4-0} = Rd;
+}
+
+class SignAuthTwoOperand<bits<4> opc, string asm,
+                         SDPatternOperator OpNode>
+  : I<(outs GPR64:$Rd), (ins GPR64:$Rn, GPR64sp:$Rm),
+      asm, "\t$Rd, $Rn, $Rm", "",
+      [(set GPR64:$Rd, (OpNode GPR64:$Rn, GPR64sp:$Rm))]>,
+    Sched<[WriteI, ReadI, ReadI]> {
+  bits<5> Rd;
+  bits<5> Rn;
+  bits<5> Rm;
+  let Inst{31-21} = 0b10011010110;
+  let Inst{20-16} = Rm;
+  let Inst{15-14} = 0b00;
+  let Inst{13-10} = opc;
+  let Inst{9-5}   = Rn;
+  let Inst{4-0}   = Rd;
 }
 
 //---
@@ -4374,6 +4514,12 @@ class BaseSIMDThreeSameVectorTied<bit Q, bit U, bits<3> size, bits<5> opcode,
   let Inst{4-0}   = Rd;
 }
 
+class BaseSIMDThreeSameVectorDot<bit Q, bit U, string asm, string kind1,
+                                 string kind2> :
+        BaseSIMDThreeSameVector<Q, U, 0b100, 0b10010, V128, asm, kind1, [] > {
+  let AsmString = !strconcat(asm, "{\t$Rd" # kind1 # ", $Rn" # kind2 # ", $Rm" # kind2 # "}");
+}
+
 // All operand sizes distinguished in the encoding.
 multiclass SIMDThreeSameVector<bit U, bits<5> opc, string asm,
                                SDPatternOperator OpNode> {
@@ -6799,6 +6945,16 @@ class BaseSIMDIndexedTied<bit Q, bit U, bit Scalar, bits<2> size, bits<4> opc,
   let Inst{10}    = 0;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rd;
+}
+
+// ARMv8.2 Index Dot product instructions
+class BaseSIMDThreeSameVectorDotIndex<bit Q, bit U, string asm, string dst_kind,
+                                      string lhs_kind, string rhs_kind> :
+        BaseSIMDIndexedTied<Q, U, 0b0, 0b10, 0b1110, V128, V128, V128, VectorIndexS,
+                            asm, "", dst_kind, lhs_kind, rhs_kind, []> {
+  bits<2> idx;
+  let Inst{21}    = idx{0};  // L
+  let Inst{11}    = idx{1};  // H
 }
 
 multiclass SIMDFPIndexed<bit U, bits<4> opc, string asm,
@@ -9398,10 +9554,10 @@ class BaseCAS<string order, string size, RegisterClass RC>
 }
 
 multiclass CompareAndSwap<bits<1> Acq, bits<1> Rel, string order> {
-  let Sz = 0b00, Acq = Acq, Rel = Rel in def b : BaseCAS<order, "b", GPR32>;
-  let Sz = 0b01, Acq = Acq, Rel = Rel in def h : BaseCAS<order, "h", GPR32>;
-  let Sz = 0b10, Acq = Acq, Rel = Rel in def s : BaseCAS<order, "", GPR32>;
-  let Sz = 0b11, Acq = Acq, Rel = Rel in def d : BaseCAS<order, "", GPR64>;
+  let Sz = 0b00, Acq = Acq, Rel = Rel in def B : BaseCAS<order, "b", GPR32>;
+  let Sz = 0b01, Acq = Acq, Rel = Rel in def H : BaseCAS<order, "h", GPR32>;
+  let Sz = 0b10, Acq = Acq, Rel = Rel in def W : BaseCAS<order, "", GPR32>;
+  let Sz = 0b11, Acq = Acq, Rel = Rel in def X : BaseCAS<order, "", GPR64>;
 }
 
 class BaseCASP<string order, string size, RegisterOperand RC>
@@ -9413,10 +9569,10 @@ class BaseCASP<string order, string size, RegisterOperand RC>
 }
 
 multiclass CompareAndSwapPair<bits<1> Acq, bits<1> Rel, string order> {
-  let Sz = 0b00, Acq = Acq, Rel = Rel in 
-    def s : BaseCASP<order, "", WSeqPairClassOperand>;
-  let Sz = 0b01, Acq = Acq, Rel = Rel in 
-    def d : BaseCASP<order, "", XSeqPairClassOperand>;
+  let Sz = 0b00, Acq = Acq, Rel = Rel in
+    def W : BaseCASP<order, "", WSeqPairClassOperand>;
+  let Sz = 0b01, Acq = Acq, Rel = Rel in
+    def X : BaseCASP<order, "", XSeqPairClassOperand>;
 }
 
 let Predicates = [HasLSE] in
@@ -9446,10 +9602,10 @@ class BaseSWP<string order, string size, RegisterClass RC>
 }
 
 multiclass Swap<bits<1> Acq, bits<1> Rel, string order> {
-  let Sz = 0b00, Acq = Acq, Rel = Rel in def b : BaseSWP<order, "b", GPR32>;
-  let Sz = 0b01, Acq = Acq, Rel = Rel in def h : BaseSWP<order, "h", GPR32>;
-  let Sz = 0b10, Acq = Acq, Rel = Rel in def s : BaseSWP<order, "", GPR32>;
-  let Sz = 0b11, Acq = Acq, Rel = Rel in def d : BaseSWP<order, "", GPR64>;
+  let Sz = 0b00, Acq = Acq, Rel = Rel in def B : BaseSWP<order, "b", GPR32>;
+  let Sz = 0b01, Acq = Acq, Rel = Rel in def H : BaseSWP<order, "h", GPR32>;
+  let Sz = 0b10, Acq = Acq, Rel = Rel in def W : BaseSWP<order, "", GPR32>;
+  let Sz = 0b11, Acq = Acq, Rel = Rel in def X : BaseSWP<order, "", GPR64>;
 }
 
 let Predicates = [HasLSE], mayLoad = 1, mayStore = 1, hasSideEffects = 1 in
@@ -9480,14 +9636,94 @@ class BaseLDOPregister<string op, string order, string size, RegisterClass RC>
 
 multiclass LDOPregister<bits<3> opc, string op, bits<1> Acq, bits<1> Rel, 
                         string order> {
-  let Sz = 0b00, Acq = Acq, Rel = Rel, opc = opc in 
-    def b : BaseLDOPregister<op, order, "b", GPR32>;
-  let Sz = 0b01, Acq = Acq, Rel = Rel, opc = opc in 
-    def h : BaseLDOPregister<op, order, "h", GPR32>;
-  let Sz = 0b10, Acq = Acq, Rel = Rel, opc = opc in 
-    def s : BaseLDOPregister<op, order, "", GPR32>;
-  let Sz = 0b11, Acq = Acq, Rel = Rel, opc = opc in 
-    def d : BaseLDOPregister<op, order, "", GPR64>;
+  let Sz = 0b00, Acq = Acq, Rel = Rel, opc = opc in
+    def B : BaseLDOPregister<op, order, "b", GPR32>;
+  let Sz = 0b01, Acq = Acq, Rel = Rel, opc = opc in
+    def H : BaseLDOPregister<op, order, "h", GPR32>;
+  let Sz = 0b10, Acq = Acq, Rel = Rel, opc = opc in
+    def W : BaseLDOPregister<op, order, "", GPR32>;
+  let Sz = 0b11, Acq = Acq, Rel = Rel, opc = opc in
+    def X : BaseLDOPregister<op, order, "", GPR64>;
+}
+
+// Differing SrcRHS and DstRHS allow you to cover CLR & SUB by giving a more
+// complex DAG for DstRHS.
+let Predicates = [HasLSE] in
+multiclass LDOPregister_patterns_ord_dag<string inst, string suffix, string op,
+                                         string size, dag SrcRHS, dag DstRHS> {
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_monotonic") GPR64sp:$Rn, SrcRHS),
+            (!cast<Instruction>(inst # suffix) DstRHS, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_acquire") GPR64sp:$Rn, SrcRHS),
+            (!cast<Instruction>(inst # "A" # suffix) DstRHS, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_release") GPR64sp:$Rn, SrcRHS),
+            (!cast<Instruction>(inst # "L" # suffix) DstRHS, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_acq_rel") GPR64sp:$Rn, SrcRHS),
+            (!cast<Instruction>(inst # "AL" # suffix) DstRHS, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_seq_cst") GPR64sp:$Rn, SrcRHS),
+            (!cast<Instruction>(inst # "AL" # suffix) DstRHS, GPR64sp:$Rn)>;
+}
+
+multiclass LDOPregister_patterns_ord<string inst, string suffix, string op,
+                                     string size, dag RHS> {
+  defm : LDOPregister_patterns_ord_dag<inst, suffix, op, size, RHS, RHS>;
+}
+
+multiclass LDOPregister_patterns_ord_mod<string inst, string suffix, string op,
+                                         string size, dag LHS, dag RHS> {
+  defm : LDOPregister_patterns_ord_dag<inst, suffix, op, size, LHS, RHS>;
+}
+
+multiclass LDOPregister_patterns<string inst, string op> {
+  defm : LDOPregister_patterns_ord<inst, "X", op, "64", (i64 GPR64:$Rm)>;
+  defm : LDOPregister_patterns_ord<inst, "W", op, "32", (i32 GPR32:$Rm)>;
+  defm : LDOPregister_patterns_ord<inst, "H", op, "16", (i32 GPR32:$Rm)>;
+  defm : LDOPregister_patterns_ord<inst, "B", op, "8",  (i32 GPR32:$Rm)>;
+}
+
+multiclass LDOPregister_patterns_mod<string inst, string op, string mod> {
+  defm : LDOPregister_patterns_ord_mod<inst, "X", op, "64",
+                        (i64 GPR64:$Rm),
+                        (i64 (!cast<Instruction>(mod#Xrr) XZR, GPR64:$Rm))>;
+  defm : LDOPregister_patterns_ord_mod<inst, "W", op, "32",
+                        (i32 GPR32:$Rm),
+                        (i32 (!cast<Instruction>(mod#Wrr) WZR, GPR32:$Rm))>;
+  defm : LDOPregister_patterns_ord_mod<inst, "H", op, "16",
+                        (i32 GPR32:$Rm),
+                        (i32 (!cast<Instruction>(mod#Wrr) WZR, GPR32:$Rm))>;
+  defm : LDOPregister_patterns_ord_mod<inst, "B", op, "8",
+                        (i32 GPR32:$Rm),
+                        (i32 (!cast<Instruction>(mod#Wrr) WZR, GPR32:$Rm))>;
+}
+
+let Predicates = [HasLSE] in
+multiclass CASregister_patterns_ord_dag<string inst, string suffix, string op,
+                                        string size, dag OLD, dag NEW> {
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_monotonic") GPR64sp:$Rn, OLD, NEW),
+            (!cast<Instruction>(inst # suffix) OLD, NEW, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_acquire") GPR64sp:$Rn, OLD, NEW),
+            (!cast<Instruction>(inst # "A" # suffix) OLD, NEW, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_release") GPR64sp:$Rn, OLD, NEW),
+            (!cast<Instruction>(inst # "L" # suffix) OLD, NEW, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_acq_rel") GPR64sp:$Rn, OLD, NEW),
+            (!cast<Instruction>(inst # "AL" # suffix) OLD, NEW, GPR64sp:$Rn)>;
+  def : Pat<(!cast<SDNode>(op#"_"#size#"_seq_cst") GPR64sp:$Rn, OLD, NEW),
+            (!cast<Instruction>(inst # "AL" # suffix) OLD, NEW, GPR64sp:$Rn)>;
+}
+
+multiclass CASregister_patterns_ord<string inst, string suffix, string op,
+                                    string size, dag OLD, dag NEW> {
+  defm : CASregister_patterns_ord_dag<inst, suffix, op, size, OLD, NEW>;
+}
+
+multiclass CASregister_patterns<string inst, string op> {
+  defm : CASregister_patterns_ord<inst, "X", op, "64",
+                        (i64 GPR64:$Rold), (i64 GPR64:$Rnew)>;
+  defm : CASregister_patterns_ord<inst, "W", op, "32",
+                        (i32 GPR32:$Rold), (i32 GPR32:$Rnew)>;
+  defm : CASregister_patterns_ord<inst, "H", op, "16",
+                        (i32 GPR32:$Rold), (i32 GPR32:$Rnew)>;
+  defm : CASregister_patterns_ord<inst, "B", op, "8",
+                        (i32 GPR32:$Rold), (i32 GPR32:$Rnew)>;
 }
 
 let Predicates = [HasLSE] in
@@ -9496,26 +9732,27 @@ class BaseSTOPregister<string asm, RegisterClass OP, Register Reg,
       InstAlias<asm # "\t$Rs, [$Rn]", (inst Reg, OP:$Rs, GPR64sp:$Rn)>;
 
 multiclass STOPregister<string asm, string instr> {
-  def : BaseSTOPregister<asm # "lb", GPR32, WZR, 
-                    !cast<Instruction>(instr # "Lb")>;
-  def : BaseSTOPregister<asm # "lh", GPR32, WZR, 
-                    !cast<Instruction>(instr # "Lh")>;
-  def : BaseSTOPregister<asm # "l",  GPR32, WZR, 
-                    !cast<Instruction>(instr # "Ls")>;
-  def : BaseSTOPregister<asm # "l",  GPR64, XZR, 
-                    !cast<Instruction>(instr # "Ld")>;
-  def : BaseSTOPregister<asm # "b",  GPR32, WZR, 
-                    !cast<Instruction>(instr # "b")>;
-  def : BaseSTOPregister<asm # "h",  GPR32, WZR, 
-                    !cast<Instruction>(instr # "h")>;
-  def : BaseSTOPregister<asm,        GPR32, WZR, 
-                    !cast<Instruction>(instr # "s")>;
-  def : BaseSTOPregister<asm,        GPR64, XZR, 
-                    !cast<Instruction>(instr # "d")>;
+  def : BaseSTOPregister<asm # "lb", GPR32, WZR,
+                    !cast<Instruction>(instr # "LB")>;
+  def : BaseSTOPregister<asm # "lh", GPR32, WZR,
+                    !cast<Instruction>(instr # "LH")>;
+  def : BaseSTOPregister<asm # "l",  GPR32, WZR,
+                    !cast<Instruction>(instr # "LW")>;
+  def : BaseSTOPregister<asm # "l",  GPR64, XZR,
+                    !cast<Instruction>(instr # "LX")>;
+  def : BaseSTOPregister<asm # "b",  GPR32, WZR,
+                    !cast<Instruction>(instr # "B")>;
+  def : BaseSTOPregister<asm # "h",  GPR32, WZR,
+                    !cast<Instruction>(instr # "H")>;
+  def : BaseSTOPregister<asm,        GPR32, WZR,
+                    !cast<Instruction>(instr # "W")>;
+  def : BaseSTOPregister<asm,        GPR64, XZR,
+                    !cast<Instruction>(instr # "X")>;
 }
 
 //----------------------------------------------------------------------------
 // Allow the size specifier tokens to be upper case, not just lower.
+def : TokenAlias<".4B", ".4b">;  // Add dot product
 def : TokenAlias<".8B", ".8b">;
 def : TokenAlias<".4H", ".4h">;
 def : TokenAlias<".2S", ".2s">;

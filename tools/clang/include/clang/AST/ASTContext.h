@@ -465,7 +465,7 @@ public:
   mutable BuiltinTemplateDecl *MakeIntegerSeqDecl;
   mutable BuiltinTemplateDecl *TypePackElementDecl;
 
-  /// \brief The associated SourceManager object.a
+  /// \brief The associated SourceManager object.
   SourceManager &SourceMgr;
 
   /// \brief The language options used to create the AST associated with
@@ -1466,6 +1466,10 @@ public:
   ///
   /// The sizeof operator requires this (C99 6.5.3.4p4).
   CanQualType getSizeType() const;
+
+  /// \brief Return the unique signed counterpart of 
+  /// the integer type corresponding to size_t.
+  CanQualType getSignedSizeType() const;
 
   /// \brief Return the unique type for "intmax_t" (C99 7.18.1.5), defined in
   /// <stdint.h>.

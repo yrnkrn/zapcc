@@ -1,5 +1,5 @@
-; RUN: llc < %s -march=x86    | FileCheck %s -check-prefix=X32
-; RUN: llc < %s -march=x86-64 | FileCheck %s -check-prefix=X64
+; RUN: llc < %s -mtriple=i686--    | FileCheck %s -check-prefix=X32
+; RUN: llc < %s -mtriple=x86_64-- | FileCheck %s -check-prefix=X64
 
 ; DAGCombiner crashes during sext folding
 
@@ -53,8 +53,10 @@ define <2 x i256> @test_zext1() {
   ret <2 x i256> %Shuff
 
   ; X64-LABEL: test_zext1
-  ; X64:       movq $0
-  ; X64-NEXT:  movq $0
+  ; X64: xorps   %xmm0, %xmm0
+  ; X64: movaps  %xmm0
+  ; X64: movaps  %xmm0
+  ; X64: movaps  %xmm0
   ; X64-NEXT:  movq $0
   ; X64-NEXT:  movq $254
 
@@ -75,8 +77,10 @@ define <2 x i256> @test_zext2() {
   ret <2 x i256> %Shuff
 
   ; X64-LABEL: test_zext2
-  ; X64:       movq $0
-  ; X64-NEXT:  movq $0
+  ; X64: xorps   %xmm0, %xmm0
+  ; X64-NEXT: movaps  %xmm0
+  ; X64-NEXT: movaps  %xmm0
+  ; X64-NEXT: movaps  %xmm0  
   ; X64-NEXT:  movq $-1
   ; X64-NEXT:  movq $-2
 

@@ -417,8 +417,10 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
       // the highest demanded bit, we just return the other side.
       if (DemandedFromOps.isSubsetOf(RHSKnown.Zero))
         return I->getOperand(0);
-      // We can't do this with the LHS for subtraction.
-      if (I->getOpcode() == Instruction::Add &&
+      // We can't do this with the LHS for subtraction, unless we are only
+      // demanding the LSB.
+      if ((I->getOpcode() == Instruction::Add ||
+           DemandedFromOps.isOneValue()) &&
           DemandedFromOps.isSubsetOf(LHSKnown.Zero))
         return I->getOperand(1);
     }
@@ -525,20 +527,16 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
       Known.Zero.lshrInPlace(ShiftAmt);
       Known.One.lshrInPlace(ShiftAmt);
 
-      // Handle the sign bits.
-      APInt SignMask(APInt::getSignMask(BitWidth));
-      // Adjust to where it is now in the mask.
-      SignMask.lshrInPlace(ShiftAmt);
-
       // If the input sign bit is known to be zero, or if none of the top bits
       // are demanded, turn this into an unsigned shift right.
-      if (BitWidth <= ShiftAmt || Known.Zero[BitWidth-ShiftAmt-1] ||
+      assert(BitWidth > ShiftAmt && "Shift amount not saturated?");
+      if (Known.Zero[BitWidth-ShiftAmt-1] ||
           !DemandedMask.intersects(HighBits)) {
         BinaryOperator *LShr = BinaryOperator::CreateLShr(I->getOperand(0),
                                                           I->getOperand(1));
         LShr->setIsExact(cast<BinaryOperator>(I)->isExact());
         return InsertNewInstWith(LShr, *I);
-      } else if (Known.One.intersects(SignMask)) { // New bits are known one.
+      } else if (Known.One[BitWidth-ShiftAmt-1]) { // New bits are known one.
         Known.One |= HighBits;
       }
     }
@@ -548,7 +546,7 @@ Value *InstCombiner::SimplifyDemandedUseBits(Value *V, APInt DemandedMask,
     if (ConstantInt *Rem = dyn_cast<ConstantInt>(I->getOperand(1))) {
       // X % -1 demands all the bits because we don't want to introduce
       // INT_MIN % -1 (== undef) by accident.
-      if (Rem->isAllOnesValue())
+      if (Rem->isMinusOne())
         break;
       APInt RA = Rem->getValue().abs();
       if (RA.isPowerOf2()) {
@@ -1627,10 +1625,10 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
       for (unsigned I = 0, E = II->getNumArgOperands(); I != E; ++I)
         Args.push_back(II->getArgOperand(I));
 
-      IRBuilderBase::InsertPointGuard Guard(*Builder);
-      Builder->SetInsertPoint(II);
+      IRBuilderBase::InsertPointGuard Guard(Builder);
+      Builder.SetInsertPoint(II);
 
-      CallInst *NewCall = Builder->CreateCall(NewIntrin, Args);
+      CallInst *NewCall = Builder.CreateCall(NewIntrin, Args);
       NewCall->takeName(II);
       NewCall->copyMetadata(*II);
 
@@ -1657,15 +1655,15 @@ Value *InstCombiner::SimplifyDemandedVectorElts(Value *V, APInt DemandedElts,
 
 
       if (NewNumElts == 1) {
-        return Builder->CreateInsertElement(UndefValue::get(V->getType()),
-                                            NewCall, static_cast<uint64_t>(0));
+        return Builder.CreateInsertElement(UndefValue::get(V->getType()),
+                                           NewCall, static_cast<uint64_t>(0));
       }
 
       SmallVector<uint32_t, 8> EltMask;
       for (unsigned I = 0; I < VWidth; ++I)
         EltMask.push_back(I);
 
-      Value *Shuffle = Builder->CreateShuffleVector(
+      Value *Shuffle = Builder.CreateShuffleVector(
         NewCall, UndefValue::get(NewTy), EltMask);
 
       MadeChange = true;
