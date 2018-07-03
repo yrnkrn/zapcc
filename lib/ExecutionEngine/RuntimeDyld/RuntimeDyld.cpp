@@ -128,7 +128,10 @@ void RuntimeDyldImpl::resolveRelocations() {
   );
 
   // First, resolve relocations associated with external symbols.
-  resolveExternalSymbols();
+  if (auto Err = resolveExternalSymbols()) {
+    HasError = true;
+    ErrorStr = toString(std::move(Err));
+  }
 
   // Iterate over all outstanding relocations
   for (auto it = Relocations.begin(), e = Relocations.end(); it != e; ++it) {
@@ -230,7 +233,7 @@ RuntimeDyldImpl::loadObjectImpl(const object::ObjectFile &Obj) {
         return NameOrErr.takeError();
 
       // Compute JIT symbol flags.
-      JITSymbolFlags JITSymFlags = JITSymbolFlags::fromObjectSymbol(*I);
+      JITSymbolFlags JITSymFlags = getJITSymbolFlags(*I);
 
       // If this is a weak definition, check to see if there's a strong one.
       // If there is, skip this symbol (we won't be providing it: the strong
@@ -243,9 +246,11 @@ RuntimeDyldImpl::loadObjectImpl(const object::ObjectFile &Obj) {
           continue;
         // Then check the symbol resolver to see if there's a definition
         // elsewhere in this logical dylib.
-        if (auto Sym = Resolver.findSymbolInLogicalDylib(Name))
+        if (auto Sym = Resolver.findSymbolInLogicalDylib(Name)) {
           if (Sym.getFlags().isStrongDefinition())
             continue;
+        } else if (auto Err = Sym.takeError())
+          return std::move(Err);
         // else
         JITSymFlags &= ~JITSymbolFlags::Weak;
       }
@@ -611,6 +616,10 @@ void RuntimeDyldImpl::writeBytesUnaligned(uint64_t Value, uint8_t *Dst,
   }
 }
 
+JITSymbolFlags RuntimeDyldImpl::getJITSymbolFlags(const BasicSymbolRef &SR) {
+  return JITSymbolFlags::fromObjectSymbol(SR);
+}
+
 Error RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
                                          CommonSymbolList &CommonSymbols) {
   if (CommonSymbols.empty())
@@ -680,7 +689,7 @@ Error RuntimeDyldImpl::emitCommonSymbols(const ObjectFile &Obj,
       Addr += AlignOffset;
       Offset += AlignOffset;
     }
-    JITSymbolFlags JITSymFlags = JITSymbolFlags::fromObjectSymbol(Sym);
+    JITSymbolFlags JITSymFlags = getJITSymbolFlags(Sym);
     DEBUG(dbgs() << "Allocating common symbol " << Name << " address "
                  << format("%p", Addr) << "\n");
     GlobalSymbolTable[Name] =
@@ -741,8 +750,11 @@ RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
   // Code section alignment needs to be at least as high as stub alignment or
   // padding calculations may by incorrect when the section is remapped to a
   // higher alignment.
-  if (IsCode)
+  if (IsCode) {
     Alignment = std::max(Alignment, getStubAlignment());
+    if (StubBufSize > 0)
+      PaddingSize += getStubAlignment() - 1;
+  }
 
   // Some sections, such as debug info, don't need to be loaded for execution.
   // Process those only if explicitly requested.
@@ -766,8 +778,13 @@ RuntimeDyldImpl::emitSection(const ObjectFile &Obj,
     // Fill in any extra bytes we allocated for padding
     if (PaddingSize != 0) {
       memset(Addr + DataSize, 0, PaddingSize);
-      // Update the DataSize variable so that the stub offset is set correctly.
+      // Update the DataSize variable to include padding.
       DataSize += PaddingSize;
+
+      // Align DataSize to stub alignment if we have any stubs (PaddingSize will
+      // have been increased above to account for this).
+      if (StubBufSize > 0)
+        DataSize &= ~(getStubAlignment() - 1);
     }
 
     DEBUG(dbgs() << "emitSection SectionID: " << SectionID << " Name: " << Name
@@ -859,7 +876,7 @@ uint8_t *RuntimeDyldImpl::createStubFunction(uint8_t *Addr,
   } else if (Arch == Triple::arm || Arch == Triple::armeb) {
     // TODO: There is only ARM far stub now. We should add the Thumb stub,
     // and stubs for branches Thumb - ARM and ARM - Thumb.
-    writeBytesUnaligned(0xe51ff004, Addr, 4); // ldr pc,<label>
+    writeBytesUnaligned(0xe51ff004, Addr, 4); // ldr pc, [pc, #-4]
     return Addr + 4;
   } else if (IsMipsO32ABI) {
     // 0:   3c190000        lui     t9,%hi(addr).
@@ -953,7 +970,7 @@ void RuntimeDyldImpl::resolveRelocationList(const RelocationList &Relocs,
   }
 }
 
-void RuntimeDyldImpl::resolveExternalSymbols() {
+Error RuntimeDyldImpl::resolveExternalSymbols() {
   while (!ExternalSymbolRelocations.empty()) {
     StringMap<RelocationList>::iterator i = ExternalSymbolRelocations.begin();
 
@@ -966,15 +983,32 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
       resolveRelocationList(Relocs, 0);
     } else {
       uint64_t Addr = 0;
+      JITSymbolFlags Flags;
       RTDyldSymbolTable::const_iterator Loc = GlobalSymbolTable.find(Name);
       if (Loc == GlobalSymbolTable.end()) {
         // This is an external symbol, try to get its address from the symbol
         // resolver.
         // First search for the symbol in this logical dylib.
-        Addr = Resolver.findSymbolInLogicalDylib(Name.data()).getAddress();
+        if (auto Sym = Resolver.findSymbolInLogicalDylib(Name.data())) {
+          if (auto AddrOrErr = Sym.getAddress()) {
+            Addr = *AddrOrErr;
+            Flags = Sym.getFlags();
+          } else
+            return AddrOrErr.takeError();
+        } else if (auto Err = Sym.takeError())
+          return Err;
+
         // If that fails, try searching for an external symbol.
-        if (!Addr)
-          Addr = Resolver.findSymbol(Name.data()).getAddress();
+        if (!Addr) {
+          if (auto Sym = Resolver.findSymbol(Name.data())) {
+            if (auto AddrOrErr = Sym.getAddress()) {
+              Addr = *AddrOrErr;
+              Flags = Sym.getFlags();
+            } else
+              return AddrOrErr.takeError();
+          } else if (auto Err = Sym.takeError())
+            return Err;
+        }
         // The call to getSymbolAddress may have caused additional modules to
         // be loaded, which may have added new entries to the
         // ExternalSymbolRelocations map.  Consquently, we need to update our
@@ -988,6 +1022,7 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
         const auto &SymInfo = Loc->second;
         Addr = getSectionLoadAddress(SymInfo.getSectionID()) +
                SymInfo.getOffset();
+        Flags = SymInfo.getFlags();
       }
 
       // FIXME: Implement error handling that doesn't kill the host program!
@@ -998,6 +1033,12 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
       // If Resolver returned UINT64_MAX, the client wants to handle this symbol
       // manually and we shouldn't resolve its relocations.
       if (Addr != UINT64_MAX) {
+
+        // Tweak the address based on the symbol flags if necessary.
+        // For example, this is used by RuntimeDyldMachOARM to toggle the low bit
+        // if the target symbol is Thumb.
+        Addr = modifyAddressBasedOnFlags(Addr, Flags);
+
         DEBUG(dbgs() << "Resolving relocations Name: " << Name << "\t"
                      << format("0x%lx", Addr) << "\n");
         // This list may have been updated when we called getSymbolAddress, so
@@ -1009,6 +1050,8 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
 
     ExternalSymbolRelocations.erase(i);
   }
+
+  return Error::success();
 }
 
 //===----------------------------------------------------------------------===//

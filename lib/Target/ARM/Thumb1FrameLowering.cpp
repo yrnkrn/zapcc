@@ -236,7 +236,7 @@ void Thumb1FrameLowering::emitPrologue(MachineFunction &MF,
     case ARM::R12:
       if (STI.splitFramePushPop(MF))
         break;
-      // fallthough
+      LLVM_FALLTHROUGH;
     case ARM::R0:
     case ARM::R1:
     case ARM::R2:
@@ -780,7 +780,7 @@ spillCalleeSavedRegisters(MachineBasicBlock &MBB,
 bool Thumb1FrameLowering::
 restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
                             MachineBasicBlock::iterator MI,
-                            const std::vector<CalleeSavedInfo> &CSI,
+                            std::vector<CalleeSavedInfo> &CSI,
                             const TargetRegisterInfo *TRI) const {
   if (CSI.empty())
     return false;

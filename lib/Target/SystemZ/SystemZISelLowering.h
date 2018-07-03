@@ -86,14 +86,12 @@ enum NodeType : unsigned {
   // Count number of bits set in operand 0 per byte.
   POPCNT,
 
-  // Wrappers around the ISD opcodes of the same name.  The output and
-  // first input operands are GR128s.  The trailing numbers are the
-  // widths of the second operand in bits.
-  UMUL_LOHI64,
-  SDIVREM32,
-  SDIVREM64,
-  UDIVREM32,
-  UDIVREM64,
+  // Wrappers around the ISD opcodes of the same name.  The output is GR128.
+  // Input operands may be GR64 or GR32, depending on the instruction.
+  SMUL_LOHI,
+  UMUL_LOHI,
+  SDIVREM,
+  UDIVREM,
 
   // Use a series of MVCs to copy bytes from one memory location to another.
   // The operands are:
@@ -310,6 +308,18 @@ enum NodeType : unsigned {
   // Operand 5: the width of the field in bits (8 or 16)
   ATOMIC_CMP_SWAPW,
 
+  // 128-bit atomic load.
+  // Val, OUTCHAIN = ATOMIC_LOAD_128(INCHAIN, ptr)
+  ATOMIC_LOAD_128,
+
+  // 128-bit atomic store.
+  // OUTCHAIN = ATOMIC_STORE_128(INCHAIN, val, ptr)
+  ATOMIC_STORE_128,
+
+  // 128-bit atomic compare-and-swap.
+  // Val, OUTCHAIN = ATOMIC_CMP_SWAP(INCHAIN, ptr, cmp, swap)
+  ATOMIC_CMP_SWAP_128,
+
   // Byte swapping load.
   //
   // Operand 0: the address to load from
@@ -386,8 +396,8 @@ public:
   bool isLegalICmpImmediate(int64_t Imm) const override;
   bool isLegalAddImmediate(int64_t Imm) const override;
   bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
-                             unsigned AS) const override;
-  bool isFoldableMemAccessOffset(Instruction *I, int64_t Offset) const override;
+                             unsigned AS,
+                             Instruction *I = nullptr) const override;
   bool allowsMisalignedMemoryAccesses(EVT VT, unsigned AS,
                                       unsigned Align,
                                       bool *Fast) const override;
@@ -450,6 +460,10 @@ public:
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
+  void LowerOperationWrapper(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                             SelectionDAG &DAG) const override;
+  void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue>&Results,
+                          SelectionDAG &DAG) const override;
   bool allowTruncateForTailCall(Type *, Type *) const override;
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override;
   SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,
@@ -482,6 +496,12 @@ private:
   const SystemZSubtarget &Subtarget;
 
   // Implement LowerOperation for individual opcodes.
+  SDValue getVectorCmp(SelectionDAG &DAG, unsigned Opcode,
+                       const SDLoc &DL, EVT VT,
+                       SDValue CmpOp0, SDValue CmpOp1) const;
+  SDValue lowerVectorSETCC(SelectionDAG &DAG, const SDLoc &DL,
+                           EVT VT, ISD::CondCode CC,
+                           SDValue CmpOp0, SDValue CmpOp1) const;
   SDValue lowerSETCC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
@@ -561,8 +581,10 @@ private:
   MachineBasicBlock *emitCondStore(MachineInstr &MI, MachineBasicBlock *BB,
                                    unsigned StoreOpcode, unsigned STOCOpcode,
                                    bool Invert) const;
+  MachineBasicBlock *emitPair128(MachineInstr &MI,
+                                 MachineBasicBlock *MBB) const;
   MachineBasicBlock *emitExt128(MachineInstr &MI, MachineBasicBlock *MBB,
-                                bool ClearEven, unsigned SubReg) const;
+                                bool ClearEven) const;
   MachineBasicBlock *emitAtomicLoadBinary(MachineInstr &MI,
                                           MachineBasicBlock *BB,
                                           unsigned BinOpcode, unsigned BitSize,

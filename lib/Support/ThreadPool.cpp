@@ -19,7 +19,6 @@
 using namespace llvm;
 
 #if LLVM_ENABLE_THREADS
-
 // Default to std::thread::hardware_concurrency
 ThreadPool::ThreadPool() : ThreadPool(std::thread::hardware_concurrency()) {}
 

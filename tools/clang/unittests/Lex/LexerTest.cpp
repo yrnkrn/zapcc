@@ -379,11 +379,11 @@ TEST_F(LexerTest, DontOverallocateStringifyArgs) {
   auto PP = CreatePP("\"StrArg\", 5, 'C'", ModLoader);
 
   llvm::BumpPtrAllocator Allocator;
-  std::array<IdentifierInfo *, 3> ArgList;
+  std::array<IdentifierInfo *, 3> ParamList;
   MacroInfo *MI = PP->AllocateMacroInfo({});
   MI->setIsFunctionLike();
-  MI->setArgumentList(ArgList, Allocator);
-  EXPECT_EQ(3u, MI->getNumArgs());
+  MI->setParameterList(ParamList, Allocator);
+  EXPECT_EQ(3u, MI->getNumParams());
   EXPECT_TRUE(MI->isFunctionLike());
 
   Token Eof;
@@ -418,6 +418,59 @@ TEST_F(LexerTest, DontOverallocateStringifyArgs) {
   EXPECT_DEATH(MA->getStringifiedArgument(3, *PP, {}, {}),
                "Invalid argument number!");
 #endif
+}
+
+TEST_F(LexerTest, IsNewLineEscapedValid) {
+  auto hasNewLineEscaped = [](const char *S) {
+    return Lexer::isNewLineEscaped(S, S + strlen(S) - 1);
+  };
+
+  EXPECT_TRUE(hasNewLineEscaped("\\\r"));
+  EXPECT_TRUE(hasNewLineEscaped("\\\n"));
+  EXPECT_TRUE(hasNewLineEscaped("\\\r\n"));
+  EXPECT_TRUE(hasNewLineEscaped("\\\n\r"));
+  EXPECT_TRUE(hasNewLineEscaped("\\ \t\v\f\r"));
+  EXPECT_TRUE(hasNewLineEscaped("\\ \t\v\f\r\n"));
+
+  EXPECT_FALSE(hasNewLineEscaped("\\\r\r"));
+  EXPECT_FALSE(hasNewLineEscaped("\\\r\r\n"));
+  EXPECT_FALSE(hasNewLineEscaped("\\\n\n"));
+  EXPECT_FALSE(hasNewLineEscaped("\r"));
+  EXPECT_FALSE(hasNewLineEscaped("\n"));
+  EXPECT_FALSE(hasNewLineEscaped("\r\n"));
+  EXPECT_FALSE(hasNewLineEscaped("\n\r"));
+  EXPECT_FALSE(hasNewLineEscaped("\r\r"));
+  EXPECT_FALSE(hasNewLineEscaped("\n\n"));
+}
+
+TEST_F(LexerTest, GetBeginningOfTokenWithEscapedNewLine) {
+  // Each line should have the same length for
+  // further offset calculation to be more straightforward.
+  const unsigned IdentifierLength = 8;
+  std::string TextToLex = "rabarbar\n"
+                          "foo\\\nbar\n"
+                          "foo\\\rbar\n"
+                          "fo\\\r\nbar\n"
+                          "foo\\\n\rba\n";
+  std::vector<tok::TokenKind> ExpectedTokens{5, tok::identifier};
+  std::vector<Token> LexedTokens = CheckLex(TextToLex, ExpectedTokens);
+
+  for (const Token &Tok : LexedTokens) {
+    std::pair<FileID, unsigned> OriginalLocation =
+        SourceMgr.getDecomposedLoc(Tok.getLocation());
+    for (unsigned Offset = 0; Offset < IdentifierLength; ++Offset) {
+      SourceLocation LookupLocation =
+          Tok.getLocation().getLocWithOffset(Offset);
+
+      std::pair<FileID, unsigned> FoundLocation =
+          SourceMgr.getDecomposedExpansionLoc(
+              Lexer::GetBeginningOfToken(LookupLocation, SourceMgr, LangOpts));
+
+      // Check that location returned by the GetBeginningOfToken
+      // is the same as original token location reported by Lexer.
+      EXPECT_EQ(FoundLocation.second, OriginalLocation.second);
+    }
+  }
 }
 
 } // anonymous namespace

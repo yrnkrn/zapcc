@@ -110,13 +110,13 @@ public:
 
   bool isLegalAddressingMode(Type *Ty, GlobalValue *BaseGV, int64_t BaseOffset,
                              bool HasBaseReg, int64_t Scale,
-                             unsigned AddrSpace) {
+                             unsigned AddrSpace, Instruction *I = nullptr) {
     TargetLoweringBase::AddrMode AM;
     AM.BaseGV = BaseGV;
     AM.BaseOffs = BaseOffset;
     AM.HasBaseReg = HasBaseReg;
     AM.Scale = Scale;
-    return getTLI()->isLegalAddressingMode(DL, AM, Ty, AddrSpace);
+    return getTLI()->isLegalAddressingMode(DL, AM, Ty, AddrSpace, I);
   }
 
   bool isLSRCostLess(TTI::LSRCost C1, TTI::LSRCost C2) {
@@ -131,10 +131,6 @@ public:
     AM.HasBaseReg = HasBaseReg;
     AM.Scale = Scale;
     return getTLI()->getScalingFactorCost(DL, AM, Ty, AddrSpace);
-  }
-
-  bool isFoldableMemAccessOffset(Instruction *I, int64_t Offset) {
-    return getTLI()->isFoldableMemAccessOffset(I, Offset);
   }
 
   bool isTruncateFree(Type *Ty1, Type *Ty2) {
@@ -153,6 +149,18 @@ public:
   int getGEPCost(Type *PointeeType, const Value *Ptr,
                  ArrayRef<const Value *> Operands) {
     return BaseT::getGEPCost(PointeeType, Ptr, Operands);
+  }
+
+  int getExtCost(const Instruction *I, const Value *Src) {
+    if (getTLI()->isExtFree(I))
+      return TargetTransformInfo::TCC_Free;
+
+    if (isa<ZExtInst>(I) || isa<SExtInst>(I))
+      if (const LoadInst *LI = dyn_cast<LoadInst>(Src))
+        if (getTLI()->isExtLoad(LI, I, DL))
+          return TargetTransformInfo::TCC_Free;
+
+    return TargetTransformInfo::TCC_Basic;
   }
 
   unsigned getIntrinsicCost(Intrinsic::ID IID, Type *RetTy,
@@ -397,7 +405,7 @@ public:
 
   unsigned getScalarizationOverhead(Type *VecTy, ArrayRef<const Value *> Args) {
     assert (VecTy->isVectorTy());
-    
+
     unsigned Cost = 0;
 
     Cost += getScalarizationOverhead(VecTy, true, false);
@@ -428,7 +436,7 @@ public:
 
     std::pair<unsigned, MVT> LT = TLI->getTypeLegalizationCost(DL, Ty);
 
-    bool IsFloat = Ty->getScalarType()->isFloatingPointTy();
+    bool IsFloat = Ty->isFPOrFPVectorTy();
     // Assume that floating point arithmetic operations cost twice as much as
     // integer operations.
     unsigned OpCost = (IsFloat ? 2 : 1);
@@ -861,7 +869,7 @@ public:
     }
     }
   }
-  
+
   /// Get intrinsic cost based on argument types.
   /// If ScalarizationCostPassed is UINT_MAX, the cost of scalarizing the
   /// arguments and the return value will be computed based on types.
@@ -1084,7 +1092,7 @@ public:
 
   unsigned getAddressComputationCost(Type *Ty, ScalarEvolution *,
                                      const SCEV *) {
-    return 0; 
+    return 0;
   }
 
   /// Try to calculate arithmetic and shuffle op costs for reduction operations.
@@ -1122,7 +1130,8 @@ public:
   ///
   /// The cost model should take into account that the actual length of the
   /// vector is reduced on each iteration.
-  unsigned getReductionCost(unsigned Opcode, Type *Ty, bool IsPairwise) {
+  unsigned getArithmeticReductionCost(unsigned Opcode, Type *Ty,
+                                      bool IsPairwise) {
     assert(Ty->isVectorTy() && "Expect a vector type");
     Type *ScalarTy = Ty->getVectorElementType();
     unsigned NumVecElts = Ty->getVectorNumElements();
@@ -1147,7 +1156,7 @@ public:
     }
     // The minimal length of the vector is limited by the real length of vector
     // operations performed on the current platform. That's why several final
-    // reduction opertions are perfomed on the vectors with the same
+    // reduction operations are performed on the vectors with the same
     // architecture-dependent length.
     ShuffleCost += (NumReduxLevels - LongVectorCount) * (IsPairwise + 1) *
                    ConcreteTTI->getShuffleCost(TTI::SK_ExtractSubvector, Ty,

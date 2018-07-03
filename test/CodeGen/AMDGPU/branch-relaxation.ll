@@ -1,4 +1,4 @@
-; RUN: llc -march=amdgcn -verify-machineinstrs -amdgpu-s-branch-bits=4 < %s | FileCheck -check-prefix=GCN %s
+; RUN: llc -march=amdgcn -mcpu=tahiti -verify-machineinstrs -amdgpu-s-branch-bits=4 < %s | FileCheck -check-prefix=GCN %s
 
 
 ; FIXME: We should use llvm-mc for this, but we can't even parse our own output.
@@ -141,7 +141,6 @@ bb3:
 ; GCN: buffer_load_dword
 ; GCN: v_cmp_ne_u32_e32 vcc, 0, v{{[0-9]+}}
 ; GCN: s_and_saveexec_b64 [[SAVE:s\[[0-9]+:[0-9]+\]]], vcc
-; GCN: s_xor_b64 [[SAVE]], exec, [[SAVE]]
 
 ; GCN: v_nop_e64
 ; GCN: v_nop_e64
@@ -385,7 +384,6 @@ bb3:
 ; GCN-LABEL: {{^}}uniform_inside_divergent:
 ; GCN: v_cmp_gt_u32_e32 vcc, 16, v{{[0-9]+}}
 ; GCN-NEXT: s_and_saveexec_b64 [[MASK:s\[[0-9]+:[0-9]+\]]], vcc
-; GCN-NEXT: s_xor_b64  [[MASK1:s\[[0-9]+:[0-9]+\]]], exec, [[MASK]]
 ; GCN-NEXT: ; mask branch [[ENDIF:BB[0-9]+_[0-9]+]]
 ; GCN-NEXT: s_cbranch_execnz [[IF:BB[0-9]+_[0-9]+]]
 
@@ -430,25 +428,13 @@ endif:
 }
 
 ; si_mask_branch
-; s_cbranch_execz
-; s_branch
 
 ; GCN-LABEL: {{^}}analyze_mask_branch:
 ; GCN: v_cmp_lt_f32_e32 vcc
 ; GCN-NEXT: s_and_saveexec_b64 [[MASK:s\[[0-9]+:[0-9]+\]]], vcc
-; GCN-NEXT: s_xor_b64 [[MASK]], exec, [[MASK]]
 ; GCN-NEXT: ; mask branch [[RET:BB[0-9]+_[0-9]+]]
-; GCN-NEXT: s_cbranch_execz [[BRANCH_SKIP:BB[0-9]+_[0-9]+]]
-; GCN-NEXT: s_branch [[LOOP_BODY:BB[0-9]+_[0-9]+]]
 
-; GCN-NEXT: [[BRANCH_SKIP]]: ; %entry
-; GCN-NEXT: s_getpc_b64 vcc
-; GCN-NEXT: s_add_u32 vcc_lo, vcc_lo, [[RET]]-([[BRANCH_SKIP]]+4)
-; GCN-NEXT: s_addc_u32 vcc_hi, vcc_hi, 0
-; GCN-NEXT: s_setpc_b64 vcc
-
-; GCN-NEXT: [[LOOP_BODY]]: ; %loop_body
-; GCN: s_mov_b64 vcc, -1{{$}}
+; GCN-NEXT: [[LOOP_BODY:BB[0-9]+_[0-9]+]]: ; %loop_body
 ; GCN: ;;#ASMSTART
 ; GCN: v_nop_e64
 ; GCN: v_nop_e64
@@ -457,7 +443,6 @@ endif:
 ; GCN: v_nop_e64
 ; GCN: v_nop_e64
 ; GCN: ;;#ASMEND
-; GCN-NEXT: s_cbranch_vccz [[RET]]
 
 ; GCN-NEXT: [[LONGBB:BB[0-9]+_[0-9]+]]: ; %loop_body
 ; GCN-NEXT: ; in Loop: Header=[[LOOP_BODY]] Depth=1
@@ -466,7 +451,7 @@ endif:
 ; GCN-NEXT: s_subb_u32 vcc_hi, vcc_hi, 0
 ; GCN-NEXT: s_setpc_b64 vcc
 
-; GCN-NEXT: [[RET]]: ; %Flow
+; GCN-NEXT: [[RET]]: ; %ret
 ; GCN-NEXT: s_or_b64 exec, exec, [[MASK]]
 ; GCN: buffer_store_dword
 ; GCN-NEXT: s_endpgm

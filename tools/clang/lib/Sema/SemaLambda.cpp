@@ -934,7 +934,7 @@ void Sema::ActOnStartOfLambdaDefinition(LambdaIntroducer &Intro,
     if (C->Kind == LCK_This || C->Kind == LCK_StarThis) {
       if (C->Kind == LCK_StarThis) 
         Diag(C->Loc, !getLangOpts().CPlusPlus1z
-                             ? diag::ext_star_this_lambda_capture_cxx1z
+                             ? diag::ext_star_this_lambda_capture_cxx17
                              : diag::warn_cxx14_compat_star_this_lambda_capture);
 
       // C++11 [expr.prim.lambda]p8:
@@ -1595,7 +1595,7 @@ ExprResult Sema::BuildLambdaExpr(SourceLocation StartLoc, SourceLocation EndLoc,
                                           ContainsUnexpandedParameterPack);
   // If the lambda expression's call operator is not explicitly marked constexpr
   // and we are not in a dependent context, analyze the call operator to infer
-  // its constexpr-ness, supressing diagnostics while doing so.
+  // its constexpr-ness, suppressing diagnostics while doing so.
   if (getLangOpts().CPlusPlus1z && !CallOperator->isInvalidDecl() &&
       !CallOperator->isConstexpr() &&
       !isa<CoroutineBodyStmt>(CallOperator->getBody()) &&

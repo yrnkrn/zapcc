@@ -650,7 +650,7 @@ public:
       MachinePointerInfo PtrInfo, MachineMemOperand::Flags f, uint64_t s,
       unsigned base_alignment, const AAMDNodes &AAInfo = AAMDNodes(),
       const MDNode *Ranges = nullptr,
-      SynchronizationScope SynchScope = CrossThread,
+      SyncScope::ID SSID = SyncScope::System,
       AtomicOrdering Ordering = AtomicOrdering::NotAtomic,
       AtomicOrdering FailureOrdering = AtomicOrdering::NotAtomic);
 
@@ -660,6 +660,12 @@ public:
   /// explicitly deallocated.
   MachineMemOperand *getMachineMemOperand(const MachineMemOperand *MMO,
                                           int64_t Offset, uint64_t Size);
+
+  /// Allocate a new MachineMemOperand by copying an existing one,
+  /// replacing only AliasAnalysis information. MachineMemOperands are owned
+  /// by the MachineFunction and need not be explicitly deallocated.
+  MachineMemOperand *getMachineMemOperand(const MachineMemOperand *MMO,
+                                          const AAMDNodes &AAInfo);
 
   using OperandCapacity = ArrayRecycler<MachineOperand>::Capacity;
 

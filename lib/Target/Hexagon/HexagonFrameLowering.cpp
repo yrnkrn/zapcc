@@ -1,4 +1,4 @@
-//===-- HexagonFrameLowering.cpp - Define frame lowering ------------------===//
+//===- HexagonFrameLowering.cpp - Define frame lowering -------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,8 +7,6 @@
 //
 //
 //===----------------------------------------------------------------------===//
-
-#define DEBUG_TYPE "hexagon-pei"
 
 #include "HexagonFrameLowering.h"
 #include "HexagonBlockRanges.h"
@@ -40,6 +38,7 @@
 #include "llvm/CodeGen/MachinePostDominators.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/MCDwarf.h"
@@ -47,11 +46,13 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include <algorithm>
 #include <cassert>
@@ -59,9 +60,10 @@
 #include <iterator>
 #include <limits>
 #include <map>
-#include <new>
 #include <utility>
 #include <vector>
+
+#define DEBUG_TYPE "hexagon-pei"
 
 // Hexagon stack frame layout as defined by the ABI:
 //
@@ -406,9 +408,10 @@ void HexagonFrameLowering::findShrunkPrologEpilog(MachineFunction &MF,
   MachinePostDominatorTree MPT;
   MPT.runOnMachineFunction(MF);
 
-  typedef DenseMap<unsigned,unsigned> UnsignedMap;
+  using UnsignedMap = DenseMap<unsigned, unsigned>;
+  using RPOTType = ReversePostOrderTraversal<const MachineFunction *>;
+
   UnsignedMap RPO;
-  typedef ReversePostOrderTraversal<const MachineFunction*> RPOTType;
   RPOTType RPOT(&MF);
   unsigned RPON = 0;
   for (RPOTType::rpo_iterator I = RPOT.begin(), E = RPOT.end(); I != E; ++I)
@@ -979,18 +982,6 @@ bool HexagonFrameLowering::hasFP(const MachineFunction &MF) const {
   if (MFI.hasCalls() || HMFI.hasClobberLR())
     return true;
 
-  // Frame pointer elimination is a possiblility at this point, but
-  // to know if FP is necessary we need to know if spill/restore
-  // functions will be used (they require FP to be valid).
-  // This means that hasFP shouldn't really be called before CSI is
-  // calculated, and some measures are taken to make sure of that
-  // (e.g. default implementations of virtual functions that call it
-  // are overridden apropriately).
-  assert(MFI.isCalleeSavedInfoValid() && "Need to know CSI");
-  const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
-  if (useSpillFunction(MF, CSI) || useRestoreFunction(MF, CSI))
-    return true;
-
   return false;
 }
 
@@ -1464,7 +1455,8 @@ bool HexagonFrameLowering::assignCalleeSavedSpillSlots(MachineFunction &MF,
   // object for it.
   CSI.clear();
 
-  typedef TargetFrameLowering::SpillSlot SpillSlot;
+  using SpillSlot = TargetFrameLowering::SpillSlot;
+
   unsigned NumFixed;
   int MinOffset = 0;  // CS offsets are negative.
   const SpillSlot *FixedSlots = getCalleeSavedSpillSlots(NumFixed);
@@ -2031,11 +2023,11 @@ void HexagonFrameLowering::optimizeSpillSlots(MachineFunction &MF,
   auto &MRI = MF.getRegInfo();
   HexagonBlockRanges HBR(MF);
 
-  typedef std::map<MachineBasicBlock*,HexagonBlockRanges::InstrIndexMap>
-      BlockIndexMap;
-  typedef std::map<MachineBasicBlock*,HexagonBlockRanges::RangeList>
-      BlockRangeMap;
-  typedef HexagonBlockRanges::IndexType IndexType;
+  using BlockIndexMap =
+      std::map<MachineBasicBlock *, HexagonBlockRanges::InstrIndexMap>;
+  using BlockRangeMap =
+      std::map<MachineBasicBlock *, HexagonBlockRanges::RangeList>;
+  using IndexType = HexagonBlockRanges::IndexType;
 
   struct SlotInfo {
     BlockRangeMap Map;
@@ -2436,6 +2428,8 @@ void HexagonFrameLowering::addCalleeSaveRegistersAsImpOperand(MachineInstr *MI,
 bool HexagonFrameLowering::shouldInlineCSR(const MachineFunction &MF,
       const CSIVect &CSI) const {
   if (MF.getInfo<HexagonMachineFunctionInfo>()->hasEHReturn())
+    return true;
+  if (!hasFP(MF))
     return true;
   if (!isOptSize(MF) && !isMinSize(MF))
     if (MF.getTarget().getOptLevel() > CodeGenOpt::Default)

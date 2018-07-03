@@ -710,11 +710,15 @@ public:
                                      SourceLocation Loc = SourceLocation(),
                                      bool TLS = false);
 
-  /// Return the address space of the underlying global variable for D, as
+  /// Return the AST address space of the underlying global variable for D, as
   /// determined by its declaration. Normally this is the same as the address
   /// space of D's type, but in CUDA, address spaces are associated with
-  /// declarations, not types.
-  unsigned GetGlobalVarAddressSpace(const VarDecl *D, unsigned AddrSpace);
+  /// declarations, not types. If D is nullptr, return the default address
+  /// space for global variable.
+  ///
+  /// For languages without explicit address spaces, if D has default address
+  /// space, target-specific global or constant address space may be returned.
+  unsigned GetGlobalVarAddressSpace(const VarDecl *D);
 
   /// Return the llvm::Constant for the address of the given global variable.
   /// If Ty is non-null and if the global doesn't exist, then it will be created
@@ -937,27 +941,6 @@ public:
   void UpdateCompletedType(const TagDecl *TD);
 
   llvm::Constant *getMemberPointerConstant(const UnaryOperator *e);
-
-  /// Try to emit the initializer for the given declaration as a constant;
-  /// returns 0 if the expression cannot be emitted as a constant.
-  llvm::Constant *EmitConstantInit(const VarDecl &D,
-                                   CodeGenFunction *CGF = nullptr);
-
-  /// Try to emit the given expression as a constant; returns 0 if the
-  /// expression cannot be emitted as a constant.
-  llvm::Constant *EmitConstantExpr(const Expr *E, QualType DestType,
-                                   CodeGenFunction *CGF = nullptr);
-
-  /// Emit the given constant value as a constant, in the type's scalar
-  /// representation.
-  llvm::Constant *EmitConstantValue(const APValue &Value, QualType DestType,
-                                    CodeGenFunction *CGF = nullptr);
-
-  /// Emit the given constant value as a constant, in the type's memory
-  /// representation.
-  llvm::Constant *EmitConstantValueForMemory(const APValue &Value,
-                                             QualType DestType,
-                                             CodeGenFunction *CGF = nullptr);
 
   /// \brief Emit type info if type of an expression is a variably modified
   /// type. Also emit proper debug info for cast types.
@@ -1262,7 +1245,8 @@ private:
 
   /// Set function attributes for a function declaration.
   void SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
-                             bool IsIncompleteFunction, bool IsThunk);
+                             bool IsIncompleteFunction, bool IsThunk,
+                             ForDefinition_t IsForDefinition);
 
   void EmitGlobalDefinition(GlobalDecl D, llvm::GlobalValue *GV = nullptr);
 
@@ -1378,6 +1362,7 @@ private:
                                   bool AttrOnCallSite,
                                   llvm::AttrBuilder &FuncAttrs);
 };
+
 }  // end namespace CodeGen
 }  // end namespace clang
 

@@ -31,11 +31,13 @@ class MSFBuilder;
 namespace pdb {
 class DbiStreamBuilder;
 class InfoStreamBuilder;
+class GSIStreamBuilder;
 class TpiStreamBuilder;
 
 class PDBFileBuilder {
 public:
   explicit PDBFileBuilder(BumpPtrAllocator &Allocator);
+  ~PDBFileBuilder();
   PDBFileBuilder(const PDBFileBuilder &) = delete;
   PDBFileBuilder &operator=(const PDBFileBuilder &) = delete;
 
@@ -47,6 +49,7 @@ public:
   TpiStreamBuilder &getTpiBuilder();
   TpiStreamBuilder &getIpiBuilder();
   PDBStringTableBuilder &getStringTableBuilder();
+  GSIStreamBuilder &getGsiBuilder();
 
   Error commit(StringRef Filename);
 
@@ -56,11 +59,14 @@ public:
 private:
   Expected<msf::MSFLayout> finalizeMsfLayout();
 
+  void commitFpm(WritableBinaryStream &MsfBuffer, const msf::MSFLayout &Layout);
+
   BumpPtrAllocator &Allocator;
 
   std::unique_ptr<msf::MSFBuilder> Msf;
   std::unique_ptr<InfoStreamBuilder> Info;
   std::unique_ptr<DbiStreamBuilder> Dbi;
+  std::unique_ptr<GSIStreamBuilder> Gsi;
   std::unique_ptr<TpiStreamBuilder> Tpi;
   std::unique_ptr<TpiStreamBuilder> Ipi;
 

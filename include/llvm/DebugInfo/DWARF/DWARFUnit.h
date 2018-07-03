@@ -123,7 +123,7 @@ class DWARFUnit {
   const DWARFSection &StringOffsetSection;
   uint64_t StringOffsetSectionBase = 0;
   const DWARFSection *AddrOffsetSection;
-  uint32_t AddrOffsetSectionBase;
+  uint32_t AddrOffsetSectionBase = 0;
   bool isLittleEndian;
   bool isDWO;
   const DWARFUnitSectionBase &UnitSection;
@@ -197,19 +197,12 @@ public:
   bool getAddrOffsetSectionItem(uint32_t Index, uint64_t &Result) const;
   bool getStringOffsetSectionItem(uint32_t Index, uint64_t &Result) const;
 
-  DWARFDataExtractor getDebugInfoExtractor() const {
-    return DWARFDataExtractor(InfoSection, isLittleEndian,
-                              getAddressByteSize());
-  }
+  DWARFDataExtractor getDebugInfoExtractor() const;
 
   DataExtractor getStringExtractor() const {
     return DataExtractor(StringSection, false, 0);
   }
 
-  const RelocAddrMap *getRelocMap() const { return &InfoSection.Relocs; }
-  const RelocAddrMap &getStringOffsetsRelocMap() const {
-    return StringOffsetSection.Relocs;
-  }
 
   bool extract(DataExtractor debug_info, uint32_t* offset_ptr);
 
@@ -237,6 +230,34 @@ public:
   }
 
   uint8_t getUnitType() const { return UnitType; }
+
+  static bool isValidUnitType(uint8_t UnitType) {
+    return UnitType == dwarf::DW_UT_compile || UnitType == dwarf::DW_UT_type ||
+           UnitType == dwarf::DW_UT_partial ||
+           UnitType == dwarf::DW_UT_skeleton ||
+           UnitType == dwarf::DW_UT_split_compile ||
+           UnitType == dwarf::DW_UT_split_type;
+  }
+
+  /// \brief Return the number of bytes for the header of a unit of
+  /// UnitType type.
+  ///
+  /// This function must be called with a valid unit type which in
+  /// DWARF5 is defined as one of the following six types.
+  static uint32_t getDWARF5HeaderSize(uint8_t UnitType) {
+    switch (UnitType) {
+    case dwarf::DW_UT_compile:
+    case dwarf::DW_UT_partial:
+      return 12;
+    case dwarf::DW_UT_skeleton:
+    case dwarf::DW_UT_split_compile:
+      return 20;
+    case dwarf::DW_UT_type:
+    case dwarf::DW_UT_split_type:
+      return 24;
+    }
+    llvm_unreachable("Invalid UnitType.");
+  }
 
   uint64_t getBaseAddress() const { return BaseAddr; }
 

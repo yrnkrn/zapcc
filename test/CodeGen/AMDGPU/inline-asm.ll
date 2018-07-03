@@ -222,9 +222,9 @@ entry:
 ; FIXME: Should be scheduled to shrink vcc
 ; CHECK-LABEL: {{^}}i1_input_phys_vgpr_x2:
 ; CHECK: v_cmp_eq_u32_e32 vcc, 1, v0
-; CHECK: v_cmp_eq_u32_e64 s[0:1], 1, v1
 ; CHECK: v_cndmask_b32_e64 v0, 0, -1, vcc
-; CHECK: v_cndmask_b32_e64 v1, 0, -1, s[0:1]
+; CHECK: v_cmp_eq_u32_e32 vcc, 1, v1
+; CHECK: v_cndmask_b32_e64 v1, 0, -1, vcc
 define amdgpu_kernel void @i1_input_phys_vgpr_x2() {
 entry:
   %val0 = load volatile i1, i1 addrspace(1)* undef
@@ -244,5 +244,21 @@ entry:
   %def1 = call i32 asm sideeffect "; def $0 ", "={v0}"()
   %add = shl i32 %def0, %def1
   store i32 %add, i32 addrspace(1)* undef
+  ret void
+}
+
+; CHECK-LABEL: {{^}}asm_constraint_c_n:
+; CHECK: s_trap 10{{$}}
+define amdgpu_kernel void @asm_constraint_c_n()  {
+entry:
+  tail call void asm sideeffect "s_trap ${0:c}", "n"(i32 10) #1
+  ret void
+}
+
+; CHECK-LABEL: {{^}}asm_constraint_n_n:
+; CHECK: s_trap -10{{$}}
+define amdgpu_kernel void @asm_constraint_n_n()  {
+entry:
+  tail call void asm sideeffect "s_trap ${0:n}", "n"(i32 10) #1
   ret void
 }

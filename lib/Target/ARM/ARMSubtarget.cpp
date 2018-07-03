@@ -13,11 +13,9 @@
 
 #include "ARM.h"
 
-#ifdef LLVM_BUILD_GLOBAL_ISEL
 #include "ARMCallLowering.h"
 #include "ARMLegalizerInfo.h"
 #include "ARMRegisterBankInfo.h"
-#endif
 #include "ARMSubtarget.h"
 #include "ARMFrameLowering.h"
 #include "ARMInstrInfo.h"
@@ -30,13 +28,10 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
-#ifdef LLVM_BUILD_GLOBAL_ISEL
-#include "llvm/CodeGen/GlobalISel/GISelAccessor.h"
 #include "llvm/CodeGen/GlobalISel/IRTranslator.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelect.h"
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
 #include "llvm/CodeGen/GlobalISel/RegBankSelect.h"
-#endif
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
@@ -101,35 +96,6 @@ ARMFrameLowering *ARMSubtarget::initializeFrameLowering(StringRef CPU,
   return new ARMFrameLowering(STI);
 }
 
-#ifdef LLVM_BUILD_GLOBAL_ISEL
-namespace {
-
-struct ARMGISelActualAccessor : public GISelAccessor {
-  std::unique_ptr<CallLowering> CallLoweringInfo;
-  std::unique_ptr<InstructionSelector> InstSelector;
-  std::unique_ptr<LegalizerInfo> Legalizer;
-  std::unique_ptr<RegisterBankInfo> RegBankInfo;
-
-  const CallLowering *getCallLowering() const override {
-    return CallLoweringInfo.get();
-  }
-
-  const InstructionSelector *getInstructionSelector() const override {
-    return InstSelector.get();
-  }
-
-  const LegalizerInfo *getLegalizerInfo() const override {
-    return Legalizer.get();
-  }
-
-  const RegisterBankInfo *getRegBankInfo() const override {
-    return RegBankInfo.get();
-  }
-};
-
-} // end anonymous namespace
-#endif
-
 ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                            const std::string &FS,
                            const ARMBaseTargetMachine &TM, bool IsLittle)
@@ -144,47 +110,35 @@ ARMSubtarget::ARMSubtarget(const Triple &TT, const std::string &CPU,
                           ? (ARMBaseInstrInfo *)new ARMInstrInfo(*this)
                           : (ARMBaseInstrInfo *)new Thumb2InstrInfo(*this)),
       TLInfo(TM, *this) {
-  assert((isThumb() || hasARMOps()) &&
-         "Target must either be thumb or support ARM operations!");
 
-#ifndef LLVM_BUILD_GLOBAL_ISEL
-  GISelAccessor *GISel = new GISelAccessor();
-#else
-  ARMGISelActualAccessor *GISel = new ARMGISelActualAccessor();
-  GISel->CallLoweringInfo.reset(new ARMCallLowering(*getTargetLowering()));
-  GISel->Legalizer.reset(new ARMLegalizerInfo(*this));
+  CallLoweringInfo.reset(new ARMCallLowering(*getTargetLowering()));
+  Legalizer.reset(new ARMLegalizerInfo(*this));
 
   auto *RBI = new ARMRegisterBankInfo(*getRegisterInfo());
 
   // FIXME: At this point, we can't rely on Subtarget having RBI.
   // It's awkward to mix passing RBI and the Subtarget; should we pass
   // TII/TRI as well?
-  GISel->InstSelector.reset(createARMInstructionSelector(
+  InstSelector.reset(createARMInstructionSelector(
       *static_cast<const ARMBaseTargetMachine *>(&TM), *this, *RBI));
 
-  GISel->RegBankInfo.reset(RBI);
-#endif
-  setGISelAccessor(*GISel);
+  RegBankInfo.reset(RBI);
 }
 
 const CallLowering *ARMSubtarget::getCallLowering() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getCallLowering();
+  return CallLoweringInfo.get();
 }
 
 const InstructionSelector *ARMSubtarget::getInstructionSelector() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getInstructionSelector();
+  return InstSelector.get();
 }
 
 const LegalizerInfo *ARMSubtarget::getLegalizerInfo() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getLegalizerInfo();
+  return Legalizer.get();
 }
 
 const RegisterBankInfo *ARMSubtarget::getRegBankInfo() const {
-  assert(GISel && "Access to GlobalISel APIs not set");
-  return GISel->getRegBankInfo();
+  return RegBankInfo.get();
 }
 
 bool ARMSubtarget::isXRaySupported() const {
@@ -209,11 +163,11 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
 
     if (isTargetDarwin()) {
       StringRef ArchName = TargetTriple.getArchName();
-      unsigned ArchKind = ARM::parseArch(ArchName);
-      if (ArchKind == ARM::AK_ARMV7S)
+      ARM::ArchKind AK = ARM::parseArch(ArchName);
+      if (AK == ARM::ArchKind::ARMV7S)
         // Default to the Swift CPU when targeting armv7s/thumbv7s.
         CPUString = "swift";
-      else if (ArchKind == ARM::AK_ARMV7K)
+      else if (AK == ARM::ArchKind::ARMV7K)
         // Default to the Cortex-a7 CPU when targeting armv7k/thumbv7k.
         // ARMv7k does not use SjLj exception handling.
         CPUString = "cortex-a7";
@@ -333,8 +287,8 @@ void ARMSubtarget::initSubtargetFeatures(StringRef CPU, StringRef FS) {
   case CortexR5:
   case CortexR7:
   case CortexM3:
-  case ExynosM1:
   case CortexR52:
+  case ExynosM1:
   case Kryo:
     break;
   case Krait:
@@ -396,17 +350,16 @@ bool ARMSubtarget::hasSinCos() const {
 }
 
 bool ARMSubtarget::enableMachineScheduler() const {
-  // Enable the MachineScheduler before register allocation for out-of-order
-  // architectures where we do not use the PostRA scheduler anymore (for now
-  // restricted to swift).
-  return getSchedModel().isOutOfOrder() && isSwift();
+  // Enable the MachineScheduler before register allocation for subtargets
+  // with the use-misched feature.
+  return useMachineScheduler();
 }
 
 // This overrides the PostRAScheduler bit in the SchedModel for any CPU.
 bool ARMSubtarget::enablePostRAScheduler() const {
-  // No need for PostRA scheduling on out of order CPUs (for now restricted to
-  // swift).
-  if (getSchedModel().isOutOfOrder() && isSwift())
+  // No need for PostRA scheduling on subtargets where we use the
+  // MachineScheduler.
+  if (useMachineScheduler())
     return false;
   return (!isThumb() || hasThumb2());
 }

@@ -12,7 +12,6 @@
 #include "ToolChains/AMDGPU.h"
 #include "ToolChains/AVR.h"
 #include "ToolChains/Ananas.h"
-#include "ToolChains/Bitrig.h"
 #include "ToolChains/Clang.h"
 #include "ToolChains/CloudABI.h"
 #include "ToolChains/Contiki.h"
@@ -88,7 +87,7 @@ Driver::Driver(StringRef ClangExecutable, StringRef DefaultTargetTriple,
     : Opts(createDriverOptTable()), Diags(Diags), VFS(std::move(VFS)),
       Mode(GCCMode), SaveTemps(SaveTempsNone), BitcodeEmbed(EmbedNone),
       LTOMode(LTOK_None), ClangExecutable(ClangExecutable),
-      SysRoot(DEFAULT_SYSROOT), UseStdLib(true),
+      SysRoot(DEFAULT_SYSROOT), 
       DriverTitle("clang LLVM compiler"), CCPrintOptionsFilename(nullptr),
       CCPrintHeadersFilename(nullptr), CCLogDiagnosticsFilename(nullptr),
       CCCPrintBindings(false), CCPrintHeaders(false), CCLogDiagnostics(false),
@@ -525,7 +524,7 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
     auto &CudaTC = ToolChains[CudaTriple.str() + "/" + HostTriple.str()];
     if (!CudaTC) {
       CudaTC = llvm::make_unique<toolchains::CudaToolChain>(
-          *this, CudaTriple, *HostTC, C.getInputArgs());
+          *this, CudaTriple, *HostTC, C.getInputArgs(), Action::OFK_Cuda);
     }
     C.addOffloadDeviceToolChain(CudaTC.get(), Action::OFK_Cuda);
   }
@@ -572,8 +571,22 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
           if (TT.getArch() == llvm::Triple::UnknownArch)
             Diag(clang::diag::err_drv_invalid_omp_target) << Val;
           else {
-            const ToolChain &TC = getToolChain(C.getInputArgs(), TT);
-            C.addOffloadDeviceToolChain(&TC, Action::OFK_OpenMP);
+            const ToolChain *TC;
+            // CUDA toolchains have to be selected differently. They pair host
+            // and device in their implementation.
+            if (TT.isNVPTX()) {
+              const ToolChain *HostTC =
+                  C.getSingleOffloadToolChain<Action::OFK_Host>();
+              assert(HostTC && "Host toolchain should be always defined.");
+              auto &CudaTC =
+                  ToolChains[TT.str() + "/" + HostTC->getTriple().normalize()];
+              if (!CudaTC)
+                CudaTC = llvm::make_unique<toolchains::CudaToolChain>(
+                    *this, TT, *HostTC, C.getInputArgs(), Action::OFK_OpenMP);
+              TC = CudaTC.get();
+            } else
+              TC = &getToolChain(C.getInputArgs(), TT);
+            C.addOffloadDeviceToolChain(TC, Action::OFK_OpenMP);
           }
         }
       } else
@@ -665,8 +678,6 @@ Compilation *Driver::BuildCompilation(ArrayRef<const char *> ArgList) {
     SysRoot = A->getValue();
   if (const Arg *A = Args.getLastArg(options::OPT__dyld_prefix_EQ))
     DyldPrefix = A->getValue();
-  if (Args.hasArg(options::OPT_nostdlib))
-    UseStdLib = false;
 
   if (const Arg *A = Args.getLastArg(options::OPT_resource_dir))
     ResourceDir = A->getValue();
@@ -1113,7 +1124,8 @@ void Driver::PrintHelp(bool ShowHidden) const {
     ExcludedFlagsBitmask |= HelpHidden;
 
   getOpts().PrintHelp(llvm::outs(), Name.c_str(), DriverTitle.c_str(),
-                      IncludedFlagsBitmask, ExcludedFlagsBitmask);
+                      IncludedFlagsBitmask, ExcludedFlagsBitmask,
+                      /*ShowAllAliases=*/false);
 }
 
 void Driver::PrintVersion(const Compilation &C, raw_ostream &OS) const {
@@ -1179,10 +1191,6 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
   if (C.getArgs().hasArg(options::OPT__version)) {
     // Follow gcc behavior and use stdout for --version and stderr for -v.
     PrintVersion(C, llvm::outs());
-
-    // Print registered targets.
-    llvm::outs() << '\n';
-    llvm::TargetRegistry::printRegisteredTargetsForVersion(llvm::outs());
     return false;
   }
 
@@ -1247,11 +1255,27 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
     StringRef PassedFlags = A->getValue();
     std::vector<std::string> SuggestedCompletions;
 
+    unsigned short DisableFlags = options::NoDriverOption | options::Unsupported | options::Ignored;
+    // We want to show cc1-only options only when clang is invoked as "clang -cc1".
+    // When clang is invoked as "clang -cc1", we add "#" to the beginning of an --autocomplete
+    // option so that the clang driver can distinguish whether it is requested to show cc1-only options or not.
+    if (PassedFlags[0] == '#') {
+      DisableFlags &= ~options::NoDriverOption;
+      PassedFlags = PassedFlags.substr(1);
+    }
+
     if (PassedFlags.find(',') == StringRef::npos) {
       // If the flag is in the form of "--autocomplete=-foo",
       // we were requested to print out all option names that start with "-foo".
       // For example, "--autocomplete=-fsyn" is expanded to "-fsyntax-only".
-      SuggestedCompletions = Opts->findByPrefix(PassedFlags);
+      SuggestedCompletions = Opts->findByPrefix(PassedFlags, DisableFlags);
+
+      // We have to query the -W flags manually as they're not in the OptTable.
+      // TODO: Find a good way to add them to OptTable instead and them remove
+      // this code.
+      for (StringRef S : DiagnosticIDs::getDiagnosticFlags())
+        if (S.startswith(PassedFlags))
+          SuggestedCompletions.push_back(S);
     } else {
       // If the flag is in the form of "--autocomplete=foo,bar", we were
       // requested to print out all option values for "-foo" that start with
@@ -1269,7 +1293,7 @@ bool Driver::HandleImmediateArgs(const Compilation &C) {
     std::sort(SuggestedCompletions.begin(), SuggestedCompletions.end(),
               [](StringRef A, StringRef B) { return A.compare_lower(B) < 0; });
 
-    llvm::outs() << llvm::join(SuggestedCompletions, " ") << '\n';
+    llvm::outs() << llvm::join(SuggestedCompletions, "\n") << '\n';
     return false;
   }
 
@@ -3200,6 +3224,12 @@ InputInfo Driver::BuildJobsForActionNoCache(
   InputInfoList OffloadDependencesInputInfo;
   bool BuildingForOffloadDevice = TargetDeviceOffloadKind != Action::OFK_None;
   if (const OffloadAction *OA = dyn_cast<OffloadAction>(A)) {
+    // The 'Darwin' toolchain is initialized only when its arguments are
+    // computed. Get the default arguments for OFK_None to ensure that
+    // initialization is performed before processing the offload action.
+    // FIXME: Remove when darwin's toolchain is initialized during construction.
+    C.getArgsForToolChain(TC, BoundArch, Action::OFK_None);
+
     // The offload action is expected to be used in four different situations.
     //
     // a) Set a toolchain/architecture/kind for a host action:
@@ -3377,7 +3407,7 @@ InputInfo Driver::BuildJobsForActionNoCache(
       // Get the unique string identifier for this dependence and cache the
       // result.
       CachedResults[{A, GetTriplePlusArchString(
-                            UI.DependentToolChain, UI.DependentBoundArch,
+                            UI.DependentToolChain, BoundArch,
                             UI.DependentOffloadKind)}] = CurI;
     }
 
@@ -3652,7 +3682,12 @@ std::string Driver::GetFilePath(StringRef Name, const ToolChain &TC) const {
       return P.str();
   }
 
-  SmallString<128> P(ResourceDir);
+  SmallString<128> R(ResourceDir);
+  llvm::sys::path::append(R, Name);
+  if (llvm::sys::fs::exists(Twine(R)))
+    return R.str();
+
+  SmallString<128> P(TC.getCompilerRTPath());
   llvm::sys::path::append(P, Name);
   if (llvm::sys::fs::exists(Twine(P)))
     return P.str();
@@ -3784,9 +3819,6 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
       break;
     case llvm::Triple::OpenBSD:
       TC = llvm::make_unique<toolchains::OpenBSD>(*this, Target, Args);
-      break;
-    case llvm::Triple::Bitrig:
-      TC = llvm::make_unique<toolchains::Bitrig>(*this, Target, Args);
       break;
     case llvm::Triple::NetBSD:
       TC = llvm::make_unique<toolchains::NetBSD>(*this, Target, Args);

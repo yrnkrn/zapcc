@@ -23,6 +23,7 @@
 #include "clang/Basic/VersionTuple.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -45,6 +46,7 @@ class MacroBuilder;
 class QualType;
 class SourceLocation;
 class SourceManager;
+class Type;
 
 namespace Builtin { struct Info; }
 
@@ -225,6 +227,20 @@ protected:
 
 public:
   IntType getSizeType() const { return SizeType; }
+  IntType getSignedSizeType() const {
+    switch (SizeType) {
+    case UnsignedShort:
+      return SignedShort;
+    case UnsignedInt:
+      return SignedInt;
+    case UnsignedLong:
+      return SignedLong;
+    case UnsignedLongLong:
+      return SignedLongLong;
+    default:
+      llvm_unreachable("Invalid SizeType");
+    }
+  }
   IntType getIntMaxType() const { return IntMaxType; }
   IntType getUIntMaxType() const {
     return getCorrespondingUnsignedType(IntMaxType);
@@ -448,21 +464,6 @@ public:
   /// value is type-specific, but this alignment can be used for most of the
   /// types for the given target.
   unsigned getSimdDefaultAlign() const { return SimdDefaultAlign; }
-
-  /// Return the alignment (in bits) of the thrown exception object. This is
-  /// only meaningful for targets that allocate C++ exceptions in a system
-  /// runtime, such as those using the Itanium C++ ABI.
-  virtual unsigned getExnObjectAlignment() const {
-    // Itanium says that an _Unwind_Exception has to be "double-word"
-    // aligned (and thus the end of it is also so-aligned), meaning 16
-    // bytes.  Of course, that was written for the actual Itanium,
-    // which is a 64-bit platform.  Classically, the ABI doesn't really
-    // specify the alignment on other platforms, but in practice
-    // libUnwind declares the struct with __attribute__((aligned)), so
-    // we assume that alignment here.  (It's generally 16 bytes, but
-    // some targets overwrite it.)
-    return getDefaultAlignForAttributeAligned();
-  }
 
   /// \brief Return the size of intmax_t and uintmax_t for this target, in bits.
   unsigned getIntMaxTWidth() const {
@@ -854,6 +855,11 @@ public:
     return false;
   }
 
+  /// brief Determine whether this TargetInfo supports the given CPU name.
+  virtual bool isValidCPUName(StringRef Name) const {
+    return false;
+  }
+
   /// \brief Use the specified ABI.
   ///
   /// \return False on error (invalid ABI name).
@@ -874,6 +880,11 @@ public:
                                  StringRef Name,
                                  bool Enabled) const {
     Features[Name] = Enabled;
+  }
+
+  /// \brief Determine whether this TargetInfo supports the given feature.
+  virtual bool isValidFeatureName(StringRef Feature) const {
+    return false;
   }
 
   /// \brief Perform initialization based on the user configured
@@ -900,6 +911,10 @@ public:
   // \brief Validate the contents of the __builtin_cpu_supports(const char*)
   // argument.
   virtual bool validateCpuSupports(StringRef Name) const { return false; }
+
+  // \brief Validate the contents of the __builtin_cpu_is(const char*)
+  // argument.
+  virtual bool validateCpuIs(StringRef Name) const { return false; }
 
   // \brief Returns maximal number of args passed in registers.
   unsigned getRegParmMax() const {
@@ -952,6 +967,14 @@ public:
 
   const LangAS::Map &getAddressSpaceMap() const {
     return *AddrSpaceMap;
+  }
+
+  /// \brief Return an AST address space which can be used opportunistically
+  /// for constant global memory. It must be possible to convert pointers into
+  /// this address space to LangAS::Default. If no such address space exists,
+  /// this may return None, and such optimizations will be disabled.
+  virtual llvm::Optional<unsigned> getConstantAddressSpace() const {
+    return LangAS::Default;
   }
 
   /// \brief Retrieve the name of the platform as it is used in the
@@ -1028,10 +1051,8 @@ public:
       return getTargetOpts().SupportedOpenCLOptions;
   }
 
-  /// \brief Get OpenCL image type address space.
-  virtual LangAS::ID getOpenCLImageAddrSpace() const {
-    return LangAS::opencl_global;
-  }
+  /// \brief Get address space for OpenCL type.
+  virtual LangAS::ID getOpenCLTypeAddrSpace(const Type *T) const;
 
   /// \returns Target specific vtbl ptr address space.
   virtual unsigned getVtblPtrAddressSpace() const {

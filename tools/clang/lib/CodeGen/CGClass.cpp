@@ -2523,8 +2523,10 @@ LeastDerivedClassWithSameLayout(const CXXRecordDecl *RD) {
 void CodeGenFunction::EmitTypeMetadataCodeForVCall(const CXXRecordDecl *RD,
                                                    llvm::Value *VTable,
                                                    SourceLocation Loc) {
-  if (CGM.getCodeGenOpts().WholeProgramVTables &&
-      CGM.HasHiddenLTOVisibility(RD)) {
+  if (SanOpts.has(SanitizerKind::CFIVCall))
+    EmitVTablePtrCheckForCall(RD, VTable, CodeGenFunction::CFITCK_VCall, Loc);
+  else if (CGM.getCodeGenOpts().WholeProgramVTables &&
+           CGM.HasHiddenLTOVisibility(RD)) {
     llvm::Metadata *MD =
         CGM.CreateMetadataIdentifierForType(QualType(RD->getTypeForDecl(), 0));
     llvm::Value *TypeId =
@@ -2536,9 +2538,6 @@ void CodeGenFunction::EmitTypeMetadataCodeForVCall(const CXXRecordDecl *RD,
                            {CastedVTable, TypeId});
     Builder.CreateCall(CGM.getIntrinsic(llvm::Intrinsic::assume), TypeTest);
   }
-
-  if (SanOpts.has(SanitizerKind::CFIVCall))
-    EmitVTablePtrCheckForCall(RD, VTable, CodeGenFunction::CFITCK_VCall, Loc);
 }
 
 void CodeGenFunction::EmitVTablePtrCheckForCall(const CXXRecordDecl *RD,
@@ -2716,88 +2715,6 @@ llvm::Value *CodeGenFunction::EmitVTableTypeCheckedLoad(
       cast<llvm::PointerType>(VTable->getType())->getElementType());
 }
 
-bool
-CodeGenFunction::CanDevirtualizeMemberFunctionCall(const Expr *Base,
-                                                   const CXXMethodDecl *MD) {
-  // When building with -fapple-kext, all calls must go through the vtable since
-  // the kernel linker can do runtime patching of vtables.
-  if (getLangOpts().AppleKext)
-    return false;
-
-  // If the member function is marked 'final', we know that it can't be
-  // overridden and can therefore devirtualize it unless it's pure virtual.
-  if (MD->hasAttr<FinalAttr>())
-    return !MD->isPure();
-
-  // If the base expression (after skipping derived-to-base conversions) is a
-  // class prvalue, then we can devirtualize.
-  Base = Base->getBestDynamicClassTypeExpr();
-  if (Base->isRValue() && Base->getType()->isRecordType())
-    return true;
-
-  // If we don't even know what we would call, we can't devirtualize.
-  const CXXRecordDecl *BestDynamicDecl = Base->getBestDynamicClassType();
-  if (!BestDynamicDecl)
-    return false;
-
-  // There may be a method corresponding to MD in a derived class.
-  const CXXMethodDecl *DevirtualizedMethod =
-      MD->getCorrespondingMethodInClass(BestDynamicDecl);
-
-  // If that method is pure virtual, we can't devirtualize. If this code is
-  // reached, the result would be UB, not a direct call to the derived class
-  // function, and we can't assume the derived class function is defined.
-  if (DevirtualizedMethod->isPure())
-    return false;
-
-  // If that method is marked final, we can devirtualize it.
-  if (DevirtualizedMethod->hasAttr<FinalAttr>())
-    return true;
-
-  // Similarly, if the class itself is marked 'final' it can't be overridden
-  // and we can therefore devirtualize the member function call.
-  if (BestDynamicDecl->hasAttr<FinalAttr>())
-    return true;
-
-  if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(Base)) {
-    if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-      // This is a record decl. We know the type and can devirtualize it.
-      return VD->getType()->isRecordType();
-    }
-
-    return false;
-  }
-
-  // We can devirtualize calls on an object accessed by a class member access
-  // expression, since by C++11 [basic.life]p6 we know that it can't refer to
-  // a derived class object constructed in the same location. However, we avoid
-  // devirtualizing a call to a template function that we could instantiate
-  // implicitly, but have not decided to do so. This is needed because if this
-  // function does not get instantiated, the devirtualization will create a
-  // direct call to a function whose body may not exist. In contrast, calls to
-  // template functions that are not defined in this TU are allowed to be 
-  // devirtualized under assumption that it is user responsibility to
-  // instantiate them in some other TU.
-  if (const MemberExpr *ME = dyn_cast<MemberExpr>(Base))
-    if (const ValueDecl *VD = dyn_cast<ValueDecl>(ME->getMemberDecl()))
-      return VD->getType()->isRecordType() && 
-             (MD->instantiationIsPending() || MD->isDefined() ||
-               !MD->isImplicitlyInstantiable());
-
-  // Likewise for calls on an object accessed by a (non-reference) pointer to
-  // member access.
-  if (auto *BO = dyn_cast<BinaryOperator>(Base)) {
-    if (BO->isPtrMemOp()) {
-      auto *MPT = BO->getRHS()->getType()->castAs<MemberPointerType>();
-      if (MPT->getPointeeType()->isRecordType())
-        return true;
-    }
-  }
-
-  // We can't devirtualize the call.
-  return false;
-}
-
 void CodeGenFunction::EmitForwardingCallToLambda(
                                       const CXXMethodDecl *callOperator,
                                       CallArgList &callArgs) {
@@ -2837,6 +2754,15 @@ void CodeGenFunction::EmitLambdaBlockInvokeBody() {
   const BlockDecl *BD = BlockInfo->getBlockDecl();
   const VarDecl *variable = BD->capture_begin()->getVariable();
   const CXXRecordDecl *Lambda = variable->getType()->getAsCXXRecordDecl();
+  const CXXMethodDecl *CallOp = Lambda->getLambdaCallOperator();
+
+  if (CallOp->isVariadic()) {
+    // FIXME: Making this work correctly is nasty because it requires either
+    // cloning the body of the call operator or making the call operator
+    // forward.
+    CGM.ErrorUnsupported(CurCodeDecl, "lambda conversion to variadic function");
+    return;
+  }
 
   // Start building arguments for forwarding call
   CallArgList CallArgs;
@@ -2851,18 +2777,7 @@ void CodeGenFunction::EmitLambdaBlockInvokeBody() {
 
   assert(!Lambda->isGenericLambda() &&
             "generic lambda interconversion to block not implemented");
-  EmitForwardingCallToLambda(Lambda->getLambdaCallOperator(), CallArgs);
-}
-
-void CodeGenFunction::EmitLambdaToBlockPointerBody(FunctionArgList &Args) {
-  if (cast<CXXMethodDecl>(CurCodeDecl)->isVariadic()) {
-    // FIXME: Making this work correctly is nasty because it requires either
-    // cloning the body of the call operator or making the call operator forward.
-    CGM.ErrorUnsupported(CurCodeDecl, "lambda conversion to variadic function");
-    return;
-  }
-
-  EmitFunctionBody(Args, cast<FunctionDecl>(CurGD.getDecl())->getBody());
+  EmitForwardingCallToLambda(CallOp, CallArgs);
 }
 
 void CodeGenFunction::EmitLambdaDelegatingInvokeBody(const CXXMethodDecl *MD) {
@@ -2895,7 +2810,7 @@ void CodeGenFunction::EmitLambdaDelegatingInvokeBody(const CXXMethodDecl *MD) {
   EmitForwardingCallToLambda(CallOp, CallArgs);
 }
 
-void CodeGenFunction::EmitLambdaStaticInvokeFunction(const CXXMethodDecl *MD) {
+void CodeGenFunction::EmitLambdaStaticInvokeBody(const CXXMethodDecl *MD) {
   if (MD->isVariadic()) {
     // FIXME: Making this work correctly is nasty because it requires either
     // cloning the body of the call operator or making the call operator forward.

@@ -352,7 +352,11 @@ def SDTFmaRound : SDTypeProfile<1, 4, [SDTCisSameAs<0,1>,
                            SDTCisSameAs<1,2>, SDTCisSameAs<1,3>,
                            SDTCisFP<0>, SDTCisVT<4, i32>]>;
 
-def X86PAlignr : SDNode<"X86ISD::PALIGNR", SDTShuff3OpI>;
+def X86PAlignr : SDNode<"X86ISD::PALIGNR",
+                        SDTypeProfile<1, 3, [SDTCVecEltisVT<0, i8>,
+                                             SDTCisSameAs<0,1>,
+                                             SDTCisSameAs<0,2>,
+                                             SDTCisVT<3, i8>]>>;
 def X86VAlign  : SDNode<"X86ISD::VALIGN", SDTShuff3OpI>;
 
 def X86Conflict : SDNode<"X86ISD::CONFLICT", SDTIntUnaryOp>;
@@ -698,17 +702,20 @@ def alignedstore512 : PatFrag<(ops node:$val, node:$ptr),
 
 // Like 'load', but always requires 128-bit vector alignment.
 def alignedload : PatFrag<(ops node:$ptr), (load node:$ptr), [{
-  return cast<LoadSDNode>(N)->getAlignment() >= 16;
+  return cast<LoadSDNode>(N)->getAlignment() >= 16 &&
+         (!Subtarget->hasSSE41() || !cast<LoadSDNode>(N)->isNonTemporal());
 }]>;
 
 // Like 'load', but always requires 256-bit vector alignment.
 def alignedload256 : PatFrag<(ops node:$ptr), (load node:$ptr), [{
-  return cast<LoadSDNode>(N)->getAlignment() >= 32;
+  return cast<LoadSDNode>(N)->getAlignment() >= 32 &&
+         (!Subtarget->hasAVX2() || !cast<LoadSDNode>(N)->isNonTemporal());
 }]>;
 
 // Like 'load', but always requires 512-bit vector alignment.
 def alignedload512 : PatFrag<(ops node:$ptr), (load node:$ptr), [{
-  return cast<LoadSDNode>(N)->getAlignment() >= 64;
+  return cast<LoadSDNode>(N)->getAlignment() >= 64 &&
+         (!Subtarget->hasAVX512() || !cast<LoadSDNode>(N)->isNonTemporal());
 }]>;
 
 // 128-bit aligned load pattern fragments
@@ -753,15 +760,6 @@ def memop : PatFrag<(ops node:$ptr), (vec128load node:$ptr), [{
 def memopv4f32 : PatFrag<(ops node:$ptr), (v4f32 (memop node:$ptr))>;
 def memopv2f64 : PatFrag<(ops node:$ptr), (v2f64 (memop node:$ptr))>;
 def memopv2i64 : PatFrag<(ops node:$ptr), (v2i64 (memop node:$ptr))>;
-
-// SSSE3 uses MMX registers for some instructions. They aren't aligned on a
-// 16-byte boundary.
-// FIXME: 8 byte alignment for mmx reads is not required
-def memop64 : PatFrag<(ops node:$ptr), (load node:$ptr), [{
-  return cast<LoadSDNode>(N)->getAlignment() >= 8;
-}]>;
-
-def memopmmx  : PatFrag<(ops node:$ptr), (x86mmx  (memop64 node:$ptr))>;
 
 def X86masked_gather  : SDNode<"X86ISD::MGATHER",  SDTMaskedGather,
                        [SDNPHasChain, SDNPMayLoad, SDNPMemOperand]>;
@@ -1135,9 +1133,4 @@ def masked_truncstore_s_vi32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
 def masked_truncstore_us_vi32 : PatFrag<(ops node:$src1, node:$src2, node:$src3),
                                (X86MTruncUSStore node:$src1, node:$src2, node:$src3), [{
   return cast<MaskedTruncUSStoreSDNode>(N)->getMemoryVT().getScalarType() == MVT::i32;
-}]>;
-
-def assertzext_i1 :
-  PatFrag<(ops node:$src), (assertzext node:$src), [{
-    return cast<VTSDNode>(N->getOperand(1))->getVT() == MVT::i1;
 }]>;

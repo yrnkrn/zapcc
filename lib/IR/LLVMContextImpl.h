@@ -990,24 +990,26 @@ template <> struct MDNodeKeyImpl<DIImportedEntity> {
   unsigned Tag;
   Metadata *Scope;
   Metadata *Entity;
+  Metadata *File;
   unsigned Line;
   MDString *Name;
 
-  MDNodeKeyImpl(unsigned Tag, Metadata *Scope, Metadata *Entity, unsigned Line,
-                MDString *Name)
-      : Tag(Tag), Scope(Scope), Entity(Entity), Line(Line), Name(Name) {}
+  MDNodeKeyImpl(unsigned Tag, Metadata *Scope, Metadata *Entity, Metadata *File,
+                unsigned Line, MDString *Name)
+      : Tag(Tag), Scope(Scope), Entity(Entity), File(File), Line(Line),
+        Name(Name) {}
   MDNodeKeyImpl(const DIImportedEntity *N)
       : Tag(N->getTag()), Scope(N->getRawScope()), Entity(N->getRawEntity()),
-        Line(N->getLine()), Name(N->getRawName()) {}
+        File(N->getRawFile()), Line(N->getLine()), Name(N->getRawName()) {}
 
   bool isKeyOf(const DIImportedEntity *RHS) const {
     return Tag == RHS->getTag() && Scope == RHS->getRawScope() &&
-           Entity == RHS->getRawEntity() && Line == RHS->getLine() &&
-           Name == RHS->getRawName();
+           Entity == RHS->getRawEntity() && File == RHS->getFile() &&
+           Line == RHS->getLine() && Name == RHS->getRawName();
   }
 
   unsigned getHashValue() const {
-    return hash_combine(Tag, Scope, Entity, Line, Name);
+    return hash_combine(Tag, Scope, Entity, File, Line, Name);
   }
 };
 
@@ -1296,6 +1298,20 @@ public:
   StringMapEntry<uint32_t> *getOrInsertBundleTag(StringRef Tag);
   void getOperandBundleTags(SmallVectorImpl<StringRef> &Tags) const;
   uint32_t getOperandBundleTagID(StringRef Tag) const;
+
+  /// A set of interned synchronization scopes.  The StringMap maps
+  /// synchronization scope names to their respective synchronization scope IDs.
+  StringMap<SyncScope::ID> SSC;
+
+  /// getOrInsertSyncScopeID - Maps synchronization scope name to
+  /// synchronization scope ID.  Every synchronization scope registered with
+  /// LLVMContext has unique ID except pre-defined ones.
+  SyncScope::ID getOrInsertSyncScopeID(StringRef SSN);
+
+  /// getSyncScopeNames - Populates client supplied SmallVector with
+  /// synchronization scope names registered with LLVMContext.  Synchronization
+  /// scope names are ordered by increasing synchronization scope IDs.
+  void getSyncScopeNames(SmallVectorImpl<StringRef> &SSNs) const;
 
   /// Maintain the GC name for each function.
   ///

@@ -70,6 +70,49 @@ void Sema::ActOnTranslationUnitScope(Scope *S) {
   PushDeclContext(S, Context.getTranslationUnitDecl());
 }
 
+namespace clang {
+namespace sema {
+
+class SemaPPCallbacks : public PPCallbacks {
+  Sema *S = nullptr;
+  llvm::SmallVector<SourceLocation, 8> IncludeStack;
+
+public:
+  void set(Sema &S) { this->S = &S; }
+
+  void reset() { S = nullptr; }
+
+  virtual void FileChanged(SourceLocation Loc, FileChangeReason Reason,
+                           SrcMgr::CharacteristicKind FileType,
+                           FileID PrevFID) override {
+    if (!S)
+      return;
+    switch (Reason) {
+    case EnterFile: {
+      SourceManager &SM = S->getSourceManager();
+      SourceLocation IncludeLoc = SM.getIncludeLoc(SM.getFileID(Loc));
+      if (IncludeLoc.isValid()) {
+        IncludeStack.push_back(IncludeLoc);
+        S->DiagnoseNonDefaultPragmaPack(
+            Sema::PragmaPackDiagnoseKind::NonDefaultStateAtInclude, IncludeLoc);
+      }
+      break;
+    }
+    case ExitFile:
+      if (!IncludeStack.empty())
+        S->DiagnoseNonDefaultPragmaPack(
+            Sema::PragmaPackDiagnoseKind::ChangedStateAtExit,
+            IncludeStack.pop_back_val());
+      break;
+    default:
+      break;
+    }
+  }
+};
+
+} // end namespace sema
+} // end namespace clang
+
 Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
            TranslationUnitKind TUKind, CodeCompleteConsumer *CodeCompleter)
     : ExternalSource(nullptr), isMultiplexExternalSource(false),
@@ -123,6 +166,12 @@ Sema::Sema(Preprocessor &pp, ASTContext &ctxt, ASTConsumer &consumer,
 
   // Initilization of data sharing attributes stack for OpenMP
   InitDataSharingAttributesStack();
+
+  std::unique_ptr<sema::SemaPPCallbacks> Callbacks =
+      llvm::make_unique<sema::SemaPPCallbacks>();
+  SemaPPCallbackHandler = Callbacks.get();
+  PP.addPPCallbacks(std::move(Callbacks));
+  SemaPPCallbackHandler->set(*this);
 }
 
 void Sema::addImplicitTypedef(StringRef Name, QualType T) {
@@ -567,6 +616,9 @@ void Sema::getUndefinedButUsed(
     // __attribute__((weakref)) is basically a definition.
     if (ND->hasAttr<WeakRefAttr>()) continue;
 
+    if (isa<CXXDeductionGuideDecl>(ND))
+      continue;
+
     if (FunctionDecl *FD = dyn_cast<FunctionDecl>(ND)) {
       if (FD->isDefined())
         continue;
@@ -730,6 +782,18 @@ void Sema::emitAndClearUnusedLocalTypedefWarnings() {
   UnusedLocalTypedefNameCandidates.clear();
 }
 
+/// This is called before the very first declaration in the translation unit
+/// is parsed. Note that the ASTContext may have already injected some
+/// declarations.
+void Sema::ActOnStartOfTranslationUnit() {
+  if (getLangOpts().ModulesTS) {
+    // We start in the global module; all those declarations are implicitly
+    // module-private (though they do not have module linkage).
+    Context.getTranslationUnitDecl()->setModuleOwnershipKind(
+        Decl::ModuleOwnershipKind::ModulePrivate);
+  }
+}
+
 /// ActOnEndOfTranslationUnit - This is called at the very end of the
 /// translation unit when EOF is reached and all but the top-level scope is
 /// popped.
@@ -779,6 +843,7 @@ void Sema::ActOnEndOfTranslationUnit() {
     CheckDelayedMemberExceptionSpecs();
   }
 
+  DiagnoseUnterminatedPragmaPack();
   DiagnoseUnterminatedPragmaAttribute();
 
   // All delayed member exception specs should be checked or we end up accepting
@@ -863,7 +928,8 @@ void Sema::ActOnEndOfTranslationUnit() {
     emitAndClearUnusedLocalTypedefWarnings();
 
     // Modules don't need any of the checking below.
-    TUScope = nullptr;
+    if (!PP.isIncrementalProcessingEnabled())
+      TUScope = nullptr;
     return;
   }
 

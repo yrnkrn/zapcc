@@ -71,18 +71,15 @@ SVal SimpleSValBuilder::dispatchCast(SVal Val, QualType CastTy) {
 }
 
 SVal SimpleSValBuilder::evalCastFromNonLoc(NonLoc val, QualType castTy) {
-
   bool isLocType = Loc::isLocType(castTy);
-
   if (val.getAs<nonloc::PointerToMember>())
     return val;
 
   if (Optional<nonloc::LocAsInteger> LI = val.getAs<nonloc::LocAsInteger>()) {
     if (isLocType)
       return LI->getLoc();
-
     // FIXME: Correctly support promotions/truncations.
-    unsigned castSize = Context.getTypeSize(castTy);
+    unsigned castSize = Context.getIntWidth(castTy);
     if (castSize == LI->getNumBits())
       return val;
     return makeLocAsInteger(LI->getLoc(), castSize);
@@ -173,7 +170,7 @@ SVal SimpleSValBuilder::evalCastFromLoc(Loc val, QualType castTy) {
   }
 
   if (castTy->isIntegralOrEnumerationType()) {
-    unsigned BitWidth = Context.getTypeSize(castTy);
+    unsigned BitWidth = Context.getIntWidth(castTy);
 
     if (!val.getAs<loc::ConcreteInt>())
       return makeLocAsInteger(val, BitWidth);
@@ -1019,7 +1016,8 @@ SVal SimpleSValBuilder::simplifySVal(ProgramStateRef State, SVal V) {
               SVB.getKnownValue(State, nonloc::SymbolVal(S)))
         return Loc::isLocType(S->getType()) ? (SVal)SVB.makeIntLocVal(*I)
                                             : (SVal)SVB.makeIntVal(*I);
-      return nonloc::SymbolVal(S);
+      return Loc::isLocType(S->getType()) ? (SVal)SVB.makeLoc(S) 
+                                          : nonloc::SymbolVal(S);
     }
 
     // TODO: Support SymbolCast. Support IntSymExpr when/if we actually

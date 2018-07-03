@@ -347,7 +347,6 @@ bb7:                                              ; preds = %bb4
 
 ; CHECK: v_cmp_neq_f32_e32 vcc, 0,
 ; CHECK: s_and_saveexec_b64 s{{\[[0-9]+:[0-9]+\]}}, vcc
-; CHECK: s_xor_b64 s{{\[[0-9]+:[0-9]+\]}}, exec
 ; CHECK: mask branch [[END:BB[0-9]+_[0-9]+]]
 ; CHECK-NOT: branch
 
@@ -355,7 +354,6 @@ bb7:                                              ; preds = %bb4
 ; CHECK: buffer_store_dword
 
 ; CHECK: [[END]]:
-; CHECK: s_or_b64 exec, exec
 ; CHECK: s_endpgm
 define amdgpu_ps void @if_after_kill_block(float %arg, float %arg1, <4 x float> %arg2) #0 {
 bb:

@@ -394,11 +394,14 @@ shrd  %cl, %bx, (%rax)
 sldt	%ecx
 sldt	%cx
 
-// CHECK: lcalll	*3135175374 
-// CHECK: ljmpl	*3135175374
-lcall	*0xbadeface
-ljmp	*0xbadeface
-
+// CHECK: lcalll *3135175374 
+// CHECK: ljmpl  *3135175374
+// CHECK: lcalll *(%rax)
+// CHECK: ljmpl *(%rax)
+lcall  *0xbadeface
+ljmp *0xbadeface
+lcall *(%rax)
+ljmpl *(%rax)
 
 // rdar://8444631
 // CHECK: enter	$31438, $0
@@ -1509,3 +1512,11 @@ vmovq %xmm0, %rax
 // CHECK: 	movl %r15d, (%r15,%r15)
 // CHECK:  encoding: [0x47,0x89,0x3c,0x3f]
 movl %r15d, (%r15,%r15)
+
+// CHECK: nopq	3735928559(%rbx,%rcx,8)
+// CHECK:  encoding: [0x48,0x0f,0x1f,0x84,0xcb,0xef,0xbe,0xad,0xde]
+nopq	0xdeadbeef(%rbx,%rcx,8)
+
+// CHECK: nopq	%rax
+// CHECK:  encoding: [0x48,0x0f,0x1f,0xc0]
+nopq	%rax

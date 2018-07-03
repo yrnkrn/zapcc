@@ -172,6 +172,17 @@ bool AnalyzerOptions::includeTemporaryDtorsInCFG() {
                           /* Default = */ false);
 }
 
+bool AnalyzerOptions::includeImplicitDtorsInCFG() {
+  return getBooleanOption(IncludeImplicitDtorsInCFG,
+                          "cfg-implicit-dtors",
+                          /* Default = */ true);
+}
+
+bool AnalyzerOptions::includeLifetimeInCFG() {
+  return getBooleanOption(IncludeLifetimeInCFG, "cfg-lifetime",
+                          /* Default = */ false);
+}
+
 bool AnalyzerOptions::mayInlineCXXStandardLibrary() {
   return getBooleanOption(InlineCXXStandardLibrary,
                           "c++-stdlib-inlining",
@@ -362,6 +373,12 @@ bool AnalyzerOptions::shouldWidenLoops() {
   if (!WidenLoops.hasValue())
     WidenLoops = getBooleanOption("widen-loops", /*Default=*/false);
   return WidenLoops.getValue();
+}
+
+bool AnalyzerOptions::shouldUnrollLoops() {
+  if (!UnrollLoops.hasValue())
+    UnrollLoops = getBooleanOption("unroll-loops", /*Default=*/false);
+  return UnrollLoops.getValue();
 }
 
 bool AnalyzerOptions::shouldDisplayNotesAsEvents() {

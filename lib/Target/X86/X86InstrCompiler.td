@@ -1627,7 +1627,13 @@ def : Pat<(shl GR16:$src1, (i8 1)), (ADD16rr GR16:$src1, GR16:$src1)>;
 def : Pat<(shl GR32:$src1, (i8 1)), (ADD32rr GR32:$src1, GR32:$src1)>;
 def : Pat<(shl GR64:$src1, (i8 1)), (ADD64rr GR64:$src1, GR64:$src1)>;
 
-// Helper imms that check if a mask doesn't change significant shift bits.
+// Helper imms to check if a mask doesn't change significant shift/rotate bits.
+def immShift8 : ImmLeaf<i8, [{
+  return countTrailingOnes<uint64_t>(Imm) >= 3;
+}]>;
+def immShift16 : ImmLeaf<i8, [{
+  return countTrailingOnes<uint64_t>(Imm) >= 4;
+}]>;
 def immShift32 : ImmLeaf<i8, [{
   return countTrailingOnes<uint64_t>(Imm) >= 5;
 }]>;
@@ -1654,15 +1660,45 @@ multiclass MaskedShiftAmountPats<SDNode frag, string name> {
   // (shift x (and y, 63)) ==> (shift x, y)
   def : Pat<(frag GR64:$src1, (and CL, immShift64)),
             (!cast<Instruction>(name # "64rCL") GR64:$src1)>;
-  def : Pat<(store (frag (loadi64 addr:$dst), (and CL, 63)), addr:$dst),
+  def : Pat<(store (frag (loadi64 addr:$dst), (and CL, immShift64)), addr:$dst),
             (!cast<Instruction>(name # "64mCL") addr:$dst)>;
 }
 
 defm : MaskedShiftAmountPats<shl, "SHL">;
 defm : MaskedShiftAmountPats<srl, "SHR">;
 defm : MaskedShiftAmountPats<sra, "SAR">;
-defm : MaskedShiftAmountPats<rotl, "ROL">;
-defm : MaskedShiftAmountPats<rotr, "ROR">;
+
+// ROL/ROR instructions allow a stronger mask optimization than shift for 8- and
+// 16-bit. We can remove a mask of any (bitwidth - 1) on the rotation amount
+// because over-rotating produces the same result. This is noted in the Intel
+// docs with: "tempCOUNT <- (COUNT & COUNTMASK) MOD SIZE". Masking the rotation
+// amount could affect EFLAGS results, but that does not matter because we are
+// not tracking flags for these nodes.
+multiclass MaskedRotateAmountPats<SDNode frag, string name> {
+  // (rot x (and y, BitWidth - 1)) ==> (rot x, y)
+  def : Pat<(frag GR8:$src1, (and CL, immShift8)),
+  (!cast<Instruction>(name # "8rCL") GR8:$src1)>;
+  def : Pat<(frag GR16:$src1, (and CL, immShift16)),
+  (!cast<Instruction>(name # "16rCL") GR16:$src1)>;
+  def : Pat<(frag GR32:$src1, (and CL, immShift32)),
+  (!cast<Instruction>(name # "32rCL") GR32:$src1)>;
+  def : Pat<(store (frag (loadi8 addr:$dst), (and CL, immShift8)), addr:$dst),
+  (!cast<Instruction>(name # "8mCL") addr:$dst)>;
+  def : Pat<(store (frag (loadi16 addr:$dst), (and CL, immShift16)), addr:$dst),
+  (!cast<Instruction>(name # "16mCL") addr:$dst)>;
+  def : Pat<(store (frag (loadi32 addr:$dst), (and CL, immShift32)), addr:$dst),
+  (!cast<Instruction>(name # "32mCL") addr:$dst)>;
+
+  // (rot x (and y, 63)) ==> (rot x, y)
+  def : Pat<(frag GR64:$src1, (and CL, immShift64)),
+  (!cast<Instruction>(name # "64rCL") GR64:$src1)>;
+  def : Pat<(store (frag (loadi64 addr:$dst), (and CL, immShift64)), addr:$dst),
+  (!cast<Instruction>(name # "64mCL") addr:$dst)>;
+}
+
+
+defm : MaskedRotateAmountPats<rotl, "ROL">;
+defm : MaskedRotateAmountPats<rotr, "ROR">;
 
 // Double shift amount is implicitly masked.
 multiclass MaskedDoubleShiftAmountPats<SDNode frag, string name> {
@@ -1679,6 +1715,66 @@ multiclass MaskedDoubleShiftAmountPats<SDNode frag, string name> {
 
 defm : MaskedDoubleShiftAmountPats<X86shld, "SHLD">;
 defm : MaskedDoubleShiftAmountPats<X86shrd, "SHRD">;
+
+let Predicates = [HasBMI2] in {
+  let AddedComplexity = 1 in {
+    def : Pat<(sra GR32:$src1, (and GR8:$src2, immShift32)),
+              (SARX32rr GR32:$src1,
+                        (INSERT_SUBREG
+                          (i32 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+    def : Pat<(sra GR64:$src1, (and GR8:$src2, immShift64)),
+              (SARX64rr GR64:$src1,
+                        (INSERT_SUBREG
+                          (i64 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+
+    def : Pat<(srl GR32:$src1, (and GR8:$src2, immShift32)),
+              (SHRX32rr GR32:$src1,
+                        (INSERT_SUBREG
+                          (i32 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+    def : Pat<(srl GR64:$src1, (and GR8:$src2, immShift64)),
+              (SHRX64rr GR64:$src1,
+                        (INSERT_SUBREG
+                          (i64 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+
+    def : Pat<(shl GR32:$src1, (and GR8:$src2, immShift32)),
+              (SHLX32rr GR32:$src1,
+                        (INSERT_SUBREG
+                          (i32 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+    def : Pat<(shl GR64:$src1, (and GR8:$src2, immShift64)),
+              (SHLX64rr GR64:$src1,
+                        (INSERT_SUBREG
+                          (i64 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+  }
+
+  let AddedComplexity = -20 in {
+    def : Pat<(sra (loadi32 addr:$src1), (and GR8:$src2, immShift32)),
+              (SARX32rm addr:$src1,
+                        (INSERT_SUBREG
+                          (i32 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+    def : Pat<(sra (loadi64 addr:$src1), (and GR8:$src2, immShift64)),
+              (SARX64rm addr:$src1,
+                        (INSERT_SUBREG
+                          (i64 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+
+    def : Pat<(srl (loadi32 addr:$src1), (and GR8:$src2, immShift32)),
+              (SHRX32rm addr:$src1,
+                        (INSERT_SUBREG
+                          (i32 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+    def : Pat<(srl (loadi64 addr:$src1), (and GR8:$src2, immShift64)),
+              (SHRX64rm addr:$src1,
+                        (INSERT_SUBREG
+                          (i64 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+
+    def : Pat<(shl (loadi32 addr:$src1), (and GR8:$src2, immShift32)),
+              (SHLX32rm addr:$src1,
+                        (INSERT_SUBREG
+                          (i32 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+    def : Pat<(shl (loadi64 addr:$src1), (and GR8:$src2, immShift64)),
+              (SHLX64rm addr:$src1,
+                        (INSERT_SUBREG
+                          (i64 (IMPLICIT_DEF)), GR8:$src2, sub_8bit))>;
+  }
+}
 
 // (anyext (setcc_carry)) -> (setcc_carry)
 def : Pat<(i16 (anyext (i8 (X86setcc_c X86_COND_B, EFLAGS)))),

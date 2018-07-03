@@ -41,8 +41,6 @@ std::string DescribePC(const char *SymbolizedFMT, uintptr_t PC);
 
 unsigned NumberOfCpuCores();
 
-bool ExecuteCommandAndReadOutput(const std::string &Command, std::string *Out);
-
 // Platform specific functions.
 void SetSignalHandler(const FuzzingOptions& Options);
 
@@ -67,9 +65,19 @@ inline std::string CloneArgsWithoutX(const std::vector<std::string> &Args,
   return CloneArgsWithoutX(Args, X, X);
 }
 
+inline std::pair<std::string, std::string> SplitBefore(std::string X,
+                                                       std::string S) {
+  auto Pos = S.find(X);
+  if (Pos == std::string::npos)
+    return std::make_pair(S, "");
+  return std::make_pair(S.substr(0, Pos), S.substr(Pos));
+}
+
 std::string DisassembleCmd(const std::string &FileName);
 
 std::string SearchRegexCmd(const std::string &Regex);
+
+size_t SimpleFastHash(const uint8_t *Data, size_t Size);
 
 }  // namespace fuzzer
 

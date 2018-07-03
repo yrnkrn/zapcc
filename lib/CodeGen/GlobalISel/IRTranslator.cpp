@@ -345,7 +345,7 @@ bool IRTranslator::translateLoad(const User &U, MachineIRBuilder &MIRBuilder) {
       *MF->getMachineMemOperand(MachinePointerInfo(LI.getPointerOperand()),
                                 Flags, DL->getTypeStoreSize(LI.getType()),
                                 getMemOpAlignment(LI), AAMDNodes(), nullptr,
-                                LI.getSynchScope(), LI.getOrdering()));
+                                LI.getSyncScopeID(), LI.getOrdering()));
   return true;
 }
 
@@ -363,7 +363,7 @@ bool IRTranslator::translateStore(const User &U, MachineIRBuilder &MIRBuilder) {
       *MF->getMachineMemOperand(
           MachinePointerInfo(SI.getPointerOperand()), Flags,
           DL->getTypeStoreSize(SI.getValueOperand()->getType()),
-          getMemOpAlignment(SI), AAMDNodes(), nullptr, SI.getSynchScope(),
+          getMemOpAlignment(SI), AAMDNodes(), nullptr, SI.getSyncScopeID(),
           SI.getOrdering()));
   return true;
 }
@@ -682,23 +682,16 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
     if (!V) {
       // Currently the optimizer can produce this; insert an undef to
       // help debugging.  Probably the optimizer should not do this.
-      MIRBuilder.buildIndirectDbgValue(0, DI.getOffset(), DI.getVariable(),
-                                       DI.getExpression());
+      MIRBuilder.buildIndirectDbgValue(0, DI.getVariable(), DI.getExpression());
     } else if (const auto *CI = dyn_cast<Constant>(V)) {
-      MIRBuilder.buildConstDbgValue(*CI, DI.getOffset(), DI.getVariable(),
-                                    DI.getExpression());
+      MIRBuilder.buildConstDbgValue(*CI, DI.getVariable(), DI.getExpression());
     } else {
       unsigned Reg = getOrCreateVReg(*V);
       // FIXME: This does not handle register-indirect values at offset 0. The
       // direct/indirect thing shouldn't really be handled by something as
       // implicit as reg+noreg vs reg+imm in the first palce, but it seems
       // pretty baked in right now.
-      if (DI.getOffset() != 0)
-        MIRBuilder.buildIndirectDbgValue(Reg, DI.getOffset(), DI.getVariable(),
-                                         DI.getExpression());
-      else
-        MIRBuilder.buildDirectDbgValue(Reg, DI.getVariable(),
-                                       DI.getExpression());
+      MIRBuilder.buildDirectDbgValue(Reg, DI.getVariable(), DI.getExpression());
     }
     return true;
   }

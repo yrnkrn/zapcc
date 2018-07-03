@@ -1729,6 +1729,21 @@ substTemplateTypeParmType() matches the type of 't' but not '1'
 </pre></td></tr>
 
 
+<tr><td>Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1Type.html">Type</a>&gt;</td><td class="name" onclick="toggle('tagType0')"><a name="tagType0Anchor">tagType</a></td><td>Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1TagType.html">TagType</a>&gt;...</td></tr>
+<tr><td colspan="4" class="doc" id="tagType0"><pre>Matches tag types (record and enum types).
+
+Given
+  enum E {};
+  class C {};
+
+  E e;
+  C c;
+
+tagType() matches the type of the variable declarations of both e
+and c.
+</pre></td></tr>
+
+
 <tr><td>Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1Type.html">Type</a>&gt;</td><td class="name" onclick="toggle('templateSpecializationType0')"><a name="templateSpecializationType0Anchor">templateSpecializationType</a></td><td>Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1TemplateSpecializationType.html">TemplateSpecializationType</a>&gt;...</td></tr>
 <tr><td colspan="4" class="doc" id="templateSpecializationType0"><pre>Matches template specialization types.
 
@@ -1871,6 +1886,14 @@ floatLiteral(equals(3.14)) and floatLiteral(equals(314e-2))
   match 3.14
 integerLiteral(equals(42))
   matches 42
+
+Note that you cannot directly match a negative numeric literal because the
+minus sign is not part of the literal: It is a unary operator whose operand
+is the positive numeric literal. Instead, you must use a unaryOperator()
+matcher to match the minus sign:
+
+unaryOperator(hasOperatorName("-"),
+              hasUnaryOperand(integerLiteral(equals(13))))
 
 Usable as: Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CharacterLiteral.html">CharacterLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CXXBoolLiteralExpr.html">CXXBoolLiteralExpr</a>&gt;,
            Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1FloatingLiteral.html">FloatingLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1IntegerLiteral.html">IntegerLiteral</a>&gt;
@@ -2327,6 +2350,14 @@ floatLiteral(equals(3.14)) and floatLiteral(equals(314e-2))
 integerLiteral(equals(42))
   matches 42
 
+Note that you cannot directly match a negative numeric literal because the
+minus sign is not part of the literal: It is a unary operator whose operand
+is the positive numeric literal. Instead, you must use a unaryOperator()
+matcher to match the minus sign:
+
+unaryOperator(hasOperatorName("-"),
+              hasUnaryOperand(integerLiteral(equals(13))))
+
 Usable as: Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CharacterLiteral.html">CharacterLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CXXBoolLiteralExpr.html">CXXBoolLiteralExpr</a>&gt;,
            Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1FloatingLiteral.html">FloatingLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1IntegerLiteral.html">IntegerLiteral</a>&gt;
 </pre></td></tr>
@@ -2582,6 +2613,14 @@ floatLiteral(equals(3.14)) and floatLiteral(equals(314e-2))
   match 3.14
 integerLiteral(equals(42))
   matches 42
+
+Note that you cannot directly match a negative numeric literal because the
+minus sign is not part of the literal: It is a unary operator whose operand
+is the positive numeric literal. Instead, you must use a unaryOperator()
+matcher to match the minus sign:
+
+unaryOperator(hasOperatorName("-"),
+              hasUnaryOperand(integerLiteral(equals(13))))
 
 Usable as: Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CharacterLiteral.html">CharacterLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CXXBoolLiteralExpr.html">CXXBoolLiteralExpr</a>&gt;,
            Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1FloatingLiteral.html">FloatingLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1IntegerLiteral.html">IntegerLiteral</a>&gt;
@@ -2865,6 +2904,14 @@ floatLiteral(equals(3.14)) and floatLiteral(equals(314e-2))
   match 3.14
 integerLiteral(equals(42))
   matches 42
+
+Note that you cannot directly match a negative numeric literal because the
+minus sign is not part of the literal: It is a unary operator whose operand
+is the positive numeric literal. Instead, you must use a unaryOperator()
+matcher to match the minus sign:
+
+unaryOperator(hasOperatorName("-"),
+              hasUnaryOperand(integerLiteral(equals(13))))
 
 Usable as: Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CharacterLiteral.html">CharacterLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1CXXBoolLiteralExpr.html">CXXBoolLiteralExpr</a>&gt;,
            Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1FloatingLiteral.html">FloatingLiteral</a>&gt;, Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1IntegerLiteral.html">IntegerLiteral</a>&gt;
@@ -4511,6 +4558,18 @@ classTemplateSpecializationDecl(hasAnyTemplateArgument(
 
 functionDecl(hasAnyTemplateArgument(refersToType(asString("int"))))
   matches the specialization f&lt;int&gt;
+</pre></td></tr>
+
+
+<tr><td>Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1ClassTemplateSpecializationDecl.html">ClassTemplateSpecializationDecl</a>&gt;</td><td class="name" onclick="toggle('hasSpecializedTemplate0')"><a name="hasSpecializedTemplate0Anchor">hasSpecializedTemplate</a></td><td>Matcher&lt;<a href="http://clang.llvm.org/doxygen/classclang_1_1ClassTemplateDecl.html">ClassTemplateDecl</a>&gt; InnerMatcher</td></tr>
+<tr><td colspan="4" class="doc" id="hasSpecializedTemplate0"><pre>Matches the specialized template of a specialization declaration.
+
+Given
+  tempalate&lt;typename T&gt; class A {};
+  typedef A&lt;int&gt; B;
+classTemplateSpecializationDecl(hasSpecializedTemplate(classTemplateDecl()))
+  matches 'B' with classTemplateDecl() matching the class template
+  declaration of 'A'.
 </pre></td></tr>
 
 

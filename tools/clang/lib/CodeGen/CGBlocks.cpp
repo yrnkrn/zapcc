@@ -16,6 +16,7 @@
 #include "CGObjCRuntime.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
+#include "ConstantEmitter.h"
 #include "clang/CodeGen/ConstantInitBuilder.h"
 #include "clang/AST/DeclObjC.h"
 #include "llvm/ADT/SmallSet.h"
@@ -291,7 +292,7 @@ static llvm::Constant *tryCaptureAsConstant(CodeGenModule &CGM,
   const Expr *init = var->getInit();
   if (!init) return nullptr;
 
-  return CGM.EmitConstantInit(*var, CGF);
+  return ConstantEmitter(CGM, CGF).tryEmitAbstractForInitializer(*var);
 }
 
 /// Get the low bit of a nonzero character count.  This is the
@@ -737,9 +738,9 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
   llvm::Constant *isa =
       (!CGM.getContext().getLangOpts().OpenCL)
           ? CGM.getNSConcreteStackBlock()
-          : CGM.getNullPointer(cast<llvm::PointerType>(
-                                   CGM.getNSConcreteStackBlock()->getType()),
-                               QualType(getContext().VoidPtrTy));
+          : CGM.getNullPointer(VoidPtrPtrTy,
+                               CGM.getContext().getPointerType(
+                                   QualType(CGM.getContext().VoidPtrTy)));
   isa = llvm::ConstantExpr::getBitCast(isa, VoidPtrTy);
 
   // Build the block descriptor.
@@ -1142,12 +1143,11 @@ static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
   auto fields = builder.beginStruct();
 
   // isa
-  fields.add(
-      (!CGM.getContext().getLangOpts().OpenCL)
-          ? CGM.getNSConcreteGlobalBlock()
-          : CGM.getNullPointer(cast<llvm::PointerType>(
-                                   CGM.getNSConcreteGlobalBlock()->getType()),
-                               QualType(CGM.getContext().VoidPtrTy)));
+  fields.add((!CGM.getContext().getLangOpts().OpenCL)
+                 ? CGM.getNSConcreteGlobalBlock()
+                 : CGM.getNullPointer(CGM.VoidPtrPtrTy,
+                                      CGM.getContext().getPointerType(QualType(
+                                          CGM.getContext().VoidPtrTy))));
 
   // __flags
   BlockFlags flags = BLOCK_IS_GLOBAL | BLOCK_HAS_SIGNATURE;

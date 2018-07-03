@@ -343,6 +343,8 @@ class MipsAsmParser : public MCTargetAsmParser {
   bool parseSetPushDirective();
   bool parseSetSoftFloatDirective();
   bool parseSetHardFloatDirective();
+  bool parseSetMtDirective();
+  bool parseSetNoMtDirective();
 
   bool parseSetAssignment();
 
@@ -627,6 +629,9 @@ public:
 
   bool useSoftFloat() const {
     return getSTI().getFeatureBits()[Mips::FeatureSoftFloat];
+  }
+  bool hasMT() const {
+    return getSTI().getFeatureBits()[Mips::FeatureMT];
   }
 
   /// Warn if RegIndex is the same as the current AT.
@@ -1966,6 +1971,7 @@ bool MipsAsmParser::processInstruction(MCInst &Inst, SMLoc IDLoc,
   case Mips::SDIV_MM:
     FirstOp = 0;
     SecondOp = 1;
+    LLVM_FALLTHROUGH;
   case Mips::SDivMacro:
   case Mips::DSDivMacro:
   case Mips::UDivMacro:
@@ -5433,12 +5439,13 @@ bool MipsAsmParser::isEvaluated(const MCExpr *Expr) {
     return true;
   case MCExpr::SymbolRef:
     return (cast<MCSymbolRefExpr>(Expr)->getKind() != MCSymbolRefExpr::VK_None);
-  case MCExpr::Binary:
-    if (const MCBinaryExpr *BE = dyn_cast<MCBinaryExpr>(Expr)) {
-      if (!isEvaluated(BE->getLHS()))
-        return false;
-      return isEvaluated(BE->getRHS());
-    }
+  case MCExpr::Binary: {
+    const MCBinaryExpr *BE = dyn_cast<MCBinaryExpr>(Expr);
+    assert(BE && "Binary expression is not a binary expression?");
+    if (!isEvaluated(BE->getLHS()))
+      return false;
+    return isEvaluated(BE->getRHS());
+  }
   case MCExpr::Unary:
     return isEvaluated(cast<MCUnaryExpr>(Expr)->getSubExpr());
   case MCExpr::Target:
@@ -6329,6 +6336,39 @@ bool MipsAsmParser::parseSetNoOddSPRegDirective() {
   return false;
 }
 
+bool MipsAsmParser::parseSetMtDirective() {
+  MCAsmParser &Parser = getParser();
+  Parser.Lex(); // Eat "mt".
+
+  // If this is not the end of the statement, report an error.
+  if (getLexer().isNot(AsmToken::EndOfStatement)) {
+    reportParseError("unexpected token, expected end of statement");
+    return false;
+  }
+
+  setFeatureBits(Mips::FeatureMT, "mt");
+  getTargetStreamer().emitDirectiveSetMt();
+  Parser.Lex(); // Consume the EndOfStatement.
+  return false;
+}
+
+bool MipsAsmParser::parseSetNoMtDirective() {
+  MCAsmParser &Parser = getParser();
+  Parser.Lex(); // Eat "nomt".
+
+  // If this is not the end of the statement, report an error.
+  if (getLexer().isNot(AsmToken::EndOfStatement)) {
+    reportParseError("unexpected token, expected end of statement");
+    return false;
+  }
+
+  clearFeatureBits(Mips::FeatureMT, "mt");
+
+  getTargetStreamer().emitDirectiveSetNoMt();
+  Parser.Lex(); // Consume the EndOfStatement.
+  return false;
+}
+
 bool MipsAsmParser::parseSetPopDirective() {
   MCAsmParser &Parser = getParser();
   SMLoc Loc = getLexer().getLoc();
@@ -6829,6 +6869,10 @@ bool MipsAsmParser::parseDirectiveSet() {
     return parseSetMsaDirective();
   } else if (Tok.getString() == "nomsa") {
     return parseSetNoMsaDirective();
+  } else if (Tok.getString() == "mt") {
+    return parseSetMtDirective();
+  } else if (Tok.getString() == "nomt") {
+    return parseSetNoMtDirective();
   } else if (Tok.getString() == "softfloat") {
     return parseSetSoftFloatDirective();
   } else if (Tok.getString() == "hardfloat") {
@@ -7078,6 +7122,7 @@ bool MipsAsmParser::parseSSectionDirective(StringRef Section, unsigned Type) {
 ///  ::= .module fp=value
 ///  ::= .module softfloat
 ///  ::= .module hardfloat
+///  ::= .module mt
 bool MipsAsmParser::parseDirectiveModule() {
   MCAsmParser &Parser = getParser();
   MCAsmLexer &Lexer = getLexer();
@@ -7169,6 +7214,25 @@ bool MipsAsmParser::parseDirectiveModule() {
     // If generating ELF, don't do anything (the .MIPS.abiflags section gets
     // emitted later).
     getTargetStreamer().emitDirectiveModuleHardFloat();
+
+    // If this is not the end of the statement, report an error.
+    if (getLexer().isNot(AsmToken::EndOfStatement)) {
+      reportParseError("unexpected token, expected end of statement");
+      return false;
+    }
+
+    return false; // parseDirectiveModule has finished successfully.
+  } else if (Option == "mt") {
+    setModuleFeatureBits(Mips::FeatureMT, "mt");
+
+    // Synchronize the ABI Flags information with the FeatureBits information we
+    // updated above.
+    getTargetStreamer().updateABIInfo(*this);
+
+    // If printing assembly, use the recently updated ABI Flags information.
+    // If generating ELF, don't do anything (the .MIPS.abiflags section gets
+    // emitted later).
+    getTargetStreamer().emitDirectiveModuleMT();
 
     // If this is not the end of the statement, report an error.
     if (getLexer().isNot(AsmToken::EndOfStatement)) {

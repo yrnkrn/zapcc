@@ -23,6 +23,13 @@ class SIReg <string n, bits<16> regIdx = 0> : Register<n>,
 def VCC_LO : SIReg<"vcc_lo", 106>;
 def VCC_HI : SIReg<"vcc_hi", 107>;
 
+// Pseudo-registers: Used as placeholders during isel and immediately
+// replaced, never seeing the verifier.
+def PRIVATE_RSRC_REG : SIReg<"", 0>;
+def FP_REG : SIReg<"", 0>;
+def SP_REG : SIReg<"", 0>;
+def SCRATCH_WAVE_OFFSET_REG : SIReg<"", 0>;
+
 // VCC for 64-bit instructions
 def VCC : RegisterWithSubRegs<"vcc", [VCC_LO, VCC_HI]>,
           DwarfRegAlias<VCC_LO> {
@@ -262,12 +269,29 @@ def VGPR_512 : RegisterTuples<[sub0, sub1, sub2, sub3, sub4, sub5, sub6, sub7,
 //  Register classes used as source and destination
 //===----------------------------------------------------------------------===//
 
+def Pseudo_SReg_32 : RegisterClass<"AMDGPU", [i32, f32, i16, f16, v2i16, v2f16], 32,
+  (add FP_REG, SP_REG, SCRATCH_WAVE_OFFSET_REG)> {
+  let isAllocatable = 0;
+  let CopyCost = -1;
+}
+
+def Pseudo_SReg_128 : RegisterClass<"AMDGPU", [v4i32, v2i64], 32,
+  (add PRIVATE_RSRC_REG)> {
+  let isAllocatable = 0;
+  let CopyCost = -1;
+}
+
 // Subset of SReg_32 without M0 for SMRD instructions and alike.
 // See comments in SIInstructions.td for more info.
 def SReg_32_XM0_XEXEC : RegisterClass<"AMDGPU", [i32, f32, i16, f16, v2i16, v2f16], 32,
   (add SGPR_32, VCC_LO, VCC_HI, FLAT_SCR_LO, FLAT_SCR_HI,
    TTMP_32, TMA_LO, TMA_HI, TBA_LO, TBA_HI, SRC_SHARED_BASE, SRC_SHARED_LIMIT,
    SRC_PRIVATE_BASE, SRC_PRIVATE_LIMIT)> {
+  let AllocationPriority = 7;
+}
+
+def SReg_32_XEXEC_HI : RegisterClass<"AMDGPU", [i32, f32, i16, f16, v2i16, v2f16], 32,
+  (add SReg_32_XM0_XEXEC, EXEC_LO, M0_CLASS)> {
   let AllocationPriority = 7;
 }
 
@@ -278,7 +302,7 @@ def SReg_32_XM0 : RegisterClass<"AMDGPU", [i32, f32, i16, f16, v2i16, v2f16], 32
 
 // Register class for all scalar registers (SGPRs + Special Registers)
 def SReg_32 : RegisterClass<"AMDGPU", [i32, f32, i16, f16, v2i16, v2f16], 32,
-  (add SReg_32_XM0, M0_CLASS, EXEC_LO, EXEC_HI)> {
+  (add SReg_32_XM0, M0_CLASS, EXEC_LO, EXEC_HI, SReg_32_XEXEC_HI)> {
   let AllocationPriority = 7;
 }
 
@@ -314,7 +338,8 @@ def TTMP_128 : RegisterClass<"AMDGPU", [v4i32, v16i8, v2i64], 32, (add TTMP_128R
   let isAllocatable = 0;
 }
 
-def SReg_128 : RegisterClass<"AMDGPU", [v4i32, v16i8, v2i64], 32, (add SGPR_128, TTMP_128)> {
+def SReg_128 : RegisterClass<"AMDGPU", [v4i32, v16i8, v2i64], 32,
+  (add SGPR_128, TTMP_128)> {
   let AllocationPriority = 10;
 }
 
@@ -464,7 +489,9 @@ defm SCSrc : RegInlineOperand<"SReg", "SCSrc"> ;
 
 defm VSrc : RegImmOperand<"VS", "VSrc">;
 
-def VSrc_128 : RegisterOperand<VReg_128>;
+def VSrc_128 : RegisterOperand<VReg_128> {
+  let DecoderMethod = "DecodeVS_128RegisterClass";
+}
 
 //===----------------------------------------------------------------------===//
 //  VSrc_* Operands with an VGPR

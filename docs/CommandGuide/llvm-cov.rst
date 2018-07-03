@@ -207,6 +207,7 @@ OPTIONS
 
  For source regions that are instantiated multiple times, such as templates in
  ``C++``, show each instantiation separately as well as the combined summary.
+ This option is enabled by default.
 
 .. option:: -show-regions
 
@@ -222,12 +223,13 @@ OPTIONS
 
  Enable or disable color output. By default this is autodetected.
 
-.. option:: -arch=<name>
+.. option:: -arch=[*NAMES*]
 
- If the covered binary is a universal binary, select the architecture to use.
- It is an error to specify an architecture that is not included in the
- universal binary or to use an architecture that does not match a
- non-universal binary.
+ Specify a list of architectures such that the Nth entry in the list
+ corresponds to the Nth specified binary. If the covered object is a universal
+ binary, this specifies the architecture to use. It is an error to specify an
+ architecture that is not included in the universal binary or to use an
+ architecture that does not match a non-universal binary.
 
 .. option:: -name=<NAME>
 
@@ -262,6 +264,12 @@ OPTIONS
  The demangler is expected to read a newline-separated list of symbols from
  stdin and write a newline-separated list of the same length to stdout.
 
+.. option:: -num-threads=N, -j=N
+
+ Use N threads to write file reports (only applicable when -output-dir is
+ specified). When N=0, llvm-cov auto-detects an appropriate number of threads to
+ use. This is the default.
+
 .. option:: -line-coverage-gt=<N>
 
  Show code coverage only for functions with line coverage greater than the
@@ -281,6 +289,12 @@ OPTIONS
 
  Show code coverage only for functions with region coverage less than the given
  threshold.
+
+.. option:: -path-equivalence=<from>,<to>
+
+ Map the paths in the coverage data to local source file paths. This allows you
+ to generate the coverage data on one machine, and then use llvm-cov on a
+ different machine where you have the same files on a different path.
 
 .. program:: llvm-cov report
 

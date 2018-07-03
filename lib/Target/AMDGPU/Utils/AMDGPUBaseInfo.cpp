@@ -531,6 +531,10 @@ bool isGFX9(const MCSubtargetInfo &STI) {
   return STI.getFeatureBits()[AMDGPU::FeatureGFX9];
 }
 
+bool isGCN3Encoding(const MCSubtargetInfo &STI) {
+  return STI.getFeatureBits()[AMDGPU::FeatureGCN3Encoding];
+}
+
 bool isSGPR(unsigned Reg, const MCRegisterInfo* TRI) {
   const MCRegisterClass SGPRClass = TRI->getRegClass(AMDGPU::SReg_32RegClassID);
   const unsigned FirstSubReg = TRI->getSubReg(Reg, 1);
@@ -539,23 +543,9 @@ bool isSGPR(unsigned Reg, const MCRegisterInfo* TRI) {
 }
 
 bool isRegIntersect(unsigned Reg0, unsigned Reg1, const MCRegisterInfo* TRI) {
-
-  if (Reg0 == Reg1) {
-    return true;
+  for (MCRegAliasIterator R(Reg0, TRI, true); R.isValid(); ++R) {
+    if (*R == Reg1) return true;
   }
-
-  unsigned SubReg0 = TRI->getSubReg(Reg0, 1);
-  if (SubReg0 == 0) {
-    return TRI->getSubRegIndex(Reg1, Reg0) > 0;
-  }
-
-  for (unsigned Idx = 2; SubReg0 > 0; ++Idx) {
-    if (isRegIntersect(Reg1, SubReg0, TRI)) {
-      return true;
-    }
-    SubReg0 = TRI->getSubReg(Reg0, Idx);
-  }
-
   return false;
 }
 
@@ -744,31 +734,58 @@ bool isInlinableLiteralV216(int32_t Literal, bool HasInv2Pi) {
   return Lo16 == Hi16 && isInlinableLiteral16(Lo16, HasInv2Pi);
 }
 
+bool isArgPassedInSGPR(const Argument *A) {
+  const Function *F = A->getParent();
+
+  // Arguments to compute shaders are never a source of divergence.
+  CallingConv::ID CC = F->getCallingConv();
+  switch (CC) {
+  case CallingConv::AMDGPU_KERNEL:
+  case CallingConv::SPIR_KERNEL:
+    return true;
+  case CallingConv::AMDGPU_VS:
+  case CallingConv::AMDGPU_HS:
+  case CallingConv::AMDGPU_GS:
+  case CallingConv::AMDGPU_PS:
+  case CallingConv::AMDGPU_CS:
+    // For non-compute shaders, SGPR inputs are marked with either inreg or byval.
+    // Everything else is in VGPRs.
+    return F->getAttributes().hasParamAttribute(A->getArgNo(), Attribute::InReg) ||
+           F->getAttributes().hasParamAttribute(A->getArgNo(), Attribute::ByVal);
+  default:
+    // TODO: Should calls support inreg for SGPR inputs?
+    return false;
+  }
+}
+
+// TODO: Should largely merge with AMDGPUTTIImpl::isSourceOfDivergence.
 bool isUniformMMO(const MachineMemOperand *MMO) {
   const Value *Ptr = MMO->getValue();
   // UndefValue means this is a load of a kernel input.  These are uniform.
   // Sometimes LDS instructions have constant pointers.
   // If Ptr is null, then that means this mem operand contains a
   // PseudoSourceValue like GOT.
-  if (!Ptr || isa<UndefValue>(Ptr) || isa<Argument>(Ptr) ||
+  if (!Ptr || isa<UndefValue>(Ptr) ||
       isa<Constant>(Ptr) || isa<GlobalValue>(Ptr))
     return true;
+
+  if (const Argument *Arg = dyn_cast<Argument>(Ptr))
+    return isArgPassedInSGPR(Arg);
 
   const Instruction *I = dyn_cast<Instruction>(Ptr);
   return I && I->getMetadata("amdgpu.uniform");
 }
 
 int64_t getSMRDEncodedOffset(const MCSubtargetInfo &ST, int64_t ByteOffset) {
-  if (isSI(ST) || isCI(ST))
-    return ByteOffset >> 2;
-
-  return ByteOffset;
+  if (isGCN3Encoding(ST))
+    return ByteOffset;
+  return ByteOffset >> 2;
 }
 
 bool isLegalSMRDImmOffset(const MCSubtargetInfo &ST, int64_t ByteOffset) {
   int64_t EncodedOffset = getSMRDEncodedOffset(ST, ByteOffset);
-  return isSI(ST) || isCI(ST) ? isUInt<8>(EncodedOffset) :
-                                isUInt<20>(EncodedOffset);
+  return isGCN3Encoding(ST) ?
+    isUInt<20>(EncodedOffset) : isUInt<8>(EncodedOffset);
 }
 } // end namespace AMDGPU
 

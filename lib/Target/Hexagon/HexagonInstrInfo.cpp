@@ -250,15 +250,19 @@ unsigned HexagonInstrInfo::isLoadFromStackSlot(const MachineInstr &MI,
   case Hexagon::L2_loadri_io:
   case Hexagon::L2_loadrd_io:
   case Hexagon::V6_vL32b_ai:
+  case Hexagon::V6_vL32b_nt_ai:
   case Hexagon::V6_vL32b_ai_128B:
+  case Hexagon::V6_vL32b_nt_ai_128B:
   case Hexagon::V6_vL32Ub_ai:
   case Hexagon::V6_vL32Ub_ai_128B:
   case Hexagon::LDriw_pred:
   case Hexagon::LDriw_mod:
   case Hexagon::PS_vloadrq_ai:
   case Hexagon::PS_vloadrw_ai:
+  case Hexagon::PS_vloadrw_nt_ai:
   case Hexagon::PS_vloadrq_ai_128B:
-  case Hexagon::PS_vloadrw_ai_128B: {
+  case Hexagon::PS_vloadrw_ai_128B:
+  case Hexagon::PS_vloadrw_nt_ai_128B: {
     const MachineOperand OpFI = MI.getOperand(1);
     if (!OpFI.isFI())
       return 0;
@@ -1673,9 +1677,6 @@ DFAPacketizer *HexagonInstrInfo::CreateTargetScheduleState(
 // Currently AA considers the addresses in these instructions to be aliasing.
 bool HexagonInstrInfo::areMemAccessesTriviallyDisjoint(
     MachineInstr &MIa, MachineInstr &MIb, AliasAnalysis *AA) const {
-  int OffsetA = 0, OffsetB = 0;
-  unsigned SizeA = 0, SizeB = 0;
-
   if (MIa.hasUnmodeledSideEffects() || MIb.hasUnmodeledSideEffects() ||
       MIa.hasOrderedMemoryRef() || MIb.hasOrderedMemoryRef())
     return false;
@@ -1685,27 +1686,47 @@ bool HexagonInstrInfo::areMemAccessesTriviallyDisjoint(
   if (MIa.mayLoad() && !isMemOp(MIa) && MIb.mayLoad() && !isMemOp(MIb))
     return true;
 
-  // Get base, offset, and access size in MIa.
-  unsigned BaseRegA = getBaseAndOffset(MIa, OffsetA, SizeA);
-  if (!BaseRegA || !SizeA)
+  // Get the base register in MIa.
+  unsigned BasePosA, OffsetPosA;
+  if (!getBaseAndOffsetPosition(MIa, BasePosA, OffsetPosA))
+    return false;
+  const MachineOperand &BaseA = MIa.getOperand(BasePosA);
+  unsigned BaseRegA = BaseA.getReg();
+  unsigned BaseSubA = BaseA.getSubReg();
+
+  // Get the base register in MIb.
+  unsigned BasePosB, OffsetPosB;
+  if (!getBaseAndOffsetPosition(MIb, BasePosB, OffsetPosB))
+    return false;
+  const MachineOperand &BaseB = MIb.getOperand(BasePosB);
+  unsigned BaseRegB = BaseB.getReg();
+  unsigned BaseSubB = BaseB.getSubReg();
+
+  if (BaseRegA != BaseRegB || BaseSubA != BaseSubB)
     return false;
 
-  // Get base, offset, and access size in MIb.
-  unsigned BaseRegB = getBaseAndOffset(MIb, OffsetB, SizeB);
-  if (!BaseRegB || !SizeB)
-    return false;
+  // Get the access sizes.
+  unsigned SizeA = (1u << (getMemAccessSize(MIa) - 1));
+  unsigned SizeB = (1u << (getMemAccessSize(MIb) - 1));
 
-  if (BaseRegA != BaseRegB)
+  // Get the offsets. Handle immediates only for now.
+  const MachineOperand &OffA = MIa.getOperand(OffsetPosA);
+  const MachineOperand &OffB = MIb.getOperand(OffsetPosB);
+  if (!MIa.getOperand(OffsetPosA).isImm() ||
+      !MIb.getOperand(OffsetPosB).isImm())
     return false;
+  int OffsetA = isPostIncrement(MIa) ? 0 : OffA.getImm();
+  int OffsetB = isPostIncrement(MIb) ? 0 : OffB.getImm();
 
   // This is a mem access with the same base register and known offsets from it.
   // Reason about it.
   if (OffsetA > OffsetB) {
-    uint64_t offDiff = (uint64_t)((int64_t)OffsetA - (int64_t)OffsetB);
-    return (SizeB <= offDiff);
-  } else if (OffsetA < OffsetB) {
-    uint64_t offDiff = (uint64_t)((int64_t)OffsetB - (int64_t)OffsetA);
-    return (SizeA <= offDiff);
+    uint64_t OffDiff = (uint64_t)((int64_t)OffsetA - (int64_t)OffsetB);
+    return SizeB <= OffDiff;
+  }
+  if (OffsetA < OffsetB) {
+    uint64_t OffDiff = (uint64_t)((int64_t)OffsetB - (int64_t)OffsetA);
+    return SizeA <= OffDiff;
   }
 
   return false;
@@ -1724,6 +1745,39 @@ bool HexagonInstrInfo::getIncrementValue(const MachineInstr &MI,
   }
 
   return false;
+}
+
+std::pair<unsigned, unsigned>
+HexagonInstrInfo::decomposeMachineOperandsTargetFlags(unsigned TF) const {
+  return std::make_pair(TF & ~HexagonII::MO_Bitmasks,
+                        TF & HexagonII::MO_Bitmasks);
+}
+
+ArrayRef<std::pair<unsigned, const char*>>
+HexagonInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
+  using namespace HexagonII;
+  static const std::pair<unsigned, const char*> Flags[] = {
+    {MO_PCREL,  "hexagon-pcrel"},
+    {MO_GOT,    "hexagon-got"},
+    {MO_LO16,   "hexagon-lo16"},
+    {MO_HI16,   "hexagon-hi16"},
+    {MO_GPREL,  "hexagon-gprel"},
+    {MO_GDGOT,  "hexagon-gdgot"},
+    {MO_GDPLT,  "hexagon-gdplt"},
+    {MO_IE,     "hexagon-ie"},
+    {MO_IEGOT,  "hexagon-iegot"},
+    {MO_TPREL,  "hexagon-tprel"}
+  };
+  return makeArrayRef(Flags);
+}
+
+ArrayRef<std::pair<unsigned, const char*>>
+HexagonInstrInfo::getSerializableBitmaskMachineOperandTargetFlags() const {
+  using namespace HexagonII;
+  static const std::pair<unsigned, const char*> Flags[] = {
+    {HMOTF_ConstExtended, "hexagon-ext"}
+  };
+  return makeArrayRef(Flags);
 }
 
 unsigned HexagonInstrInfo::createVR(MachineFunction *MF, MVT VT) const {
@@ -1797,7 +1851,7 @@ bool HexagonInstrInfo::isConstExtended(const MachineInstr &MI) const {
   const MachineOperand &MO = MI.getOperand(ExtOpNum);
   // Use MO operand flags to determine if MO
   // has the HMOTF_ConstExtended flag set.
-  if (MO.getTargetFlags() && HexagonII::HMOTF_ConstExtended)
+  if (MO.getTargetFlags() & HexagonII::HMOTF_ConstExtended)
     return true;
   // If this is a Machine BB address we are talking about, and it is
   // not marked as extended, say so.
@@ -1807,9 +1861,6 @@ bool HexagonInstrInfo::isConstExtended(const MachineInstr &MI) const {
   // We could be using an instruction with an extendable immediate and shoehorn
   // a global address into it. If it is a global address it will be constant
   // extended. We do this for COMBINE.
-  // We currently only handle isGlobal() because it is the only kind of
-  // object we are going to end up with here for now.
-  // In the future we probably should add isSymbol(), etc.
   if (MO.isGlobal() || MO.isSymbol() || MO.isBlockAddress() ||
       MO.isJTI() || MO.isCPI() || MO.isFPImm())
     return true;
@@ -1961,11 +2012,9 @@ bool HexagonInstrInfo::isExtended(const MachineInstr &MI) const {
     return true;
   // Use MO operand flags to determine if one of MI's operands
   // has HMOTF_ConstExtended flag set.
-  for (MachineInstr::const_mop_iterator I = MI.operands_begin(),
-       E = MI.operands_end(); I != E; ++I) {
-    if (I->getTargetFlags() && HexagonII::HMOTF_ConstExtended)
+  for (const MachineOperand &MO : MI.operands())
+    if (MO.getTargetFlags() & HexagonII::HMOTF_ConstExtended)
       return true;
-  }
   return  false;
 }
 
@@ -2445,20 +2494,28 @@ bool HexagonInstrInfo::isValidOffset(unsigned Opcode, int Offset,
   switch (Opcode) {
   case Hexagon::PS_vstorerq_ai:
   case Hexagon::PS_vstorerw_ai:
+  case Hexagon::PS_vstorerw_nt_ai:
   case Hexagon::PS_vloadrq_ai:
   case Hexagon::PS_vloadrw_ai:
+  case Hexagon::PS_vloadrw_nt_ai:
   case Hexagon::V6_vL32b_ai:
   case Hexagon::V6_vS32b_ai:
+  case Hexagon::V6_vL32b_nt_ai:
+  case Hexagon::V6_vS32b_nt_ai:
   case Hexagon::V6_vL32Ub_ai:
   case Hexagon::V6_vS32Ub_ai:
     return isShiftedInt<4,6>(Offset);
 
   case Hexagon::PS_vstorerq_ai_128B:
   case Hexagon::PS_vstorerw_ai_128B:
+  case Hexagon::PS_vstorerw_nt_ai_128B:
   case Hexagon::PS_vloadrq_ai_128B:
   case Hexagon::PS_vloadrw_ai_128B:
+  case Hexagon::PS_vloadrw_nt_ai_128B:
   case Hexagon::V6_vL32b_ai_128B:
   case Hexagon::V6_vS32b_ai_128B:
+  case Hexagon::V6_vL32b_nt_ai_128B:
+  case Hexagon::V6_vS32b_nt_ai_128B:
   case Hexagon::V6_vL32Ub_ai_128B:
   case Hexagon::V6_vS32Ub_ai_128B:
     return isShiftedInt<4,7>(Offset);
@@ -2897,6 +2954,8 @@ unsigned HexagonInstrInfo::getAddrMode(const MachineInstr &MI) const {
 
 // Returns the base register in a memory access (load/store). The offset is
 // returned in Offset and the access size is returned in AccessSize.
+// If the base register has a subregister or the offset field does not contain
+// an immediate value, return 0.
 unsigned HexagonInstrInfo::getBaseAndOffset(const MachineInstr &MI,
       int &Offset, unsigned &AccessSize) const {
   // Return if it is not a base+offset type instruction or a MemOp.
@@ -2916,19 +2975,25 @@ unsigned HexagonInstrInfo::getBaseAndOffset(const MachineInstr &MI,
   // MemAccessSize is represented as 1+log2(N) where N is size in bits.
   AccessSize = (1U << (getMemAccessSize(MI) - 1));
 
-  unsigned basePos = 0, offsetPos = 0;
-  if (!getBaseAndOffsetPosition(MI, basePos, offsetPos))
+  unsigned BasePos = 0, OffsetPos = 0;
+  if (!getBaseAndOffsetPosition(MI, BasePos, OffsetPos))
     return 0;
 
   // Post increment updates its EA after the mem access,
   // so we need to treat its offset as zero.
-  if (isPostIncrement(MI))
+  if (isPostIncrement(MI)) {
     Offset = 0;
-  else {
-    Offset = MI.getOperand(offsetPos).getImm();
+  } else {
+    const MachineOperand &OffsetOp = MI.getOperand(OffsetPos);
+    if (!OffsetOp.isImm())
+      return 0;
+    Offset = OffsetOp.getImm();
   }
 
-  return MI.getOperand(basePos).getReg();
+  const MachineOperand &BaseOp = MI.getOperand(BasePos);
+  if (BaseOp.getSubReg() != 0)
+    return 0;
+  return BaseOp.getReg();
 }
 
 /// Return the position of the base and offset operands for this instruction.
@@ -3170,11 +3235,19 @@ int HexagonInstrInfo::getDotCurOp(const MachineInstr &MI) const {
     return Hexagon::V6_vL32b_cur_pi;
   case Hexagon::V6_vL32b_ai:
     return Hexagon::V6_vL32b_cur_ai;
+  case Hexagon::V6_vL32b_nt_pi:
+    return Hexagon::V6_vL32b_nt_cur_pi;
+  case Hexagon::V6_vL32b_nt_ai:
+    return Hexagon::V6_vL32b_nt_cur_ai;
   //128B
   case Hexagon::V6_vL32b_pi_128B:
     return Hexagon::V6_vL32b_cur_pi_128B;
   case Hexagon::V6_vL32b_ai_128B:
     return Hexagon::V6_vL32b_cur_ai_128B;
+  case Hexagon::V6_vL32b_nt_pi_128B:
+    return Hexagon::V6_vL32b_nt_cur_pi_128B;
+  case Hexagon::V6_vL32b_nt_ai_128B:
+    return Hexagon::V6_vL32b_nt_cur_ai_128B;
   }
   return 0;
 }
@@ -3187,11 +3260,19 @@ int HexagonInstrInfo::getNonDotCurOp(const MachineInstr &MI) const {
     return Hexagon::V6_vL32b_pi;
   case Hexagon::V6_vL32b_cur_ai:
     return Hexagon::V6_vL32b_ai;
+  case Hexagon::V6_vL32b_nt_cur_pi:
+    return Hexagon::V6_vL32b_nt_pi;
+  case Hexagon::V6_vL32b_nt_cur_ai:
+    return Hexagon::V6_vL32b_nt_ai;
   //128B
   case Hexagon::V6_vL32b_cur_pi_128B:
     return Hexagon::V6_vL32b_pi_128B;
   case Hexagon::V6_vL32b_cur_ai_128B:
     return Hexagon::V6_vL32b_ai_128B;
+  case Hexagon::V6_vL32b_nt_cur_pi_128B:
+    return Hexagon::V6_vL32b_nt_pi_128B;
+  case Hexagon::V6_vL32b_nt_cur_ai_128B:
+    return Hexagon::V6_vL32b_nt_ai_128B;
   }
   return 0;
 }

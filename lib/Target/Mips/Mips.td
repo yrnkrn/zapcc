@@ -188,6 +188,11 @@ def FeatureUseTCCInDIV : SubtargetFeature<
 def FeatureMadd4 : SubtargetFeature<"nomadd4", "DisableMadd4", "true",
                                     "Disable 4-operand madd.fmt and related instructions">;
 
+def FeatureMT : SubtargetFeature<"mt", "HasMT", "true", "Mips MT ASE">;
+
+def FeatureLongCalls : SubtargetFeature<"long-calls", "UseLongCalls", "true",
+                                        "Disable use of the jal instruction">;
+
 //===----------------------------------------------------------------------===//
 // Mips processors supported.
 //===----------------------------------------------------------------------===//
