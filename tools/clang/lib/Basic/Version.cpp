@@ -132,7 +132,6 @@ std::string getClangToolFullVersion(StringRef ToolName) {
 #ifdef CLANG_VENDOR
   OS << " (based on " << BACKEND_PACKAGE_STRING << ")";
 #endif
-  OS << " built on " << __DATE__ << " " << __TIME__;
 
   return OS.str();
 }
