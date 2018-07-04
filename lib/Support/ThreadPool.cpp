@@ -18,7 +18,16 @@
 
 using namespace llvm;
 
+// http://bugs.llvm.org/PR20737
+#if defined(__MINGW64__) && !defined(_LIBCPP_VERSION)
+namespace std {
+__thread void *__once_callable;
+__thread void (*__once_call)();
+} // namespace std
+#endif
+
 #if LLVM_ENABLE_THREADS
+
 // Default to std::thread::hardware_concurrency
 ThreadPool::ThreadPool() : ThreadPool(std::thread::hardware_concurrency()) {}
 
