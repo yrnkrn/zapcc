@@ -31,6 +31,10 @@
 #include <memory>
 #include <string>
 #include <utility>
+// Disable GetMessage defined to GetMessageA
+#ifdef __MINGW64__
+#undef GetMessage
+#endif
 
 using namespace llvm;
 

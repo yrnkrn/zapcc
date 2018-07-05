@@ -22,11 +22,6 @@
 #define NOMINMAX
 #endif
 
-// Disable GetMessage defined to GetMessageA
-#ifdef __MINGW64__
-#define NOMSG
-#endif
-
 // llvm/Support/Debug.h unconditionally #defines DEBUG as a macro.
 // DIA headers #define it if it is not already defined, so we have
 // an order of includes problem.  The real fix is to make LLVM use
