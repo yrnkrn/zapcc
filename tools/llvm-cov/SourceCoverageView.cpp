@@ -95,9 +95,15 @@ LineCoverageStats::LineCoverageStats(
     if (isStartOfRegion(LineSegments[I]))
       ++MinRegionCount;
 
+  bool StartOfSkippedRegion = !LineSegments.empty() &&
+                              !LineSegments.front()->HasCount &&
+                              LineSegments.front()->IsRegionEntry;
+
   ExecutionCount = 0;
   HasMultipleRegions = MinRegionCount > 1;
-  Mapped = (WrappedSegment && WrappedSegment->HasCount) || (MinRegionCount > 0);
+  Mapped =
+      !StartOfSkippedRegion &&
+      ((WrappedSegment && WrappedSegment->HasCount) || (MinRegionCount > 0));
 
   if (!Mapped)
     return;
@@ -153,9 +159,17 @@ std::string SourceCoverageView::formatCount(uint64_t N) {
 }
 
 bool SourceCoverageView::shouldRenderRegionMarkers(
-    bool LineHasMultipleRegions) const {
-  return getOptions().ShowRegionMarkers &&
-         (!getOptions().ShowLineStatsOrRegionMarkers || LineHasMultipleRegions);
+    CoverageSegmentArray Segments) const {
+  if (!getOptions().ShowRegionMarkers)
+    return false;
+
+  // Render the region markers if there's more than one count to show.
+  unsigned RegionCount = 0;
+  for (const auto *S : Segments)
+    if (S->IsRegionEntry)
+      if (++RegionCount > 1)
+        return true;
+  return false;
 }
 
 bool SourceCoverageView::hasSubViews() const {
@@ -261,7 +275,7 @@ void SourceCoverageView::print(raw_ostream &OS, bool WholeFile,
                ExpansionColumn, ViewDepth);
 
     // Show the region markers.
-    if (shouldRenderRegionMarkers(LineCount.hasMultipleRegions()))
+    if (shouldRenderRegionMarkers(LineSegments))
       renderRegionMarkers(OS, LineSegments, ViewDepth);
 
     // Show the expansions and instantiations for this line.

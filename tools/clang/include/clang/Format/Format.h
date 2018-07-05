@@ -151,13 +151,20 @@ struct FormatStyle {
   /// \endcode
   bool AlignTrailingComments;
 
-  /// \brief Allow putting all parameters of a function declaration onto
+  /// \brief If the function declaration doesn't fit on a line,
+  /// allow putting all parameters of a function declaration onto
   /// the next line even if ``BinPackParameters`` is ``false``.
   /// \code
-  ///   true:                                   false:
-  ///   myFunction(foo,                 vs.     myFunction(foo, bar, plop);
-  ///              bar,
-  ///              plop);
+  ///   true:
+  ///   void myFunction(
+  ///       int a, int b, int c, int d, int e);
+  ///
+  ///   false:
+  ///   void myFunction(int a,
+  ///                   int b,
+  ///                   int c,
+  ///                   int d,
+  ///                   int e);
   /// \endcode
   bool AllowAllParametersOfDeclarationOnNextLine;
 
@@ -746,6 +753,14 @@ struct FormatStyle {
   ///
   /// If ``BreakBeforeBraces`` is set to ``BS_Custom``, use this to specify how
   /// each individual brace case should be handled. Otherwise, this is ignored.
+  /// \code{.yaml}
+  ///   # Example of usage:
+  ///   BreakBeforeBraces: Custom
+  ///   BraceWrapping:
+  ///     AfterEnum: true
+  ///     AfterStruct: false
+  ///     SplitEmptyFunction: false
+  /// \endcode
   BraceWrappingFlags BraceWrapping;
 
   /// \brief If ``true``, ternary operators will be placed after line breaks.
@@ -1023,6 +1038,31 @@ struct FormatStyle {
   ///    }                                      }
   /// \endcode
   bool IndentCaseLabels;
+
+  /// \brief Options for indenting preprocessor directives.
+  enum PPDirectiveIndentStyle {
+    /// Does not indent any directives.
+    /// \code
+    ///    #if FOO
+    ///    #if BAR
+    ///    #include <foo>
+    ///    #endif
+    ///    #endif
+    /// \endcode
+    PPDIS_None,
+    /// Indents directives after the hash.
+    /// \code
+    ///    #if FOO
+    ///    #  if BAR
+    ///    #    include <foo>
+    ///    #  endif
+    ///    #endif
+    /// \endcode
+    PPDIS_AfterHash
+  };
+
+  /// \brief The preprocessor directive indenting style to use.
+  PPDirectiveIndentStyle IndentPPDirectives;
 
   /// \brief The number of columns to use for indentation.
   /// \code
@@ -1514,6 +1554,7 @@ struct FormatStyle {
            ForEachMacros == R.ForEachMacros &&
            IncludeCategories == R.IncludeCategories &&
            IndentCaseLabels == R.IndentCaseLabels &&
+           IndentPPDirectives == R.IndentPPDirectives &&
            IndentWidth == R.IndentWidth && Language == R.Language &&
            IndentWrappedFunctionNames == R.IndentWrappedFunctionNames &&
            JavaScriptQuotes == R.JavaScriptQuotes &&

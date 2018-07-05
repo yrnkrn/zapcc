@@ -456,10 +456,13 @@ private:
                                             const CastInst *CI2);
 
   Value *foldAndOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction &CxtI);
-  Value *foldAndOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
   Value *foldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS, Instruction &CxtI);
-  Value *foldOrOfFCmps(FCmpInst *LHS, FCmpInst *RHS);
   Value *foldXorOfICmps(ICmpInst *LHS, ICmpInst *RHS);
+
+  /// Optimize (fcmp)&(fcmp) or (fcmp)|(fcmp).
+  /// NOTE: Unlike most of instcombine, this returns a Value which should
+  /// already be inserted into the function.
+  Value *foldLogicOfFCmps(FCmpInst *LHS, FCmpInst *RHS, bool IsAnd);
 
   Value *foldAndOrOfICmpsOfAndWithPow2(ICmpInst *LHS, ICmpInst *RHS,
                                        bool JoinedByAnd, Instruction &CxtI);
@@ -676,7 +679,7 @@ private:
                                             ConstantInt *AndCst = nullptr);
   Instruction *foldFCmpIntToFPConst(FCmpInst &I, Instruction *LHSI,
                                     Constant *RHSC);
-  Instruction *foldICmpAddOpConst(Instruction &ICI, Value *X, ConstantInt *CI,
+  Instruction *foldICmpAddOpConst(Value *X, ConstantInt *CI,
                                   ICmpInst::Predicate Pred);
   Instruction *foldICmpWithCastAndCast(ICmpInst &ICI);
 
@@ -687,9 +690,9 @@ private:
   Instruction *foldICmpBinOp(ICmpInst &Cmp);
   Instruction *foldICmpEquality(ICmpInst &Cmp);
 
-  Instruction *foldICmpSelectConstant(ICmpInst &Cmp, Instruction *Select,
+  Instruction *foldICmpSelectConstant(ICmpInst &Cmp, SelectInst *Select,
                                       ConstantInt *C);
-  Instruction *foldICmpTruncConstant(ICmpInst &Cmp, Instruction *Trunc,
+  Instruction *foldICmpTruncConstant(ICmpInst &Cmp, TruncInst *Trunc,
                                      const APInt *C);
   Instruction *foldICmpAndConstant(ICmpInst &Cmp, BinaryOperator *And,
                                    const APInt *C);

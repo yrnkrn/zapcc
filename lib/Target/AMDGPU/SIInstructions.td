@@ -825,6 +825,12 @@ def : ClampPat<V_MAX_F32_e64, f32>;
 def : ClampPat<V_MAX_F64, f64>;
 def : ClampPat<V_MAX_F16_e64, f16>;
 
+def : Pat <
+  (v2f16 (AMDGPUclamp (VOP3PMods v2f16:$src0, i32:$src0_modifiers))),
+  (V_PK_MAX_F16 $src0_modifiers, $src0,
+                $src0_modifiers, $src0, DSTCLAMP.ENABLE)
+>;
+
 /********** ================================ **********/
 /********** Floating point absolute/negative **********/
 /********** ================================ **********/
@@ -1272,25 +1278,57 @@ defm : BFMPatterns <i32, S_BFM_B32, S_MOV_B32>;
 // FIXME: defm : BFMPatterns <i64, S_BFM_B64, S_MOV_B64>;
 defm : BFEPattern <V_BFE_U32, V_BFE_I32, S_MOV_B32>;
 
+let Predicates = [NoFP16Denormals] in {
 def : Pat<
   (fcanonicalize (f16 (VOP3Mods f16:$src, i32:$src_mods))),
   (V_MUL_F16_e64 0, (i32 CONST.FP16_ONE), $src_mods, $src, 0, 0)
 >;
 
 def : Pat<
-  (fcanonicalize (f32 (VOP3Mods f32:$src, i32:$src_mods))),
-  (V_MUL_F32_e64 0, (i32 CONST.FP32_ONE), $src_mods, $src, 0, 0)
+  (fcanonicalize (v2f16 (VOP3PMods v2f16:$src, i32:$src_mods))),
+  (V_PK_MUL_F16 0, (i32 CONST.V2FP16_ONE), $src_mods, $src, DSTCLAMP.NONE)
 >;
+}
 
+let Predicates = [FP16Denormals] in {
 def : Pat<
-  (fcanonicalize (f64 (VOP3Mods f64:$src, i32:$src_mods))),
-  (V_MUL_F64 0, CONST.FP64_ONE, $src_mods, $src, 0, 0)
+  (fcanonicalize (f16 (VOP3Mods f16:$src, i32:$src_mods))),
+  (V_MAX_F16_e64 $src_mods, $src, $src_mods, $src, 0, 0)
 >;
 
 def : Pat<
   (fcanonicalize (v2f16 (VOP3PMods v2f16:$src, i32:$src_mods))),
-  (V_PK_MUL_F16 SRCMODS.OP_SEL_1, (i32 CONST.V2FP16_ONE), $src_mods, $src, DSTCLAMP.NONE)
+  (V_PK_MAX_F16 $src_mods, $src, $src_mods, $src, DSTCLAMP.NONE)
 >;
+}
+
+let Predicates = [NoFP32Denormals] in {
+def : Pat<
+  (fcanonicalize (f32 (VOP3Mods f32:$src, i32:$src_mods))),
+  (V_MUL_F32_e64 0, (i32 CONST.FP32_ONE), $src_mods, $src, 0, 0)
+>;
+}
+
+let Predicates = [FP32Denormals] in {
+def : Pat<
+  (fcanonicalize (f32 (VOP3Mods f32:$src, i32:$src_mods))),
+  (V_MAX_F32_e64 $src_mods, $src, $src_mods, $src, 0, 0)
+>;
+}
+
+let Predicates = [NoFP64Denormals] in {
+def : Pat<
+  (fcanonicalize (f64 (VOP3Mods f64:$src, i32:$src_mods))),
+  (V_MUL_F64 0, CONST.FP64_ONE, $src_mods, $src, 0, 0)
+>;
+}
+
+let Predicates = [FP64Denormals] in {
+def : Pat<
+  (fcanonicalize (f64 (VOP3Mods f64:$src, i32:$src_mods))),
+  (V_MAX_F64 $src_mods, $src, $src_mods, $src, 0, 0)
+>;
+}
 
 
 // Allow integer inputs
@@ -1305,6 +1343,13 @@ def : ExpPattern<AMDGPUexport_done, i32, EXP_DONE>;
 def : Pat <
   (v2i16 (build_vector i16:$src0, i16:$src1)),
   (v2i16 (S_PACK_LL_B32_B16 $src0, $src1))
+>;
+
+// COPY_TO_REGCLASS is workaround tablegen bug from multiple outputs
+// from S_LSHL_B32's multiple outputs from implicit scc def.
+def : Pat <
+  (v2i16 (build_vector (i16 0), i16:$src1)),
+  (v2i16 (COPY_TO_REGCLASS (S_LSHL_B32 i16:$src1, (i16 16)), SReg_32_XM0))
 >;
 
 // With multiple uses of the shift, this will duplicate the shift and

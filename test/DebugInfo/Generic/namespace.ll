@@ -1,6 +1,6 @@
 ; REQUIRES: object-emission
 
-; RUN: %llc_dwarf -O0 -filetype=obj -dwarf-linkage-names=All < %s | llvm-dwarfdump - | FileCheck %s
+; RUN: %llc_dwarf -O0 -filetype=obj -dwarf-linkage-names=All < %s | llvm-dwarfdump -v - | FileCheck %s
 ; CHECK: debug_info contents
 ; CHECK: DW_AT_name{{.*}}= [[F1:.*]])
 ; CHECK: [[NS1:0x[0-9a-f]*]]:{{ *}}DW_TAG_namespace
@@ -361,5 +361,5 @@ attributes #1 = { nounwind readnone }
 !73 = !DILocation(line: 47, column: 21, scope: !26)
 !74 = !DILocation(line: 0, scope: !75)
 !75 = !DILexicalBlockFile(discriminator: 0, file: !5, scope: !27)
-!131 = !DIGlobalVariableExpression(var: !31)
-!132 = !DIGlobalVariableExpression(var: !32)
+!131 = !DIGlobalVariableExpression(var: !31, expr: !DIExpression())
+!132 = !DIGlobalVariableExpression(var: !32, expr: !DIExpression())

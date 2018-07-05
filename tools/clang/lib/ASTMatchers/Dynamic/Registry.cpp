@@ -355,6 +355,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(labelDecl);
   REGISTER_MATCHER(labelStmt);
   REGISTER_MATCHER(lambdaExpr);
+  REGISTER_MATCHER(linkageSpecDecl);
   REGISTER_MATCHER(lValueReferenceType);
   REGISTER_MATCHER(matchesName);
   REGISTER_MATCHER(matchesSelector);
@@ -373,6 +374,7 @@ RegistryMaps::RegistryMaps() {
   REGISTER_MATCHER(numSelectorArgs);
   REGISTER_MATCHER(ofClass);
   REGISTER_MATCHER(objcCategoryDecl);
+  REGISTER_MATCHER(objcImplementationDecl);
   REGISTER_MATCHER(objcInterfaceDecl);
   REGISTER_MATCHER(objcIvarDecl);
   REGISTER_MATCHER(objcMessageExpr);

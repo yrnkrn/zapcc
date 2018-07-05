@@ -48,6 +48,7 @@
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/MemorySSAUpdater.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -387,6 +388,25 @@ private:
     return false;
   }
 
+  bool hasEHhelper(const BasicBlock *BB, const BasicBlock *SrcBB,
+                   int &NBBsOnAllPaths) {
+    // Stop walk once the limit is reached.
+    if (NBBsOnAllPaths == 0)
+      return true;
+
+    // Impossible to hoist with exceptions on the path.
+    if (hasEH(BB))
+      return true;
+
+    // No such instruction after HoistBarrier in a basic block was
+    // selected for hoisting so instructions selected within basic block with
+    // a hoist barrier can be hoisted.
+    if ((BB != SrcBB) && HoistBarrier.count(BB))
+      return true;
+
+    return false;
+  }
+
   // Return true when there are exception handling or loads of memory Def
   // between Def and NewPt.  This function is only called for stores: Def is
   // the MemoryDef of the store to be hoisted.
@@ -414,18 +434,7 @@ private:
         continue;
       }
 
-      // Stop walk once the limit is reached.
-      if (NBBsOnAllPaths == 0)
-        return true;
-
-      // Impossible to hoist with exceptions on the path.
-      if (hasEH(BB))
-        return true;
-
-      // No such instruction after HoistBarrier in a basic block was
-      // selected for hoisting so instructions selected within basic block with
-      // a hoist barrier can be hoisted.
-      if ((BB != OldBB) && HoistBarrier.count(BB))
+      if (hasEHhelper(BB, OldBB, NBBsOnAllPaths))
         return true;
 
       // Check that we do not move a store past loads.
@@ -463,18 +472,7 @@ private:
         continue;
       }
 
-      // Stop walk once the limit is reached.
-      if (NBBsOnAllPaths == 0)
-        return true;
-
-      // Impossible to hoist with exceptions on the path.
-      if (hasEH(BB))
-        return true;
-
-      // No such instruction after HoistBarrier in a basic block was
-      // selected for hoisting so instructions selected within basic block with
-      // a hoist barrier can be hoisted.
-      if ((BB != SrcBB) && HoistBarrier.count(BB))
+      if (hasEHhelper(BB, SrcBB, NBBsOnAllPaths))
         return true;
 
       // -1 is unlimited number of blocks on all paths.

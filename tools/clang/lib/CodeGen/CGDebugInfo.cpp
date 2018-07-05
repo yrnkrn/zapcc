@@ -97,6 +97,10 @@ void ApplyDebugLocation::init(SourceLocation TemporaryLocation,
   }
 
   OriginalLocation = CGF->Builder.getCurrentDebugLocation();
+
+  if (OriginalLocation && !DI->CGM.getExpressionLocationsEnabled())
+    return;
+
   if (TemporaryLocation.isValid()) {
     DI->EmitLocation(CGF->Builder, TemporaryLocation);
     return;
@@ -677,6 +681,7 @@ llvm::DIType *CGDebugInfo::CreateType(const BuiltinType *BT) {
   case BuiltinType::Half:
   case BuiltinType::Float:
   case BuiltinType::LongDouble:
+  case BuiltinType::Float16:
   case BuiltinType::Float128:
   case BuiltinType::Double:
     // FIXME: For targets where long double and __float128 have the same size,
@@ -3297,7 +3302,7 @@ void CGDebugInfo::EmitInlineFunctionStart(CGBuilderTy &Builder, GlobalDecl GD) {
   llvm::DISubprogram *SP = nullptr;
   if (FI != SPCache.end())
     SP = dyn_cast_or_null<llvm::DISubprogram>(FI->second);
-  if (!SP)
+  if (!SP || !SP->isDefinition())
     SP = getFunctionStub(GD);
   FnBeginRegionCount.push_back(LexicalBlockStack.size());
   LexicalBlockStack.emplace_back(SP);

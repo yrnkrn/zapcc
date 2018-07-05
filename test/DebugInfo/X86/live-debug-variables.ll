@@ -1,4 +1,4 @@
-; RUN: llc -mtriple=x86_64-linux-gnu -filetype=obj -o - %s | llvm-dwarfdump -debug-dump=loc - | FileCheck %s
+; RUN: llc -mtriple=x86_64-linux-gnu -filetype=obj -o - %s | llvm-dwarfdump -debug-loc - | FileCheck %s
 
 ; The test inlines the function F four times, with each inlined variable for
 ; "i4" sharing the same virtual register. This means the live interval of the
@@ -22,8 +22,11 @@
 ;          F(a,b,c,d,e);
 ; }
 
-; CHECK: Beginning address offset
-; CHECK-NOT: Beginning address offset
+; CHECK:      .debug_loc contents:
+; CHECK-NEXT: 0x00000000:
+; CHECK-NEXT:              0x000000000000001f - 0x000000000000003c: DW_OP_reg3 RBX
+;   We should only have one entry
+; CHECK-NOT: :
 
 declare i32 @foobar(i32, i32, i32, i32, i32)
 

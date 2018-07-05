@@ -508,6 +508,9 @@ static void insertCallRetPHI(Instruction *Inst, Instruction *CallResult,
   if (Inst->getType()->isVoidTy())
     return;
 
+  if (Inst->use_empty())
+    return;
+
   BasicBlock *RetValBB = CallResult->getParent();
 
   BasicBlock *PHIBB;
@@ -563,8 +566,8 @@ Instruction *llvm::promoteIndirectCall(Instruction *Inst,
     SmallVector<uint32_t, 1> Weights;
     Weights.push_back(Count);
     MDBuilder MDB(NewInst->getContext());
-    dyn_cast<Instruction>(NewInst->stripPointerCasts())
-        ->setMetadata(LLVMContext::MD_prof, MDB.createBranchWeights(Weights));
+    if (Instruction *DI = dyn_cast<Instruction>(NewInst->stripPointerCasts()))
+      DI->setMetadata(LLVMContext::MD_prof, MDB.createBranchWeights(Weights));
   }
 
   // Move Inst from MergeBB to IndirectCallBB.

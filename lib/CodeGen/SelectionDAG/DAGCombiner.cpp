@@ -348,6 +348,7 @@ namespace {
     SDValue visitShiftByConstant(SDNode *N, ConstantSDNode *Amt);
 
     SDValue foldSelectOfConstants(SDNode *N);
+    SDValue foldVSelectOfConstants(SDNode *N);
     SDValue foldBinOpIntoSelect(SDNode *BO);
     bool SimplifySelectOps(SDNode *SELECT, SDValue LHS, SDValue RHS);
     SDValue SimplifyBinOpWithSameOpcodeHands(SDNode *N);
@@ -1168,22 +1169,30 @@ SDValue DAGCombiner::PromoteIntBinOp(SDValue Op) {
     SDValue RV =
         DAG.getNode(ISD::TRUNCATE, DL, VT, DAG.getNode(Opc, DL, PVT, NN0, NN1));
 
-    // New replace instances of N0 and N1
-    if (Replace0 && N0 && N0.getOpcode() != ISD::DELETED_NODE && NN0 &&
-        NN0.getOpcode() != ISD::DELETED_NODE) {
+    // We are always replacing N0/N1's use in N and only need
+    // additional replacements if there are additional uses.
+    Replace0 &= !N0->hasOneUse();
+    Replace1 &= (N0 != N1) && !N1->hasOneUse();
+
+    // Combine Op here so it is presreved past replacements.
+    CombineTo(Op.getNode(), RV);
+
+    // If operands have a use ordering, make sur we deal with
+    // predecessor first.
+    if (Replace0 && Replace1 && N0.getNode()->isPredecessorOf(N1.getNode())) {
+      std::swap(N0, N1);
+      std::swap(NN0, NN1);
+    }
+
+    if (Replace0) {
       AddToWorklist(NN0.getNode());
       ReplaceLoadWithPromotedLoad(N0.getNode(), NN0.getNode());
     }
-
-    if (Replace1 && N1 && N1.getOpcode() != ISD::DELETED_NODE && NN1 &&
-        NN1.getOpcode() != ISD::DELETED_NODE) {
+    if (Replace1) {
       AddToWorklist(NN1.getNode());
       ReplaceLoadWithPromotedLoad(N1.getNode(), NN1.getNode());
     }
-
-    // Deal with Op being deleted.
-    if (Op && Op.getOpcode() != ISD::DELETED_NODE)
-      return RV;
+    return Op;
   }
   return SDValue();
 }
@@ -2588,6 +2597,12 @@ SDValue DAGCombiner::visitMUL(SDNode *N) {
 
     N0IsConst = ISD::isConstantSplatVector(N0.getNode(), ConstValue0);
     N1IsConst = ISD::isConstantSplatVector(N1.getNode(), ConstValue1);
+    assert((!N0IsConst ||
+            ConstValue0.getBitWidth() == VT.getScalarSizeInBits()) &&
+           "Splat APInt should be element width");
+    assert((!N1IsConst ||
+            ConstValue1.getBitWidth() == VT.getScalarSizeInBits()) &&
+           "Splat APInt should be element width");
   } else {
     N0IsConst = isa<ConstantSDNode>(N0);
     if (N0IsConst) {
@@ -2613,12 +2628,8 @@ SDValue DAGCombiner::visitMUL(SDNode *N) {
   // fold (mul x, 0) -> 0
   if (N1IsConst && ConstValue1.isNullValue())
     return N1;
-  // We require a splat of the entire scalar bit width for non-contiguous
-  // bit patterns.
-  bool IsFullSplat =
-    ConstValue1.getBitWidth() == VT.getScalarSizeInBits();
   // fold (mul x, 1) -> x
-  if (N1IsConst && ConstValue1.isOneValue() && IsFullSplat)
+  if (N1IsConst && ConstValue1.isOneValue())
     return N0;
 
   if (SDValue NewSel = foldBinOpIntoSelect(N))
@@ -2643,8 +2654,7 @@ SDValue DAGCombiner::visitMUL(SDNode *N) {
     return DAG.getNode(ISD::SHL, DL, VT, N0, Trunc);
   }
   // fold (mul x, -(1 << c)) -> -(x << c) or (-x) << c
-  if (N1IsConst && !N1IsOpaqueConst && (-ConstValue1).isPowerOf2() &&
-      IsFullSplat) {
+  if (N1IsConst && !N1IsOpaqueConst && (-ConstValue1).isPowerOf2()) {
     unsigned Log2Val = (-ConstValue1).logBase2();
     SDLoc DL(N);
     // FIXME: If the input is something that is easily negated (e.g. a
@@ -4029,7 +4039,7 @@ SDValue DAGCombiner::MatchBSwapHWordLow(SDNode *N, SDValue N0, SDValue N1,
   if (!TLI.isOperationLegalOrCustom(ISD::BSWAP, VT))
     return SDValue();
 
-  // Recognize (and (shl a, 8), 0xff), (and (srl a, 8), 0xff00)
+  // Recognize (and (shl a, 8), 0xff00), (and (srl a, 8), 0xff)
   bool LookPassAnd0 = false;
   bool LookPassAnd1 = false;
   if (N0.getOpcode() == ISD::AND && N0.getOperand(0).getOpcode() == ISD::SRL)
@@ -6182,7 +6192,7 @@ SDValue DAGCombiner::foldSelectOfConstants(SDNode *N) {
     // For any constants that differ by 1, we can transform the select into an
     // extend and add. Use a target hook because some targets may prefer to
     // transform in the other direction.
-    if (TLI.convertSelectOfConstantsToMath()) {
+    if (TLI.convertSelectOfConstantsToMath(VT)) {
       if (C1->getAPIntValue() - 1 == C2->getAPIntValue()) {
         // select Cond, C1, C1-1 --> add (zext Cond), C1-1
         if (VT != MVT::i1)
@@ -6751,6 +6761,57 @@ SDValue DAGCombiner::visitMLOAD(SDNode *N) {
   return SDValue();
 }
 
+/// A vector select of 2 constant vectors can be simplified to math/logic to
+/// avoid a variable select instruction and possibly avoid constant loads.
+SDValue DAGCombiner::foldVSelectOfConstants(SDNode *N) {
+  SDValue Cond = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+  SDValue N2 = N->getOperand(2);
+  EVT VT = N->getValueType(0);
+  if (!Cond.hasOneUse() || Cond.getScalarValueSizeInBits() != 1 ||
+      !TLI.convertSelectOfConstantsToMath(VT) ||
+      !ISD::isBuildVectorOfConstantSDNodes(N1.getNode()) ||
+      !ISD::isBuildVectorOfConstantSDNodes(N2.getNode()))
+    return SDValue();
+
+  // Check if we can use the condition value to increment/decrement a single
+  // constant value. This simplifies a select to an add and removes a constant
+  // load/materialization from the general case.
+  bool AllAddOne = true;
+  bool AllSubOne = true;
+  unsigned Elts = VT.getVectorNumElements();
+  for (unsigned i = 0; i != Elts; ++i) {
+    SDValue N1Elt = N1.getOperand(i);
+    SDValue N2Elt = N2.getOperand(i);
+    if (N1Elt.isUndef() || N2Elt.isUndef())
+      continue;
+
+    const APInt &C1 = cast<ConstantSDNode>(N1Elt)->getAPIntValue();
+    const APInt &C2 = cast<ConstantSDNode>(N2Elt)->getAPIntValue();
+    if (C1 != C2 + 1)
+      AllAddOne = false;
+    if (C1 != C2 - 1)
+      AllSubOne = false;
+  }
+
+  // Further simplifications for the extra-special cases where the constants are
+  // all 0 or all -1 should be implemented as folds of these patterns.
+  SDLoc DL(N);
+  if (AllAddOne || AllSubOne) {
+    // vselect <N x i1> Cond, C+1, C --> add (zext Cond), C
+    // vselect <N x i1> Cond, C-1, C --> add (sext Cond), C
+    auto ExtendOpcode = AllAddOne ? ISD::ZERO_EXTEND : ISD::SIGN_EXTEND;
+    SDValue ExtendedCond = DAG.getNode(ExtendOpcode, DL, VT, Cond);
+    return DAG.getNode(ISD::ADD, DL, VT, ExtendedCond, N2);
+  }
+
+  // The general case for select-of-constants:
+  // vselect <N x i1> Cond, C1, C2 --> xor (and (sext Cond), (C1^C2)), C2
+  // ...but that only makes sense if a vselect is slower than 2 logic ops, so
+  // leave that to a machine-specific pass.
+  return SDValue();
+}
+
 SDValue DAGCombiner::visitVSELECT(SDNode *N) {
   SDValue N0 = N->getOperand(0);
   SDValue N1 = N->getOperand(1);
@@ -6814,6 +6875,9 @@ SDValue DAGCombiner::visitVSELECT(SDNode *N) {
     if (SDValue CV = ConvertSelectToConcatVector(N, DAG))
       return CV;
   }
+
+  if (SDValue V = foldVSelectOfConstants(N))
+    return V;
 
   return SDValue();
 }
@@ -7400,7 +7464,7 @@ SDValue DAGCombiner::visitSIGN_EXTEND(SDNode *N) {
             SimplifySelectCC(DL, N00, N01, ExtTrueVal, Zero, CC, true))
       return SCC;
 
-    if (!VT.isVector() && !TLI.convertSelectOfConstantsToMath()) {
+    if (!VT.isVector() && !TLI.convertSelectOfConstantsToMath(VT)) {
       EVT SetCCVT = getSetCCResultType(N00VT);
       // Don't do this transform for i1 because there's a select transform
       // that would reverse it.
@@ -8799,12 +8863,15 @@ SDValue DAGCombiner::visitBITCAST(SDNode *N) {
       if (Op.getOpcode() == ISD::BITCAST &&
           Op.getOperand(0).getValueType() == VT)
         return SDValue(Op.getOperand(0));
-      if (ISD::isBuildVectorOfConstantSDNodes(Op.getNode()) ||
+      if (Op.isUndef() || ISD::isBuildVectorOfConstantSDNodes(Op.getNode()) ||
           ISD::isBuildVectorOfConstantFPSDNodes(Op.getNode()))
         return DAG.getBitcast(VT, Op);
       return SDValue();
     };
 
+    // FIXME: If either input vector is bitcast, try to convert the shuffle to
+    // the result type of this bitcast. This would eliminate at least one
+    // bitcast. See the transform in InstCombine.
     SDValue SV0 = PeekThroughBitcast(N0->getOperand(0));
     SDValue SV1 = PeekThroughBitcast(N0->getOperand(1));
     if (!(SV0 && SV1))
@@ -12713,25 +12780,37 @@ void DAGCombiner::getStoreMergeCandidates(
         }
 }
 
-// We need to check that merging these stores does not cause a loop
-// in the DAG. Any store candidate may depend on another candidate
+// We need to check that merging these stores does not cause a loop in
+// the DAG. Any store candidate may depend on another candidate
 // indirectly through its operand (we already consider dependencies
 // through the chain). Check in parallel by searching up from
 // non-chain operands of candidates.
+
 bool DAGCombiner::checkMergeStoreCandidatesForDependencies(
     SmallVectorImpl<MemOpLink> &StoreNodes, unsigned NumStores) {
+
+  // FIXME: We should be able to truncate a full search of
+  // predecessors by doing a BFS and keeping tabs the originating
+  // stores from which worklist nodes come from in a similar way to
+  // TokenFactor simplfication.
+
   SmallPtrSet<const SDNode *, 16> Visited;
   SmallVector<const SDNode *, 8> Worklist;
-  // search ops of store candidates
+  unsigned int Max = 8192;
+  // Search Ops of store candidates.
   for (unsigned i = 0; i < NumStores; ++i) {
     SDNode *n = StoreNodes[i].MemNode;
     // Potential loops may happen only through non-chain operands
     for (unsigned j = 1; j < n->getNumOperands(); ++j)
       Worklist.push_back(n->getOperand(j).getNode());
   }
-  // search through DAG. We can stop early if we find a storenode
+  // Search through DAG. We can stop early if we find a store node.
   for (unsigned i = 0; i < NumStores; ++i) {
-    if (SDNode::hasPredecessorHelper(StoreNodes[i].MemNode, Visited, Worklist))
+    if (SDNode::hasPredecessorHelper(StoreNodes[i].MemNode, Visited, Worklist,
+                                     Max))
+      return false;
+    // Check if we ended early, failing conservatively if so.
+    if (Visited.size() >= Max)
       return false;
   }
   return true;
@@ -13884,7 +13963,10 @@ SDValue DAGCombiner::visitEXTRACT_VECTOR_ELT(SDNode *N) {
     // FIXME: We should handle recursing on other vector shuffles and
     // scalar_to_vector here as well.
 
-    if (!LegalOperations) {
+    if (!LegalOperations ||
+        // FIXME: Should really be just isOperationLegalOrCustom.
+        TLI.isOperationLegal(ISD::EXTRACT_VECTOR_ELT, VT) ||
+        TLI.isOperationExpand(ISD::VECTOR_SHUFFLE, VT)) {
       EVT IndexTy = TLI.getVectorIdxTy(DAG.getDataLayout());
       return DAG.getNode(ISD::EXTRACT_VECTOR_ELT, SDLoc(N), NVT, SVInVec,
                          DAG.getConstant(OrigElt, SDLoc(SVOp), IndexTy));
@@ -14190,9 +14272,17 @@ SDValue DAGCombiner::createBuildVecShuffle(const SDLoc &DL, SDNode *N,
   EVT InVT1 = VecIn1.getValueType();
   EVT InVT2 = VecIn2.getNode() ? VecIn2.getValueType() : InVT1;
 
-  unsigned Vec2Offset = InVT1.getVectorNumElements();
+  unsigned Vec2Offset = 0;
   unsigned NumElems = VT.getVectorNumElements();
   unsigned ShuffleNumElems = NumElems;
+
+  // In case both the input vectors are extracted from same base
+  // vector we do not need extra addend (Vec2Offset) while
+  // computing shuffle mask.
+  if (!VecIn2 || !(VecIn1.getOpcode() == ISD::EXTRACT_SUBVECTOR) ||
+      !(VecIn2.getOpcode() == ISD::EXTRACT_SUBVECTOR) ||
+      !(VecIn1.getOperand(0) == VecIn2.getOperand(0)))
+    Vec2Offset = InVT1.getVectorNumElements();
 
   // We can't generate a shuffle node with mismatched input and output types.
   // Try to make the types match the type of the output.
@@ -14340,7 +14430,6 @@ SDValue DAGCombiner::reduceBuildVecToShuffle(SDNode *N) {
     if (Op.getOpcode() != ISD::EXTRACT_VECTOR_ELT ||
         !isa<ConstantSDNode>(Op.getOperand(1)))
       return SDValue();
-
     SDValue ExtractedFromVec = Op.getOperand(0);
 
     // All inputs must have the same element type as the output.
@@ -14362,6 +14451,50 @@ SDValue DAGCombiner::reduceBuildVecToShuffle(SDNode *N) {
   // If we didn't find at least one input vector, bail out.
   if (VecIn.size() < 2)
     return SDValue();
+
+  // If all the Operands of BUILD_VECTOR extract from same
+  // vector, then split the vector efficiently based on the maximum
+  // vector access index and adjust the VectorMask and
+  // VecIn accordingly.
+  if (VecIn.size() == 2) {
+    unsigned MaxIndex = 0;
+    unsigned NearestPow2 = 0;
+    SDValue Vec = VecIn.back();
+    EVT InVT = Vec.getValueType();
+    MVT IdxTy = TLI.getVectorIdxTy(DAG.getDataLayout());
+    SmallVector<unsigned, 8> IndexVec(NumElems, 0);
+
+    for (unsigned i = 0; i < NumElems; i++) {
+      if (VectorMask[i] <= 0)
+        continue;
+      unsigned Index = N->getOperand(i).getConstantOperandVal(1);
+      IndexVec[i] = Index;
+      MaxIndex = std::max(MaxIndex, Index);
+    }
+
+    NearestPow2 = PowerOf2Ceil(MaxIndex);
+    if (InVT.isSimple() && (NearestPow2 > 2) &&
+        ((NumElems * 2) < NearestPow2)) {
+      unsigned SplitSize = NearestPow2 / 2;
+      EVT SplitVT = EVT::getVectorVT(*DAG.getContext(),
+                                     InVT.getVectorElementType(), SplitSize);
+      if (TLI.isTypeLegal(SplitVT)) {
+        SDValue VecIn2 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, SplitVT, Vec,
+                                     DAG.getConstant(SplitSize, DL, IdxTy));
+        SDValue VecIn1 = DAG.getNode(ISD::EXTRACT_SUBVECTOR, DL, SplitVT, Vec,
+                                     DAG.getConstant(0, DL, IdxTy));
+        VecIn.pop_back();
+        VecIn.push_back(VecIn1);
+        VecIn.push_back(VecIn2);
+
+        for (unsigned i = 0; i < NumElems; i++) {
+          if (VectorMask[i] <= 0)
+            continue;
+          VectorMask[i] = (IndexVec[i] < SplitSize) ? 1 : 2;
+        }
+      }
+    }
+  }
 
   // TODO: We want to sort the vectors by descending length, so that adjacent
   // pairs have similar length, and the longer vector is always first in the
@@ -14451,7 +14584,6 @@ SDValue DAGCombiner::reduceBuildVecToShuffle(SDNode *N) {
           DAG.getVectorShuffle(VT, DL, Shuffles[Left], Shuffles[Right], Mask);
     }
   }
-
   return Shuffles[0];
 }
 
@@ -15040,6 +15172,33 @@ SDValue DAGCombiner::visitEXTRACT_SUBVECTOR(SDNode* N) {
   // Skip bitcasting
   V = peekThroughBitcast(V);
 
+  // If the input is a build vector. Try to make a smaller build vector.
+  if (V->getOpcode() == ISD::BUILD_VECTOR) {
+    if (auto *Idx = dyn_cast<ConstantSDNode>(N->getOperand(1))) {
+      EVT InVT = V->getValueType(0);
+      unsigned ExtractSize = NVT.getSizeInBits();
+      unsigned EltSize = InVT.getScalarSizeInBits();
+      // Only do this if we won't split any elements.
+      if (ExtractSize % EltSize == 0) {
+        unsigned NumElems = ExtractSize / EltSize;
+        EVT ExtractVT = EVT::getVectorVT(*DAG.getContext(),
+                                         InVT.getVectorElementType(), NumElems);
+        if ((!LegalOperations ||
+             TLI.isOperationLegal(ISD::BUILD_VECTOR, ExtractVT)) &&
+            (!LegalTypes || TLI.isTypeLegal(ExtractVT))) {
+          unsigned IdxVal = (Idx->getZExtValue() * NVT.getScalarSizeInBits()) /
+                            EltSize;
+
+          // Extract the pieces from the original build_vector.
+          SDValue BuildVec = DAG.getBuildVector(ExtractVT, SDLoc(N),
+                                            makeArrayRef(V->op_begin() + IdxVal,
+                                                         NumElems));
+          return DAG.getBitcast(NVT, BuildVec);
+        }
+      }
+    }
+  }
+
   if (V->getOpcode() == ISD::INSERT_SUBVECTOR) {
     // Handle only simple case where vector being inserted and vector
     // being extracted are of same size.
@@ -15337,7 +15496,8 @@ static SDValue combineShuffleOfScalars(ShuffleVectorSDNode *SVN,
 static SDValue combineShuffleToVectorExtend(ShuffleVectorSDNode *SVN,
                                             SelectionDAG &DAG,
                                             const TargetLowering &TLI,
-                                            bool LegalOperations) {
+                                            bool LegalOperations,
+                                            bool LegalTypes) {
   EVT VT = SVN->getValueType(0);
   bool IsBigEndian = DAG.getDataLayout().isBigEndian();
 
@@ -15370,9 +15530,10 @@ static SDValue combineShuffleToVectorExtend(ShuffleVectorSDNode *SVN,
 
     EVT OutSVT = EVT::getIntegerVT(*DAG.getContext(), EltSizeInBits * Scale);
     EVT OutVT = EVT::getVectorVT(*DAG.getContext(), OutSVT, NumElts / Scale);
-    if (!LegalOperations ||
-        TLI.isOperationLegalOrCustom(ISD::ANY_EXTEND_VECTOR_INREG, OutVT))
-      return DAG.getBitcast(VT,
+    if (!LegalTypes || TLI.isTypeLegal(OutVT))
+      if (!LegalOperations ||
+          TLI.isOperationLegalOrCustom(ISD::ANY_EXTEND_VECTOR_INREG, OutVT))
+        return DAG.getBitcast(VT,
                             DAG.getAnyExtendVectorInReg(N0, SDLoc(SVN), OutVT));
   }
 
@@ -15603,7 +15764,7 @@ SDValue DAGCombiner::visitVECTOR_SHUFFLE(SDNode *N) {
     return S;
 
   // Match shuffles that can be converted to any_vector_extend_in_reg.
-  if (SDValue V = combineShuffleToVectorExtend(SVN, DAG, TLI, LegalOperations))
+  if (SDValue V = combineShuffleToVectorExtend(SVN, DAG, TLI, LegalOperations, LegalTypes))
     return V;
 
   // Combine "truncate_vector_in_reg" style shuffles.

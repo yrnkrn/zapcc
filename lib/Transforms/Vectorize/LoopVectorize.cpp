@@ -585,6 +585,11 @@ protected:
   /// Returns (and creates if needed) the trip count of the widened loop.
   Value *getOrCreateVectorTripCount(Loop *NewLoop);
 
+  /// Returns a bitcasted value to the requested vector type.
+  /// Also handles bitcasts of vector<float> <-> vector<pointer> types.
+  Value *createBitOrPointerCast(Value *V, VectorType *DstVTy,
+                                const DataLayout &DL);
+
   /// Emit a bypass check to see if the vector trip count is zero, including if
   /// it overflows.
   void emitMinimumIterationCountCheck(Loop *L, BasicBlock *Bypass);
@@ -1137,7 +1142,7 @@ private:
 /// for example 'force', means a decision has been made. So, we need to be
 /// careful NOT to add them if the user hasn't specifically asked so.
 class LoopVectorizeHints {
-  enum HintKind { HK_WIDTH, HK_UNROLL, HK_FORCE };
+  enum HintKind { HK_WIDTH, HK_UNROLL, HK_FORCE, HK_ISVECTORIZED };
 
   /// Hint - associates name and validation with the hint value.
   struct Hint {
@@ -1156,6 +1161,8 @@ class LoopVectorizeHints {
         return isPowerOf2_32(Val) && Val <= MaxInterleaveFactor;
       case HK_FORCE:
         return (Val <= 1);
+      case HK_ISVECTORIZED:
+        return (Val==0 || Val==1);
       }
       return false;
     }
@@ -1168,6 +1175,8 @@ class LoopVectorizeHints {
   /// Vectorization forced
   Hint Force;
 
+  /// Already Vectorized
+  Hint IsVectorized;
   /// Return the loop metadata prefix.
   static StringRef Prefix() { return "llvm.loop."; }
 
@@ -1187,6 +1196,7 @@ public:
               HK_WIDTH),
         Interleave("interleave.count", DisableInterleaving, HK_UNROLL),
         Force("vectorize.enable", FK_Undefined, HK_FORCE),
+        IsVectorized("isvectorized", 0, HK_ISVECTORIZED),
         PotentiallyUnsafe(false), TheLoop(L), ORE(ORE) {
     // Populate values with existing loop metadata.
     getHintsFromMetadata();
@@ -1195,14 +1205,19 @@ public:
     if (VectorizerParams::isInterleaveForced())
       Interleave.Value = VectorizerParams::VectorizationInterleave;
 
+    if (IsVectorized.Value != 1)
+      // If the vectorization width and interleaving count are both 1 then
+      // consider the loop to have been already vectorized because there's
+      // nothing more that we can do.
+      IsVectorized.Value = Width.Value == 1 && Interleave.Value == 1;
     DEBUG(if (DisableInterleaving && Interleave.Value == 1) dbgs()
           << "LV: Interleaving disabled by the pass manager\n");
   }
 
   /// Mark the loop L as already vectorized by setting the width to 1.
   void setAlreadyVectorized() {
-    Width.Value = Interleave.Value = 1;
-    Hint Hints[] = {Width, Interleave};
+    IsVectorized.Value = 1;
+    Hint Hints[] = {IsVectorized};
     writeHintsToMetadata(Hints);
   }
 
@@ -1219,9 +1234,7 @@ public:
       return false;
     }
 
-    if (getWidth() == 1 && getInterleave() == 1) {
-      // FIXME: Add a separate metadata to indicate when the loop has already
-      // been vectorized instead of setting width and count to 1.
+    if (getIsVectorized() == 1) {
       DEBUG(dbgs() << "LV: Not vectorizing: Disabled/already vectorized.\n");
       // FIXME: Add interleave.disable metadata. This will allow
       // vectorize.disable to be used without disabling the pass and errors
@@ -1230,8 +1243,8 @@ public:
                                           "AllDisabled", L->getStartLoc(),
                                           L->getHeader())
                << "loop not vectorized: vectorization and interleaving are "
-                  "explicitly disabled, or vectorize width and interleave "
-                  "count are both set to 1");
+                  "explicitly disabled, or the loop has already been "
+                  "vectorized");
       return false;
     }
 
@@ -1264,6 +1277,7 @@ public:
 
   unsigned getWidth() const { return Width.Value; }
   unsigned getInterleave() const { return Interleave.Value; }
+  unsigned getIsVectorized() const { return IsVectorized.Value; }
   enum ForceKind getForce() const { return (ForceKind)Force.Value; }
 
   /// \brief If hints are provided that force vectorization, use the AlwaysPrint
@@ -1347,7 +1361,7 @@ private:
       return;
     unsigned Val = C->getZExtValue();
 
-    Hint *Hints[] = {&Width, &Interleave, &Force};
+    Hint *Hints[] = {&Width, &Interleave, &Force, &IsVectorized};
     for (auto H : Hints) {
       if (Name == H->Name) {
         if (H->validate(Val))
@@ -1946,7 +1960,7 @@ public:
 private:
   /// \return An upper bound for the vectorization factor, larger than zero.
   /// One is returned if vectorization should best be avoided due to cost.
-  unsigned computeFeasibleMaxVF(bool OptForSize);
+  unsigned computeFeasibleMaxVF(bool OptForSize, unsigned ConstTripCount = 0);
 
   /// The vectorization cost is a combination of the cost itself and a boolean
   /// indicating whether any of the contributing operations will actually
@@ -2857,6 +2871,7 @@ void InnerLoopVectorizer::vectorizeInterleaveGroup(Instruction *Instr) {
   if (Instr != Group->getInsertPos())
     return;
 
+  const DataLayout &DL = Instr->getModule()->getDataLayout();
   Value *Ptr = getPointerOperand(Instr);
 
   // Prepare for the vector type of the interleaved load/store.
@@ -2931,7 +2946,7 @@ void InnerLoopVectorizer::vectorizeInterleaveGroup(Instruction *Instr) {
         // If this member has different type, cast the result type.
         if (Member->getType() != ScalarTy) {
           VectorType *OtherVTy = VectorType::get(Member->getType(), VF);
-          StridedVec = Builder.CreateBitOrPointerCast(StridedVec, OtherVTy);
+          StridedVec = createBitOrPointerCast(StridedVec, OtherVTy, DL);
         }
 
         if (Group->isReverse())
@@ -2960,9 +2975,10 @@ void InnerLoopVectorizer::vectorizeInterleaveGroup(Instruction *Instr) {
       if (Group->isReverse())
         StoredVec = reverseVector(StoredVec);
 
-      // If this member has different type, cast it to an unified type.
+      // If this member has different type, cast it to a unified type.
+
       if (StoredVec->getType() != SubVT)
-        StoredVec = Builder.CreateBitOrPointerCast(StoredVec, SubVT);
+        StoredVec = createBitOrPointerCast(StoredVec, SubVT, DL);
 
       StoredVecs.push_back(StoredVec);
     }
@@ -3261,6 +3277,36 @@ Value *InnerLoopVectorizer::getOrCreateVectorTripCount(Loop *L) {
   VectorTripCount = Builder.CreateSub(TC, R, "n.vec");
 
   return VectorTripCount;
+}
+
+Value *InnerLoopVectorizer::createBitOrPointerCast(Value *V, VectorType *DstVTy,
+                                                   const DataLayout &DL) {
+  // Verify that V is a vector type with same number of elements as DstVTy.
+  unsigned VF = DstVTy->getNumElements();
+  VectorType *SrcVecTy = cast<VectorType>(V->getType());
+  assert((VF == SrcVecTy->getNumElements()) && "Vector dimensions do not match");
+  Type *SrcElemTy = SrcVecTy->getElementType();
+  Type *DstElemTy = DstVTy->getElementType();
+  assert((DL.getTypeSizeInBits(SrcElemTy) == DL.getTypeSizeInBits(DstElemTy)) &&
+         "Vector elements must have same size");
+
+  // Do a direct cast if element types are castable.
+  if (CastInst::isBitOrNoopPointerCastable(SrcElemTy, DstElemTy, DL)) {
+    return Builder.CreateBitOrPointerCast(V, DstVTy);
+  }
+  // V cannot be directly casted to desired vector type.
+  // May happen when V is a floating point vector but DstVTy is a vector of
+  // pointers or vice-versa. Handle this using a two-step bitcast using an
+  // intermediate Integer type for the bitcast i.e. Ptr <-> Int <-> Float.
+  assert((DstElemTy->isPointerTy() != SrcElemTy->isPointerTy()) &&
+         "Only one type should be a pointer type");
+  assert((DstElemTy->isFloatingPointTy() != SrcElemTy->isFloatingPointTy()) &&
+         "Only one type should be a floating point type");
+  Type *IntTy =
+      IntegerType::getIntNTy(V->getContext(), DL.getTypeSizeInBits(SrcElemTy));
+  VectorType *VecIntTy = VectorType::get(IntTy, VF);
+  Value *CastVal = Builder.CreateBitOrPointerCast(V, VecIntTy);
+  return Builder.CreateBitOrPointerCast(CastVal, DstVTy);
 }
 
 void InnerLoopVectorizer::emitMinimumIterationCountCheck(Loop *L,
@@ -6141,7 +6187,7 @@ Optional<unsigned> LoopVectorizationCostModel::computeMaxVF(bool OptForSize) {
     return None;
   }
 
-  unsigned MaxVF = computeFeasibleMaxVF(OptForSize);
+  unsigned MaxVF = computeFeasibleMaxVF(OptForSize, TC);
 
   if (TC % MaxVF != 0) {
     // If the trip count that we found modulo the vectorization factor is not
@@ -6162,7 +6208,9 @@ Optional<unsigned> LoopVectorizationCostModel::computeMaxVF(bool OptForSize) {
   return MaxVF;
 }
 
-unsigned LoopVectorizationCostModel::computeFeasibleMaxVF(bool OptForSize) {
+unsigned
+LoopVectorizationCostModel::computeFeasibleMaxVF(bool OptForSize,
+                                                 unsigned ConstTripCount) {
   MinBWs = computeMinimumValueSizes(TheLoop->getBlocks(), *DB, &TTI);
   unsigned SmallestType, WidestType;
   std::tie(SmallestType, WidestType) = getSmallestAndWidestTypes();
@@ -6191,7 +6239,9 @@ unsigned LoopVectorizationCostModel::computeFeasibleMaxVF(bool OptForSize) {
   if (MaxVectorSize == 0) {
     DEBUG(dbgs() << "LV: The target has no vector registers.\n");
     MaxVectorSize = 1;
-  }
+  } else if (ConstTripCount && ConstTripCount < MaxVectorSize &&
+             isPowerOf2_32(ConstTripCount))
+    MaxVectorSize = ConstTripCount;
 
   assert(MaxVectorSize <= 64 && "Did not expect to pack so many elements"
                                 " into one vector!");
@@ -7941,22 +7991,53 @@ VPWidenRecipe *LoopVectorizationPlanner::tryToWiden(
   if (Legal->isScalarWithPredication(I))
     return nullptr;
 
-  static DenseSet<unsigned> VectorizableOpcodes = {
-      Instruction::Br,      Instruction::PHI,      Instruction::GetElementPtr,
-      Instruction::UDiv,    Instruction::SDiv,     Instruction::SRem,
-      Instruction::URem,    Instruction::Add,      Instruction::FAdd,
-      Instruction::Sub,     Instruction::FSub,     Instruction::Mul,
-      Instruction::FMul,    Instruction::FDiv,     Instruction::FRem,
-      Instruction::Shl,     Instruction::LShr,     Instruction::AShr,
-      Instruction::And,     Instruction::Or,       Instruction::Xor,
-      Instruction::Select,  Instruction::ICmp,     Instruction::FCmp,
-      Instruction::Store,   Instruction::Load,     Instruction::ZExt,
-      Instruction::SExt,    Instruction::FPToUI,   Instruction::FPToSI,
-      Instruction::FPExt,   Instruction::PtrToInt, Instruction::IntToPtr,
-      Instruction::SIToFP,  Instruction::UIToFP,   Instruction::Trunc,
-      Instruction::FPTrunc, Instruction::BitCast,  Instruction::Call};
+  auto IsVectorizableOpcode = [](unsigned Opcode) {
+    switch (Opcode) {
+    case Instruction::Add:
+    case Instruction::And:
+    case Instruction::AShr:
+    case Instruction::BitCast:
+    case Instruction::Br:
+    case Instruction::Call:
+    case Instruction::FAdd:
+    case Instruction::FCmp:
+    case Instruction::FDiv:
+    case Instruction::FMul:
+    case Instruction::FPExt:
+    case Instruction::FPToSI:
+    case Instruction::FPToUI:
+    case Instruction::FPTrunc:
+    case Instruction::FRem:
+    case Instruction::FSub:
+    case Instruction::GetElementPtr:
+    case Instruction::ICmp:
+    case Instruction::IntToPtr:
+    case Instruction::Load:
+    case Instruction::LShr:
+    case Instruction::Mul:
+    case Instruction::Or:
+    case Instruction::PHI:
+    case Instruction::PtrToInt:
+    case Instruction::SDiv:
+    case Instruction::Select:
+    case Instruction::SExt:
+    case Instruction::Shl:
+    case Instruction::SIToFP:
+    case Instruction::SRem:
+    case Instruction::Store:
+    case Instruction::Sub:
+    case Instruction::Trunc:
+    case Instruction::UDiv:
+    case Instruction::UIToFP:
+    case Instruction::URem:
+    case Instruction::Xor:
+    case Instruction::ZExt:
+      return true;
+    }
+    return false;
+  };
 
-  if (!VectorizableOpcodes.count(I->getOpcode()))
+  if (!IsVectorizableOpcode(I->getOpcode()))
     return nullptr;
 
   if (CallInst *CI = dyn_cast<CallInst>(I)) {
@@ -8225,7 +8306,8 @@ void VPReplicateRecipe::execute(VPTransformState &State) {
 
   if (State.Instance) { // Generate a single instance.
     State.ILV->scalarizeInstruction(Ingredient, *State.Instance, IsPredicated);
-    if (AlsoPack) { // Insert scalar instance packing it into a vector.
+    // Insert scalar instance packing it into a vector.
+    if (AlsoPack && State.VF > 1) {
       // If we're constructing lane 0, initialize to start from undef.
       if (State.Instance->Lane == 0) {
         Value *Undef =
@@ -8244,11 +8326,6 @@ void VPReplicateRecipe::execute(VPTransformState &State) {
   for (unsigned Part = 0; Part < State.UF; ++Part)
     for (unsigned Lane = 0; Lane < EndLane; ++Lane)
       State.ILV->scalarizeInstruction(Ingredient, {Part, Lane}, IsPredicated);
-
-  // Broadcast or group together all instances into a vector.
-  if (AlsoPack)
-    for (unsigned Part = 0; Part < State.UF; ++Part)
-      State.ILV->getOrCreateVectorValue(Ingredient, Part);
 }
 
 void VPBranchOnMaskRecipe::execute(VPTransformState &State) {

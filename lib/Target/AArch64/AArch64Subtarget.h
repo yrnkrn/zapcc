@@ -41,9 +41,11 @@ public:
     Others,
     CortexA35,
     CortexA53,
+    CortexA55,
     CortexA57,
     CortexA72,
     CortexA73,
+    CortexA75,
     Cyclone,
     ExynosM1,
     Falkor,
@@ -100,6 +102,7 @@ protected:
   bool UsePostRAScheduler = false;
   bool Misaligned128StoreIsSlow = false;
   bool Paired128IsSlow = false;
+  bool STRQroIsSlow = false;
   bool UseAlternateSExtLoadCVTF32Pattern = false;
   bool HasArithmeticBccFusion = false;
   bool HasArithmeticCbzFusion = false;
@@ -217,6 +220,7 @@ public:
   bool hasCustomCheapAsMoveHandling() const { return CustomAsCheapAsMove; }
   bool isMisaligned128StoreSlow() const { return Misaligned128StoreIsSlow; }
   bool isPaired128Slow() const { return Paired128IsSlow; }
+  bool isSTRQroSlow() const { return STRQroIsSlow; }
   bool useAlternateSExtLoadCVTF32Pattern() const {
     return UseAlternateSExtLoadCVTF32Pattern;
   }

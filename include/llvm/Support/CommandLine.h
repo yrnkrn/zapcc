@@ -349,6 +349,8 @@ public:
 
   virtual void printOptionValue(size_t GlobalWidth, bool Force) const = 0;
 
+  virtual void setDefault() = 0;
+
   static void printHelpStr(StringRef HelpStr, size_t Indent,
                            size_t FirstLineIndentedBy);
 
@@ -1319,6 +1321,20 @@ class opt : public Option,
     }
   }
 
+  template <class T, class = typename std::enable_if<
+            std::is_assignable<T&, T>::value>::type>
+  void setDefaultImpl() {
+    const OptionValue<DataType> &V = this->getDefault();
+    if (V.hasValue())
+      this->setValue(V.getValue());
+  }
+
+  template <class T, class = typename std::enable_if<
+            !std::is_assignable<T&, T>::value>::type>
+  void setDefaultImpl(...) {}
+
+  void setDefault() override { setDefaultImpl<DataType>(); }
+
   void done() {
     addArgument();
     Parser.initialize();
@@ -1494,6 +1510,8 @@ class list : public Option, public list_storage<DataType, StorageClass> {
   void printOptionValue(size_t /*GlobalWidth*/, bool /*Force*/) const override {
   }
 
+  void setDefault() override {}
+
   void done() {
     addArgument();
     Parser.initialize();
@@ -1635,6 +1653,8 @@ class bits : public Option, public bits_storage<DataType, Storage> {
   void printOptionValue(size_t /*GlobalWidth*/, bool /*Force*/) const override {
   }
 
+  void setDefault() override {}
+
   void done() {
     addArgument();
     Parser.initialize();
@@ -1684,6 +1704,8 @@ class alias : public Option {
   // Aliases do not need to print their values.
   void printOptionValue(size_t /*GlobalWidth*/, bool /*Force*/) const override {
   }
+
+  void setDefault() override { AliasFor->setDefault(); }
 
   ValueExpected getValueExpectedFlagDefault() const override {
     return AliasFor->getValueExpectedFlag();
@@ -1740,8 +1762,6 @@ void PrintVersionMessage();
 
 /// This function just prints the help message, exactly the same way as if the
 /// -help or -help-hidden option had been given on the command line.
-///
-/// NOTE: THIS FUNCTION TERMINATES THE PROGRAM!
 ///
 /// \param Hidden if true will print hidden options
 /// \param Categorized if true print options in categories

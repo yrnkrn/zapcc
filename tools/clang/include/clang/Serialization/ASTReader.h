@@ -1133,7 +1133,7 @@ private:
   /// predefines buffer may contain additional definitions.
   std::string SuggestedPredefines;
 
-  llvm::DenseMap<const Decl *, bool> BodySource;
+  llvm::DenseMap<const Decl *, bool> DefinitionSource;
 
   /// \brief Reads a statement from the specified cursor.
   Stmt *ReadStmtFromStream(ModuleFile &F);
@@ -2142,8 +2142,18 @@ public:
   // \brief Read a string
   static std::string ReadString(const RecordData &Record, unsigned &Idx);
 
+  // \brief Skip a string
+  static void SkipString(const RecordData &Record, unsigned &Idx) {
+    Idx += Record[Idx] + 1;
+  }
+
   // \brief Read a path
   std::string ReadPath(ModuleFile &F, const RecordData &Record, unsigned &Idx);
+
+  // \brief Skip a path
+  static void SkipPath(const RecordData &Record, unsigned &Idx) {
+    SkipString(Record, Idx);
+  }
 
   /// \brief Read a version tuple.
   static VersionTuple ReadVersionTuple(const RecordData &Record, unsigned &Idx);

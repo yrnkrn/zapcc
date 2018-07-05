@@ -1,5 +1,5 @@
 ; RUN: llc -mtriple x86_64-apple-darwin -filetype=obj -o %t.o < %s
-; RUN: llvm-dwarfdump -debug-dump=info %t.o | FileCheck %s
+; RUN: llvm-dwarfdump -v -debug-info %t.o | FileCheck %s
 
 ; Generated from llvm/tools/clang/test/CodeGenObjC/debug-info-blocks.m
 ; rdar://problem/9279956
@@ -27,10 +27,7 @@
 ; CHECK-NOT: {{DW_TAG|NULL}}
 ; CHECK: DW_TAG_variable
 ; CHECK-NOT: DW_TAG
-; 0x06 = DW_OP_deref
-; 0x23 = DW_OP_uconst
-; 0x91 = DW_OP_fbreg
-; CHECK: DW_AT_location{{.*}}91 {{[0-9]+}} 06 23 {{[0-9]+}} )
+; CHECK: DW_AT_location{{.*}}(DW_OP_fbreg -24, DW_OP_deref, DW_OP_plus_uconst 0x20)
 ; CHECK-NOT: DW_TAG
 ; CHECK: DW_AT_name{{.*}}"self"
 ; CHECK-NOT: DW_TAG

@@ -45,6 +45,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -4808,6 +4809,30 @@ bool SelectionDAGBuilder::EmitFuncArgumentDbgValue(
     // Check if ValueMap has reg number.
     DenseMap<const Value *, unsigned>::iterator VMI = FuncInfo.ValueMap.find(V);
     if (VMI != FuncInfo.ValueMap.end()) {
+      const auto &TLI = DAG.getTargetLoweringInfo();
+      RegsForValue RFV(V->getContext(), TLI, DAG.getDataLayout(), VMI->second,
+                       V->getType(), isABIRegCopy(V));
+      unsigned NumRegs =
+          std::accumulate(RFV.RegCount.begin(), RFV.RegCount.end(), 0);
+      if (NumRegs > 1) {
+        unsigned I = 0;
+        unsigned Offset = 0;
+        auto RegisterVT = RFV.RegVTs.begin();
+        for (auto RegCount : RFV.RegCount) {
+          unsigned RegisterSize = (RegisterVT++)->getSizeInBits();
+          for (unsigned E = I + RegCount; I != E; ++I) {
+            // The vregs are guaranteed to be allocated in sequence.
+            Op = MachineOperand::CreateReg(VMI->second + I, false);
+            auto *FragmentExpr = DIExpression::createFragmentExpression(
+                Expr, Offset, RegisterSize);
+            FuncInfo.ArgDbgValues.push_back(
+                BuildMI(MF, DL, TII->get(TargetOpcode::DBG_VALUE), IsDbgDeclare,
+                        Op->getReg(), Variable, FragmentExpr));
+            Offset += RegisterSize;
+          }
+        }
+        return true;
+      }
       Op = MachineOperand::CreateReg(VMI->second, false);
       IsIndirect = IsDbgDeclare;
     }
@@ -5432,6 +5457,7 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::experimental_constrained_fmul:
   case Intrinsic::experimental_constrained_fdiv:
   case Intrinsic::experimental_constrained_frem:
+  case Intrinsic::experimental_constrained_fma:
   case Intrinsic::experimental_constrained_sqrt:
   case Intrinsic::experimental_constrained_pow:
   case Intrinsic::experimental_constrained_powi:
@@ -5628,6 +5654,18 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
   case Intrinsic::var_annotation:
     // Discard annotate attributes and assumptions
     return nullptr;
+
+  case Intrinsic::codeview_annotation: {
+    // Emit a label associated with this metadata.
+    MachineFunction &MF = DAG.getMachineFunction();
+    MCSymbol *Label =
+        MF.getMMI().getContext().createTempSymbol("annotation", true);
+    Metadata *MD = cast<MetadataAsValue>(I.getArgOperand(0))->getMetadata();
+    MF.addCodeViewAnnotation(Label, cast<MDNode>(MD));
+    Res = DAG.getLabelNode(ISD::ANNOTATION_LABEL, sdl, getRoot(), Label);
+    DAG.setRoot(Res);
+    return nullptr;
+  }
 
   case Intrinsic::init_trampoline: {
     const Function *F = cast<Function>(I.getArgOperand(1)->stripPointerCasts());
@@ -5963,6 +6001,9 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
   case Intrinsic::experimental_constrained_frem:
     Opcode = ISD::STRICT_FREM;
     break;
+  case Intrinsic::experimental_constrained_fma:
+    Opcode = ISD::STRICT_FMA;
+    break;
   case Intrinsic::experimental_constrained_sqrt:
     Opcode = ISD::STRICT_FSQRT;
     break;
@@ -6009,10 +6050,15 @@ void SelectionDAGBuilder::visitConstrainedFPIntrinsic(
   SDVTList VTs = DAG.getVTList(ValueVTs);
   SDValue Result;
   if (FPI.isUnaryOp())
-    Result = DAG.getNode(Opcode, sdl, VTs, 
+    Result = DAG.getNode(Opcode, sdl, VTs,
                          { Chain, getValue(FPI.getArgOperand(0)) });
+  else if (FPI.isTernaryOp())
+    Result = DAG.getNode(Opcode, sdl, VTs,
+                         { Chain, getValue(FPI.getArgOperand(0)),
+                                  getValue(FPI.getArgOperand(1)),
+                                  getValue(FPI.getArgOperand(2)) });
   else
-    Result = DAG.getNode(Opcode, sdl, VTs, 
+    Result = DAG.getNode(Opcode, sdl, VTs,
                          { Chain, getValue(FPI.getArgOperand(0)),
                            getValue(FPI.getArgOperand(1))  });
 
@@ -7017,6 +7063,7 @@ static bool createVirtualRegs(SmallVector<unsigned, 4> &Regs, unsigned NumRegs,
   return true;
 }
 
+namespace {
 class ExtraFlags {
   unsigned Flags = 0;
 
@@ -7050,6 +7097,7 @@ public:
 
   unsigned get() const { return Flags; }
 };
+} // namespace
 
 /// visitInlineAsm - Handle a call to an InlineAsm object.
 ///

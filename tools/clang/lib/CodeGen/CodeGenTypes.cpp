@@ -44,6 +44,10 @@ CodeGenTypes::~CodeGenTypes() {
     delete &*I++;
 }
 
+const CodeGenOptions &CodeGenTypes::getCodeGenOpts() const {
+  return CGM.getCodeGenOpts();
+}
+
 void CodeGenTypes::addRecordTypeName(const RecordDecl *RD,
                                      llvm::StructType *Ty,
                                      StringRef suffix) {
@@ -437,6 +441,12 @@ llvm::Type *CodeGenTypes::ConvertType(QualType T) {
     case BuiltinType::Char32:
       ResultType = llvm::IntegerType::get(getLLVMContext(),
                                  static_cast<unsigned>(Context.getTypeSize(T)));
+      break;
+
+    case BuiltinType::Float16:
+      ResultType =
+          getTypeForFormat(getLLVMContext(), Context.getFloatTypeSemantics(T),
+                           /* UseNativeHalf = */ true);
       break;
 
     case BuiltinType::Half:

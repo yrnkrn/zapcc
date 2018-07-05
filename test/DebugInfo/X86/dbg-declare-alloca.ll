@@ -1,5 +1,5 @@
 ; RUN: llc < %s | FileCheck %s
-; RUN: llc < %s -filetype=obj | llvm-dwarfdump - -debug-dump=info | FileCheck %s --check-prefix=DWARF
+; RUN: llc < %s -filetype=obj | llvm-dwarfdump -v - --debug-info | FileCheck %s --check-prefix=DWARF
 
 ; This should use the frame index side table for allocas, not DBG_VALUE
 ; instructions. For SDAG ISel, this test would see an SDNode materializing the
@@ -8,9 +8,8 @@
 ; CHECK-LABEL: use_dbg_declare:
 ; CHECK-NOT: #DEBUG_VALUE
 
-; 	"<0x2> 91 00" means "fbreg uleb(0)", i.e. RSP+0.
 ; DWARF: DW_TAG_variable
-; DWARF-NEXT:              DW_AT_location [DW_FORM_exprloc]      (<0x2> 91 00 )
+; DWARF-NEXT:              DW_AT_location [DW_FORM_exprloc]      (DW_OP_fbreg +0)
 ; DWARF-NEXT:              DW_AT_name [DW_FORM_strp]     ( {{.*}} = "o")
 
 

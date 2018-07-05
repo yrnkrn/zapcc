@@ -1,5 +1,5 @@
 ; RUN: llc -mtriple=x86_64-apple-darwin %s -o %t.o -filetype=obj -O0
-; RUN: llvm-dwarfdump %t.o | FileCheck %s
+; RUN: llvm-dwarfdump -v %t.o | FileCheck %s
 ;
 ; Test that on x86_64, the 32-bit subregister esi is emitted as
 ; subregister of the 64-bit rsi.
@@ -8,11 +8,9 @@
 ;
 ; CHECK:  .debug_info contents:
 ; CHECK:  DW_TAG_variable
-; CHECK-NEXT:  DW_AT_location [DW_FORM_data4]	(0x00000000)
+; CHECK-NEXT:  DW_AT_location [DW_FORM_data4]	(
+; CHECK-NEXT:    {{.*}} - {{.*}}: DW_OP_reg4 RSI)
 ; CHECK-NEXT:  DW_AT_name [DW_FORM_strp]{{.*}} "a"
-; CHECK: .debug_loc contents:
-;                                    rsi
-; CHECK:       Location description: 54
 ;
 ; struct bar {
 ;   int a;

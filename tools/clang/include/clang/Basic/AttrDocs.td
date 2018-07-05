@@ -7,6 +7,24 @@
 //
 //===---------------------------------------------------------------------===//
 
+// To test that the documentation builds cleanly, you must run clang-tblgen to
+// convert the .td file into a .rst file, and then run sphinx to convert the
+// .rst file into an HTML file. After completing testing, you should revert the
+// generated .rst file so that the modified version does not get checked in to
+// version control.
+//
+// To run clang-tblgen to generate the .rst file:
+// clang-tblgen -gen-attr-docs -I <root>/llvm/tools/clang/include
+//   <root>/llvm/tools/clang/include/clang/Basic/Attr.td -o
+//   <root>/llvm/tools/clang/docs/AttributeReference.rst
+//
+// To run sphinx to generate the .html files (note that sphinx-build must be
+// available on the PATH):
+// Windows (from within the clang\docs directory):
+//   make.bat html
+// Non-Windows (from within the clang\docs directory):
+//   make -f Makefile.sphinx html
+
 def GlobalDocumentation {
   code Intro =[{..
   -------------------------------------------------------------------
@@ -2800,6 +2818,31 @@ For example:
   In this case, on 32-bit x86 targets, the function 'f' will use ECX and EDX as
   register parameters. However, it will not assume any scratch registers and
   should save and restore any modified registers except for ECX and EDX.
+  }];
+}
+
+def X86ForceAlignArgPointerDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+Use this attribute to force stack alignment.
+
+Legacy x86 code uses 4-byte stack alignment. Newer aligned SSE instructions
+(like 'movaps') that work with the stack require operands to be 16-byte aligned.
+This attribute realigns the stack in the function prologue to make sure the
+stack can be used with SSE instructions.
+
+Note that the x86_64 ABI forces 16-byte stack alignment at the call site.
+Because of this, 'force_align_arg_pointer' is not needed on x86_64, except in
+rare cases where the caller does not align the stack properly (e.g. flow
+jumps from i386 arch code).
+
+  .. code-block:: c
+
+    __attribute__ ((force_align_arg_pointer))
+    void f () {
+      ...
+    }
+
   }];
 }
 

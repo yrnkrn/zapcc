@@ -25,7 +25,7 @@
 //
 //  For example, when we're interested in child classes of a certain class, we
 //  would write:
-//    cxxRecordDecl(hasName("MyClass"), hasChild(id("child", recordDecl())))
+//    cxxRecordDecl(hasName("MyClass"), has(id("child", recordDecl())))
 //  When the match is found via the MatchFinder, a user provided callback will
 //  be called with a BoundNodes instance that contains a mapping from the
 //  strings that we provided for the id(...) calls to the nodes that were
@@ -1144,6 +1144,17 @@ const internal::VariadicDynCastAllOfMatcher<
 const internal::VariadicDynCastAllOfMatcher<
   Decl,
   ObjCInterfaceDecl> objcInterfaceDecl;
+
+/// \brief Matches Objective-C implementation declarations.
+///
+/// Example matches Foo
+/// \code
+///   @implementation Foo
+///   @end
+/// \endcode
+const internal::VariadicDynCastAllOfMatcher<
+  Decl,
+  ObjCImplementationDecl> objcImplementationDecl;
 
 /// \brief Matches Objective-C protocol declarations.
 ///

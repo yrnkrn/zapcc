@@ -299,8 +299,8 @@ static bool decomposeBitTestICmp(Value *LHS, Value *RHS, CmpInst::Predicate &Pre
   if (!llvm::decomposeBitTestICmp(LHS, RHS, Pred, X, Mask))
     return false;
 
-  Y = ConstantInt::get(LHS->getType(), Mask);
-  Z = ConstantInt::get(RHS->getType(), 0);
+  Y = ConstantInt::get(X->getType(), Mask);
+  Z = ConstantInt::get(X->getType(), 0);
   return true;
 }
 
@@ -312,10 +312,9 @@ static unsigned getMaskedTypeForICmpPair(Value *&A, Value *&B, Value *&C,
                                          ICmpInst *RHS,
                                          ICmpInst::Predicate &PredL,
                                          ICmpInst::Predicate &PredR) {
-  if (LHS->getOperand(0)->getType() != RHS->getOperand(0)->getType())
-    return 0;
-  // vectors are not (yet?) supported
-  if (LHS->getOperand(0)->getType()->isVectorTy())
+  // vectors are not (yet?) supported. Don't support pointers either.
+  if (!LHS->getOperand(0)->getType()->isIntegerTy() ||
+      !RHS->getOperand(0)->getType()->isIntegerTy())
     return 0;
 
   // Here comes the tricky part:
@@ -332,20 +331,14 @@ static unsigned getMaskedTypeForICmpPair(Value *&A, Value *&B, Value *&C,
     L21 = L22 = L1 = nullptr;
   } else {
     // Look for ANDs in the LHS icmp.
-    if (!L1->getType()->isIntegerTy()) {
-      // You can icmp pointers, for example. They really aren't masks.
-      L11 = L12 = nullptr;
-    } else if (!match(L1, m_And(m_Value(L11), m_Value(L12)))) {
+    if (!match(L1, m_And(m_Value(L11), m_Value(L12)))) {
       // Any icmp can be viewed as being trivially masked; if it allows us to
       // remove one, it's worth it.
       L11 = L1;
       L12 = Constant::getAllOnesValue(L1->getType());
     }
 
-    if (!L2->getType()->isIntegerTy()) {
-      // You can icmp pointers, for example. They really aren't masks.
-      L21 = L22 = nullptr;
-    } else if (!match(L2, m_And(m_Value(L21), m_Value(L22)))) {
+    if (!match(L2, m_And(m_Value(L21), m_Value(L22)))) {
       L21 = L2;
       L22 = Constant::getAllOnesValue(L2->getType());
     }
@@ -372,7 +365,7 @@ static unsigned getMaskedTypeForICmpPair(Value *&A, Value *&B, Value *&C,
     E = R2;
     R1 = nullptr;
     Ok = true;
-  } else if (R1->getType()->isIntegerTy()) {
+  } else {
     if (!match(R1, m_And(m_Value(R11), m_Value(R12)))) {
       // As before, model no mask as a trivial mask if it'll let us do an
       // optimization.
@@ -398,7 +391,7 @@ static unsigned getMaskedTypeForICmpPair(Value *&A, Value *&B, Value *&C,
     return 0;
 
   // Look for ANDs on the right side of the RHS icmp.
-  if (!Ok && R2->getType()->isIntegerTy()) {
+  if (!Ok) {
     if (!match(R2, m_And(m_Value(R11), m_Value(R12)))) {
       R11 = R2;
       R12 = Constant::getAllOnesValue(R2->getType());
@@ -908,17 +901,15 @@ Value *InstCombiner::foldAndOfICmps(ICmpInst *LHS, ICmpInst *RHS,
   return nullptr;
 }
 
-/// Optimize (fcmp)&(fcmp).  NOTE: Unlike the rest of instcombine, this returns
-/// a Value which should already be inserted into the function.
-Value *InstCombiner::foldAndOfFCmps(FCmpInst *LHS, FCmpInst *RHS) {
-  Value *Op0LHS = LHS->getOperand(0), *Op0RHS = LHS->getOperand(1);
-  Value *Op1LHS = RHS->getOperand(0), *Op1RHS = RHS->getOperand(1);
-  FCmpInst::Predicate Op0CC = LHS->getPredicate(), Op1CC = RHS->getPredicate();
+Value *InstCombiner::foldLogicOfFCmps(FCmpInst *LHS, FCmpInst *RHS, bool IsAnd) {
+  Value *LHS0 = LHS->getOperand(0), *LHS1 = LHS->getOperand(1);
+  Value *RHS0 = RHS->getOperand(0), *RHS1 = RHS->getOperand(1);
+  FCmpInst::Predicate PredL = LHS->getPredicate(), PredR = RHS->getPredicate();
 
-  if (Op0LHS == Op1RHS && Op0RHS == Op1LHS) {
+  if (LHS0 == RHS1 && RHS0 == LHS1) {
     // Swap RHS operands to match LHS.
-    Op1CC = FCmpInst::getSwappedPredicate(Op1CC);
-    std::swap(Op1LHS, Op1RHS);
+    PredR = FCmpInst::getSwappedPredicate(PredR);
+    std::swap(RHS0, RHS1);
   }
 
   // Simplify (fcmp cc0 x, y) & (fcmp cc1 x, y).
@@ -930,31 +921,30 @@ Value *InstCombiner::foldAndOfFCmps(FCmpInst *LHS, FCmpInst *RHS) {
   //    bool(R & CC0) && bool(R & CC1)
   //  = bool((R & CC0) & (R & CC1))
   //  = bool(R & (CC0 & CC1)) <= by re-association, commutation, and idempotency
-  if (Op0LHS == Op1LHS && Op0RHS == Op1RHS)
-    return getFCmpValue(getFCmpCode(Op0CC) & getFCmpCode(Op1CC), Op0LHS, Op0RHS,
-                        Builder);
+  //
+  // Since (R & CC0) and (R & CC1) are either R or 0, we actually have this:
+  //    bool(R & CC0) || bool(R & CC1)
+  //  = bool((R & CC0) | (R & CC1))
+  //  = bool(R & (CC0 | CC1)) <= by reversed distribution (contribution? ;)
+  if (LHS0 == RHS0 && LHS1 == RHS1) {
+    unsigned FCmpCodeL = getFCmpCode(PredL);
+    unsigned FCmpCodeR = getFCmpCode(PredR);
+    unsigned NewPred = IsAnd ? FCmpCodeL & FCmpCodeR : FCmpCodeL | FCmpCodeR;
+    return getFCmpValue(NewPred, LHS0, LHS1, Builder);
+  }
 
-  if (LHS->getPredicate() == FCmpInst::FCMP_ORD &&
-      RHS->getPredicate() == FCmpInst::FCMP_ORD) {
-    if (LHS->getOperand(0)->getType() != RHS->getOperand(0)->getType())
+  if ((PredL == FCmpInst::FCMP_ORD && PredR == FCmpInst::FCMP_ORD && IsAnd) ||
+      (PredL == FCmpInst::FCMP_UNO && PredR == FCmpInst::FCMP_UNO && !IsAnd)) {
+    if (LHS0->getType() != RHS0->getType())
       return nullptr;
 
-    // (fcmp ord x, c) & (fcmp ord y, c)  -> (fcmp ord x, y)
-    if (ConstantFP *LHSC = dyn_cast<ConstantFP>(LHS->getOperand(1)))
-      if (ConstantFP *RHSC = dyn_cast<ConstantFP>(RHS->getOperand(1))) {
-        // If either of the constants are nans, then the whole thing returns
-        // false.
-        if (LHSC->getValueAPF().isNaN() || RHSC->getValueAPF().isNaN())
-          return Builder.getFalse();
-        return Builder.CreateFCmpORD(LHS->getOperand(0), RHS->getOperand(0));
-      }
-
-    // Handle vector zeros.  This occurs because the canonical form of
-    // "fcmp ord x,x" is "fcmp ord x, 0".
-    if (isa<ConstantAggregateZero>(LHS->getOperand(1)) &&
-        isa<ConstantAggregateZero>(RHS->getOperand(1)))
-      return Builder.CreateFCmpORD(LHS->getOperand(0), RHS->getOperand(0));
-    return nullptr;
+    // FCmp canonicalization ensures that (fcmp ord/uno X, X) and
+    // (fcmp ord/uno X, C) will be transformed to (fcmp X, 0.0).
+    if (match(LHS1, m_Zero()) && LHS1 == RHS1)
+      // Ignore the constants because they are obviously not NANs:
+      // (fcmp ord x, 0.0) & (fcmp ord y, 0.0)  -> (fcmp ord x, y)
+      // (fcmp uno x, 0.0) | (fcmp uno y, 0.0)  -> (fcmp uno x, y)
+      return Builder.CreateFCmp(PredL, LHS0, RHS0);
   }
 
   return nullptr;
@@ -996,12 +986,6 @@ bool InstCombiner::shouldOptimizeCast(CastInst *CI) {
   if (const auto *PrecedingCI = dyn_cast<CastInst>(CastSrc))
     if (isEliminableCastPair(PrecedingCI, CI))
       return false;
-
-  // If this is a vector sext from a compare, then we don't want to break the
-  // idiom where each element of the extended vector is either zero or all ones.
-  if (CI->getOpcode() == Instruction::SExt &&
-      isa<CmpInst>(CastSrc) && CI->getDestTy()->isVectorTy())
-    return false;
 
   return true;
 }
@@ -1105,13 +1089,9 @@ Instruction *InstCombiner::foldCastedBitwiseLogic(BinaryOperator &I) {
   // cast is otherwise not optimizable.  This happens for vector sexts.
   FCmpInst *FCmp0 = dyn_cast<FCmpInst>(Cast0Src);
   FCmpInst *FCmp1 = dyn_cast<FCmpInst>(Cast1Src);
-  if (FCmp0 && FCmp1) {
-    Value *Res = LogicOpc == Instruction::And ? foldAndOfFCmps(FCmp0, FCmp1)
-                                              : foldOrOfFCmps(FCmp0, FCmp1);
-    if (Res)
-      return CastInst::Create(CastOpcode, Res, DestTy);
-    return nullptr;
-  }
+  if (FCmp0 && FCmp1)
+    if (Value *R = foldLogicOfFCmps(FCmp0, FCmp1, LogicOpc == Instruction::And))
+      return CastInst::Create(CastOpcode, R, DestTy);
 
   return nullptr;
 }
@@ -1400,10 +1380,9 @@ Instruction *InstCombiner::visitAnd(BinaryOperator &I) {
     }
   }
 
-  // If and'ing two fcmp, try combine them into one.
   if (FCmpInst *LHS = dyn_cast<FCmpInst>(I.getOperand(0)))
     if (FCmpInst *RHS = dyn_cast<FCmpInst>(I.getOperand(1)))
-      if (Value *Res = foldAndOfFCmps(LHS, RHS))
+      if (Value *Res = foldLogicOfFCmps(LHS, RHS, true))
         return replaceInstUsesWith(I, Res);
 
   if (Instruction *CastedAnd = foldCastedBitwiseLogic(I))
@@ -1772,57 +1751,6 @@ Value *InstCombiner::foldOrOfICmps(ICmpInst *LHS, ICmpInst *RHS,
   return nullptr;
 }
 
-/// Optimize (fcmp)|(fcmp).  NOTE: Unlike the rest of instcombine, this returns
-/// a Value which should already be inserted into the function.
-Value *InstCombiner::foldOrOfFCmps(FCmpInst *LHS, FCmpInst *RHS) {
-  Value *Op0LHS = LHS->getOperand(0), *Op0RHS = LHS->getOperand(1);
-  Value *Op1LHS = RHS->getOperand(0), *Op1RHS = RHS->getOperand(1);
-  FCmpInst::Predicate Op0CC = LHS->getPredicate(), Op1CC = RHS->getPredicate();
-
-  if (Op0LHS == Op1RHS && Op0RHS == Op1LHS) {
-    // Swap RHS operands to match LHS.
-    Op1CC = FCmpInst::getSwappedPredicate(Op1CC);
-    std::swap(Op1LHS, Op1RHS);
-  }
-
-  // Simplify (fcmp cc0 x, y) | (fcmp cc1 x, y).
-  // This is a similar transformation to the one in FoldAndOfFCmps.
-  //
-  // Since (R & CC0) and (R & CC1) are either R or 0, we actually have this:
-  //    bool(R & CC0) || bool(R & CC1)
-  //  = bool((R & CC0) | (R & CC1))
-  //  = bool(R & (CC0 | CC1)) <= by reversed distribution (contribution? ;)
-  if (Op0LHS == Op1LHS && Op0RHS == Op1RHS)
-    return getFCmpValue(getFCmpCode(Op0CC) | getFCmpCode(Op1CC), Op0LHS, Op0RHS,
-                        Builder);
-
-  if (LHS->getPredicate() == FCmpInst::FCMP_UNO &&
-      RHS->getPredicate() == FCmpInst::FCMP_UNO &&
-      LHS->getOperand(0)->getType() == RHS->getOperand(0)->getType()) {
-    if (ConstantFP *LHSC = dyn_cast<ConstantFP>(LHS->getOperand(1)))
-      if (ConstantFP *RHSC = dyn_cast<ConstantFP>(RHS->getOperand(1))) {
-        // If either of the constants are nans, then the whole thing returns
-        // true.
-        if (LHSC->getValueAPF().isNaN() || RHSC->getValueAPF().isNaN())
-          return Builder.getTrue();
-
-        // Otherwise, no need to compare the two constants, compare the
-        // rest.
-        return Builder.CreateFCmpUNO(LHS->getOperand(0), RHS->getOperand(0));
-      }
-
-    // Handle vector zeros.  This occurs because the canonical form of
-    // "fcmp uno x,x" is "fcmp uno x, 0".
-    if (isa<ConstantAggregateZero>(LHS->getOperand(1)) &&
-        isa<ConstantAggregateZero>(RHS->getOperand(1)))
-      return Builder.CreateFCmpUNO(LHS->getOperand(0), RHS->getOperand(0));
-
-    return nullptr;
-  }
-
-  return nullptr;
-}
-
 // FIXME: We use commutative matchers (m_c_*) for some, but not all, matches
 // here. We should standardize that construct where it is needed or choose some
 // other way to ensure that commutated variants of patterns are not missed.
@@ -2056,10 +1984,9 @@ Instruction *InstCombiner::visitOr(BinaryOperator &I) {
     }
   }
 
-  // (fcmp uno x, c) | (fcmp uno y, c)  -> (fcmp uno x, y)
   if (FCmpInst *LHS = dyn_cast<FCmpInst>(I.getOperand(0)))
     if (FCmpInst *RHS = dyn_cast<FCmpInst>(I.getOperand(1)))
-      if (Value *Res = foldOrOfFCmps(LHS, RHS))
+      if (Value *Res = foldLogicOfFCmps(LHS, RHS, false))
         return replaceInstUsesWith(I, Res);
 
   if (Instruction *CastedOr = foldCastedBitwiseLogic(I))

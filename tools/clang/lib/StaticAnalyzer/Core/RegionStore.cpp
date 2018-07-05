@@ -18,7 +18,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/CharUnits.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
-#include "clang/Analysis/AnalysisContext.h"
+#include "clang/Analysis/AnalysisDeclContext.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/CallEvent.h"
@@ -409,6 +409,19 @@ public: // Part of public interface to class.
 
   // BindDefault is only used to initialize a region with a default value.
   StoreRef BindDefault(Store store, const MemRegion *R, SVal V) override {
+    // FIXME: The offsets of empty bases can be tricky because of
+    // of the so called "empty base class optimization".
+    // If a base class has been optimized out
+    // we should not try to create a binding, otherwise we should.
+    // Unfortunately, at the moment ASTRecordLayout doesn't expose
+    // the actual sizes of the empty bases
+    // and trying to infer them from offsets/alignments
+    // seems to be error-prone and non-trivial because of the trailing padding.
+    // As a temporary mitigation we don't create bindings for empty bases.
+    if (R->getKind() == MemRegion::CXXBaseObjectRegionKind &&
+        cast<CXXBaseObjectRegion>(R)->getDecl()->isEmpty())
+      return StoreRef(store, *this);
+
     RegionBindingsRef B = getRegionBindings(store);
     assert(!B.lookup(R, BindingKey::Direct));
 

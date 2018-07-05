@@ -26,6 +26,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstring>
@@ -39,52 +40,27 @@ static cl::list<std::string>
 InputFilenames(cl::Positional, cl::desc("<input object files or .dSYM bundles>"),
                cl::ZeroOrMore);
 
-static cl::opt<DIDumpType> DumpType(
-    "debug-dump", cl::init(DIDT_All), cl::desc("Dump of debug sections:"),
-    cl::values(
-        clEnumValN(DIDT_All, "all", "Dump all debug sections"),
-        clEnumValN(DIDT_Abbrev, "abbrev", ".debug_abbrev"),
-        clEnumValN(DIDT_AbbrevDwo, "abbrev.dwo", ".debug_abbrev.dwo"),
-        clEnumValN(DIDT_AppleNames, "apple_names", ".apple_names"),
-        clEnumValN(DIDT_AppleTypes, "apple_types", ".apple_types"),
-        clEnumValN(DIDT_AppleNamespaces, "apple_namespaces",
-                   ".apple_namespaces"),
-        clEnumValN(DIDT_AppleObjC, "apple_objc", ".apple_objc"),
-        clEnumValN(DIDT_Aranges, "aranges", ".debug_aranges"),
-        clEnumValN(DIDT_Info, "info", ".debug_info"),
-        clEnumValN(DIDT_InfoDwo, "info.dwo", ".debug_info.dwo"),
-        clEnumValN(DIDT_Types, "types", ".debug_types"),
-        clEnumValN(DIDT_TypesDwo, "types.dwo", ".debug_types.dwo"),
-        clEnumValN(DIDT_Line, "line", ".debug_line"),
-        clEnumValN(DIDT_LineDwo, "line.dwo", ".debug_line.dwo"),
-        clEnumValN(DIDT_Loc, "loc", ".debug_loc"),
-        clEnumValN(DIDT_LocDwo, "loc.dwo", ".debug_loc.dwo"),
-        clEnumValN(DIDT_Frames, "frames", ".debug_frame"),
-        clEnumValN(DIDT_Macro, "macro", ".debug_macinfo"),
-        clEnumValN(DIDT_Ranges, "ranges", ".debug_ranges"),
-        clEnumValN(DIDT_Pubnames, "pubnames", ".debug_pubnames"),
-        clEnumValN(DIDT_Pubtypes, "pubtypes", ".debug_pubtypes"),
-        clEnumValN(DIDT_GnuPubnames, "gnu_pubnames", ".debug_gnu_pubnames"),
-        clEnumValN(DIDT_GnuPubtypes, "gnu_pubtypes", ".debug_gnu_pubtypes"),
-        clEnumValN(DIDT_Str, "str", ".debug_str"),
-        clEnumValN(DIDT_StrOffsets, "str_offsets", ".debug_str_offsets"),
-        clEnumValN(DIDT_StrDwo, "str.dwo", ".debug_str.dwo"),
-        clEnumValN(DIDT_StrOffsetsDwo, "str_offsets.dwo",
-                   ".debug_str_offsets.dwo"),
-        clEnumValN(DIDT_CUIndex, "cu_index", ".debug_cu_index"),
-        clEnumValN(DIDT_GdbIndex, "gdb_index", ".gdb_index"),
-        clEnumValN(DIDT_TUIndex, "tu_index", ".debug_tu_index")));
+static cl::opt<bool> DumpAll("all", cl::desc("Dump all debug info sections"));
+static cl::alias DumpAllAlias("a", cl::desc("Alias for --all"),
+                              cl::aliasopt(DumpAll));
+
+static uint64_t DumpType = DIDT_Null;
+#define HANDLE_DWARF_SECTION(ENUM_NAME, ELF_NAME, CMDLINE_NAME)                \
+  static cl::opt<bool> Dump##ENUM_NAME(                                        \
+      CMDLINE_NAME, cl::desc("Dump the " ELF_NAME " section"));
+#include "llvm/BinaryFormat/Dwarf.def"
+#undef HANDLE_DWARF_SECTION
 
 static cl::opt<bool>
     SummarizeTypes("summarize-types",
                    cl::desc("Abbreviate the description of type unit entries"));
-
 static cl::opt<bool> Verify("verify", cl::desc("Verify the DWARF debug info"));
-
 static cl::opt<bool> Quiet("quiet",
                            cl::desc("Use with -verify to not emit to STDOUT."));
-
-static cl::opt<bool> Brief("brief", cl::desc("Print fewer low-level details"));
+static cl::opt<bool> Verbose("verbose",
+                             cl::desc("Print more low-level encoding details"));
+static cl::alias VerboseAlias("v", cl::desc("Alias for -verbose"),
+                              cl::aliasopt(Verbose));
 
 static void error(StringRef Filename, std::error_code EC) {
   if (!EC)
@@ -94,7 +70,9 @@ static void error(StringRef Filename, std::error_code EC) {
 }
 
 static void DumpObjectFile(ObjectFile &Obj, Twine Filename) {
-  std::unique_ptr<DIContext> DICtx = DWARFContext::create(Obj);
+  std::unique_ptr<DWARFContext> DICtx = DWARFContext::create(Obj);
+  logAllUnhandledErrors(DICtx->loadRegisterInfo(Obj), errs(),
+                        Filename.str() + ": ");
 
   outs() << Filename.str() << ":\tfile format " << Obj.getFileFormatName()
          << "\n\n";
@@ -104,7 +82,7 @@ static void DumpObjectFile(ObjectFile &Obj, Twine Filename) {
   DIDumpOptions DumpOpts;
   DumpOpts.DumpType = DumpType;
   DumpOpts.SummarizeTypes = SummarizeTypes;
-  DumpOpts.Brief = Brief;
+  DumpOpts.Brief = !Verbose;
   DICtx->dump(outs(), DumpOpts);
 }
 
@@ -151,12 +129,12 @@ static bool VerifyInput(StringRef Filename) {
   MemoryBuffer::getFileOrSTDIN(Filename);
   error(Filename, BuffOrErr.getError());
   std::unique_ptr<MemoryBuffer> Buff = std::move(BuffOrErr.get());
-  
+
   Expected<std::unique_ptr<Binary>> BinOrErr =
   object::createBinary(Buff->getMemBufferRef());
   if (!BinOrErr)
     error(Filename, errorToErrorCode(BinOrErr.takeError()));
-  
+
   bool Result = true;
   if (auto *Obj = dyn_cast<ObjectFile>(BinOrErr->get()))
     Result = VerifyObjectFile(*Obj, Filename);
@@ -209,7 +187,26 @@ int main(int argc, char **argv) {
   PrettyStackTraceProgram X(argc, argv);
   llvm_shutdown_obj Y;  // Call llvm_shutdown() on exit.
 
+  llvm::InitializeAllTargetInfos();
+  llvm::InitializeAllTargetMCs();
+
   cl::ParseCommandLineOptions(argc, argv, "llvm dwarf dumper\n");
+
+  // Defaults to dumping all sections, unless brief mode is specified in which
+  // case only the .debug_info section in dumped.
+#define HANDLE_DWARF_SECTION(ENUM_NAME, ELF_NAME, CMDLINE_NAME)                \
+  if (Dump##ENUM_NAME)                                                         \
+    DumpType |= DIDT_##ENUM_NAME;
+#include "llvm/BinaryFormat/Dwarf.def"
+#undef HANDLE_DWARF_SECTION
+  if (DumpAll)
+    DumpType = DIDT_All;
+  if (DumpType == DIDT_Null) {
+    if (Verbose)
+      DumpType = DIDT_All;
+    else
+      DumpType = DIDT_DebugInfo;
+  }
 
   // Defaults to a.out if no filenames specified.
   if (InputFilenames.size() == 0)

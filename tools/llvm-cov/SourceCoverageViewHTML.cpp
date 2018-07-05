@@ -285,12 +285,16 @@ void CoveragePrinterHTML::closeViewFile(OwnedStream OS) {
 }
 
 /// Emit column labels for the table in the index.
-static void emitColumnLabelsForIndex(raw_ostream &OS) {
+static void emitColumnLabelsForIndex(raw_ostream &OS,
+                                     const CoverageViewOptions &Opts) {
   SmallVector<std::string, 4> Columns;
   Columns.emplace_back(tag("td", "Filename", "column-entry-left"));
-  for (const char *Label : {"Function Coverage", "Instantiation Coverage",
-                            "Line Coverage", "Region Coverage"})
-    Columns.emplace_back(tag("td", Label, "column-entry"));
+  Columns.emplace_back(tag("td", "Function Coverage", "column-entry"));
+  if (Opts.ShowInstantiationSummary)
+    Columns.emplace_back(tag("td", "Instantiation Coverage", "column-entry"));
+  Columns.emplace_back(tag("td", "Line Coverage", "column-entry"));
+  if (Opts.ShowRegionSummary)
+    Columns.emplace_back(tag("td", "Region Coverage", "column-entry"));
   OS << tag("tr", join(Columns.begin(), Columns.end(), ""));
 }
 
@@ -345,14 +349,16 @@ void CoveragePrinterHTML::emitFileSummary(raw_ostream &OS, StringRef SF,
   AddCoverageTripleToColumn(FCS.FunctionCoverage.Executed,
                             FCS.FunctionCoverage.NumFunctions,
                             FCS.FunctionCoverage.getPercentCovered());
-  AddCoverageTripleToColumn(FCS.InstantiationCoverage.Executed,
-                            FCS.InstantiationCoverage.NumFunctions,
-                            FCS.InstantiationCoverage.getPercentCovered());
+  if (Opts.ShowInstantiationSummary)
+    AddCoverageTripleToColumn(FCS.InstantiationCoverage.Executed,
+                              FCS.InstantiationCoverage.NumFunctions,
+                              FCS.InstantiationCoverage.getPercentCovered());
   AddCoverageTripleToColumn(FCS.LineCoverage.Covered, FCS.LineCoverage.NumLines,
                             FCS.LineCoverage.getPercentCovered());
-  AddCoverageTripleToColumn(FCS.RegionCoverage.Covered,
-                            FCS.RegionCoverage.NumRegions,
-                            FCS.RegionCoverage.getPercentCovered());
+  if (Opts.ShowRegionSummary)
+    AddCoverageTripleToColumn(FCS.RegionCoverage.Covered,
+                              FCS.RegionCoverage.NumRegions,
+                              FCS.RegionCoverage.getPercentCovered());
 
   OS << tag("tr", join(Columns.begin(), Columns.end(), ""), "light-row");
 }
@@ -395,10 +401,10 @@ Error CoveragePrinterHTML::createIndexFile(
   // Emit a table containing links to reports for each file in the covmapping.
   // Exclude files which don't contain any regions.
   OSRef << BeginCenteredDiv << BeginTable;
-  emitColumnLabelsForIndex(OSRef);
+  emitColumnLabelsForIndex(OSRef, Opts);
   FileCoverageSummary Totals("TOTALS");
   auto FileReports =
-      CoverageReport::prepareFileReports(Coverage, Totals, SourceFiles);
+      CoverageReport::prepareFileReports(Coverage, Totals, SourceFiles, Opts);
   bool EmptyFiles = false;
   for (unsigned I = 0, E = FileReports.size(); I < E; ++I) {
     if (FileReports[I].FunctionCoverage.NumFunctions)
@@ -547,25 +553,21 @@ void SourceCoverageViewHTML::renderLine(
   // 4. Snippets[1:N+1] correspond to \p Segments[0:N]: use these to generate
   //    sub-line region count tooltips if needed.
 
-  bool HasMultipleRegions = [&] {
-    unsigned RegionCount = 0;
-    for (const auto *S : Segments)
-      if (S->HasCount && S->IsRegionEntry)
-        if (++RegionCount > 1)
-          return true;
-    return false;
-  }();
-
-  if (shouldRenderRegionMarkers(HasMultipleRegions)) {
-    for (unsigned I = 0, E = Segments.size(); I < E; ++I) {
+  if (shouldRenderRegionMarkers(Segments)) {
+    // Just consider the segments which start *and* end on this line.
+    for (unsigned I = 0, E = Segments.size() - 1; I < E; ++I) {
       const auto *CurSeg = Segments[I];
-      if (!CurSeg->IsRegionEntry || !CurSeg->HasCount)
+      if (!CurSeg->IsRegionEntry)
         continue;
 
       Snippets[I + 1] =
           tag("div", Snippets[I + 1] + tag("span", formatCount(CurSeg->Count),
                                            "tooltip-content"),
               "tooltip");
+
+      if (getOptions().Debug)
+        errs() << "Marker at " << CurSeg->Line << ":" << CurSeg->Col << " = "
+               << formatCount(CurSeg->Count) << "\n";
     }
   }
 

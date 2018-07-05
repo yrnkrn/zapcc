@@ -11,7 +11,7 @@
 // which is used in GCC 3.2 and newer (and many compilers that are
 // ABI-compatible with GCC):
 //
-//   http://mentorembedded.github.io/cxx-abi/abi.html#mangling
+//   http://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
 //
 //===----------------------------------------------------------------------===//
 #include "clang/AST/Mangle.h"
@@ -384,6 +384,7 @@ class CXXNameMangler {
   AbiTagState AbiTagsRoot;
 
   llvm::DenseMap<uintptr_t, unsigned> Substitutions;
+  llvm::DenseMap<StringRef, unsigned> ModuleSubstitutions;
 
   ASTContext &getASTContext() const { return Context.getASTContext(); }
 
@@ -478,6 +479,8 @@ private:
 
   void mangleNameWithAbiTags(const NamedDecl *ND,
                              const AbiTagList *AdditionalAbiTags);
+  void mangleModuleName(const Module *M);
+  void mangleModuleNamePrefix(StringRef Name);
   void mangleTemplateName(const TemplateDecl *TD,
                           const TemplateArgument *TemplateArgs,
                           unsigned NumTemplateArgs);
@@ -848,9 +851,9 @@ void CXXNameMangler::mangleName(const NamedDecl *ND) {
 
 void CXXNameMangler::mangleNameWithAbiTags(const NamedDecl *ND,
                                            const AbiTagList *AdditionalAbiTags) {
-  //  <name> ::= <nested-name>
-  //         ::= <unscoped-name>
-  //         ::= <unscoped-template-name> <template-args>
+  //  <name> ::= [<module-name>] <nested-name>
+  //         ::= [<module-name>] <unscoped-name>
+  //         ::= [<module-name>] <unscoped-template-name> <template-args>
   //         ::= <local-name>
   //
   const DeclContext *DC = getEffectiveDeclContext(ND);
@@ -869,6 +872,19 @@ void CXXNameMangler::mangleNameWithAbiTags(const NamedDecl *ND,
 
   DC = IgnoreLinkageSpecDecls(DC);
 
+  if (isLocalContainerContext(DC)) {
+    mangleLocalName(ND, AdditionalAbiTags);
+    return;
+  }
+
+  // Do not mangle the owning module for an external linkage declaration.
+  // This enables backwards-compatibility with non-modular code, and is
+  // a valid choice since conflicts are not permitted by C++ Modules TS
+  // [basic.def.odr]/6.2.
+  if (!ND->hasExternalFormalLinkage())
+    if (Module *M = ND->getOwningModuleForLinkage())
+      mangleModuleName(M);
+
   if (DC->isTranslationUnit() || isStdNamespace(DC)) {
     // Check if we have a template.
     const TemplateArgumentList *TemplateArgs = nullptr;
@@ -882,12 +898,42 @@ void CXXNameMangler::mangleNameWithAbiTags(const NamedDecl *ND,
     return;
   }
 
-  if (isLocalContainerContext(DC)) {
-    mangleLocalName(ND, AdditionalAbiTags);
+  mangleNestedName(ND, DC, AdditionalAbiTags);
+}
+
+void CXXNameMangler::mangleModuleName(const Module *M) {
+  // Implement the C++ Modules TS name mangling proposal; see
+  //     https://gcc.gnu.org/wiki/cxx-modules?action=AttachFile
+  //
+  //   <module-name> ::= W <unscoped-name>+ E
+  //                 ::= W <module-subst> <unscoped-name>* E
+  Out << 'W';
+  mangleModuleNamePrefix(M->Name);
+  Out << 'E';
+}
+
+void CXXNameMangler::mangleModuleNamePrefix(StringRef Name) {
+  //  <module-subst> ::= _ <seq-id>          # 0 < seq-id < 10
+  //                 ::= W <seq-id - 10> _   # otherwise
+  auto It = ModuleSubstitutions.find(Name);
+  if (It != ModuleSubstitutions.end()) {
+    if (It->second < 10)
+      Out << '_' << static_cast<char>('0' + It->second);
+    else
+      Out << 'W' << (It->second - 10) << '_';
     return;
   }
 
-  mangleNestedName(ND, DC, AdditionalAbiTags);
+  // FIXME: Preserve hierarchy in module names rather than flattening
+  // them to strings; use Module*s as substitution keys.
+  auto Parts = Name.rsplit('.');
+  if (Parts.second.empty())
+    Parts.second = Parts.first;
+  else
+    mangleModuleNamePrefix(Parts.first);
+
+  Out << Parts.second.size() << Parts.second;
+  ModuleSubstitutions.insert({Name, ModuleSubstitutions.size()});
 }
 
 void CXXNameMangler::mangleTemplateName(const TemplateDecl *TD,
@@ -1236,13 +1282,16 @@ void CXXNameMangler::mangleUnqualifiedName(const NamedDecl *ND,
     }
 
     if (II) {
-      // We must avoid conflicts between internally- and externally-
-      // linked variable and function declaration names in the same TU:
+      // Match GCC's naming convention for internal linkage symbols, for
+      // symbols that are not actually visible outside of this TU. GCC
+      // distinguishes between internal and external linkage symbols in
+      // its mangling, to support cases like this that were valid C++ prior
+      // to DR426:
+      //
       //   void test() { extern void foo(); }
       //   static void foo();
-      // This naming convention is the same as that followed by GCC,
-      // though it shouldn't actually matter.
       if (ND && ND->getFormalLinkage() == InternalLinkage &&
+          !ND->isExternallyVisible() &&
           getEffectiveDeclContext(ND)->isFileContext())
         Out << 'L';
 
@@ -1623,6 +1672,10 @@ void CXXNameMangler::mangleUnqualifiedBlock(const BlockDecl *Block) {
   // the symbol in question isn't externally visible.
   if (!Number)
     Number = Context.getBlockId(Block, false);
+  else {
+    // Stored mangling numbers are 1-based.
+    --Number;
+  }
   Out << "Ub";
   if (Number > 0)
     Out << Number - 1;
@@ -2395,6 +2448,7 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
   // UNSUPPORTED:    ::= De # IEEE 754r decimal floating point (128 bits)
   // UNSUPPORTED:    ::= Df # IEEE 754r decimal floating point (32 bits)
   //                 ::= Dh # IEEE 754r half-precision floating point (16 bits)
+  //                 ::= DF <number> _ # ISO/IEC TS 18661 binary floating point type _FloatN (N bits);
   //                 ::= Di # char32_t
   //                 ::= Ds # char16_t
   //                 ::= Dn # std::nullptr_t (i.e., decltype(nullptr))
@@ -2456,6 +2510,9 @@ void CXXNameMangler::mangleType(const BuiltinType *T) {
     break;
   case BuiltinType::Int128:
     Out << 'n';
+    break;
+  case BuiltinType::Float16:
+    Out << "DF16_";
     break;
   case BuiltinType::Half:
     Out << "Dh";
@@ -3346,7 +3403,6 @@ recurse:
   case Expr::BlockExprClass:
   case Expr::ChooseExprClass:
   case Expr::CompoundLiteralExprClass:
-  case Expr::DesignatedInitExprClass:
   case Expr::ExtVectorElementExprClass:
   case Expr::GenericSelectionExprClass:
   case Expr::ObjCEncodeExprClass:
@@ -3421,6 +3477,27 @@ recurse:
     Out << "il";
     mangleInitListElements(cast<InitListExpr>(E));
     Out << "E";
+    break;
+  }
+
+  case Expr::DesignatedInitExprClass: {
+    auto *DIE = cast<DesignatedInitExpr>(E);
+    for (const auto &Designator : DIE->designators()) {
+      if (Designator.isFieldDesignator()) {
+        Out << "di";
+        mangleSourceName(Designator.getFieldName());
+      } else if (Designator.isArrayDesignator()) {
+        Out << "dx";
+        mangleExpression(DIE->getArrayIndex(Designator));
+      } else {
+        assert(Designator.isArrayRangeDesignator() &&
+               "unknown designator kind");
+        Out << "dX";
+        mangleExpression(DIE->getArrayRangeStart(Designator));
+        mangleExpression(DIE->getArrayRangeEnd(Designator));
+      }
+    }
+    mangleExpression(DIE->getInit());
     break;
   }
 
@@ -3580,6 +3657,16 @@ recurse:
   case Expr::CXXUnresolvedConstructExprClass: {
     const CXXUnresolvedConstructExpr *CE = cast<CXXUnresolvedConstructExpr>(E);
     unsigned N = CE->arg_size();
+
+    if (CE->isListInitialization()) {
+      assert(N == 1 && "unexpected form for list initialization");
+      auto *IL = cast<InitListExpr>(CE->getArg(0));
+      Out << "tl";
+      mangleType(CE->getType());
+      mangleInitListElements(IL);
+      Out << "E";
+      return;
+    }
 
     Out << "cv";
     mangleType(CE->getType());

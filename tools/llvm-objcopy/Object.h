@@ -71,6 +71,8 @@ public:
   uint64_t Type;
   uint64_t VAddr;
 
+  uint64_t OriginalOffset;
+
   Segment(llvm::ArrayRef<uint8_t> Data) : Contents(Data) {}
   void finalize();
   const SectionBase *firstSection() const {
@@ -111,6 +113,86 @@ public:
   }
 };
 
+// Symbols have a st_shndx field that normally stores an index but occasionally
+// stores a different special value. This enum keeps track of what the st_shndx
+// field means. Most of the values are just copies of the special SHN_* values.
+// SYMBOL_SIMPLE_INDEX means that the st_shndx is just an index of a section.
+enum SymbolShndxType {
+  SYMBOL_SIMPLE_INDEX = 0,
+  SYMBOL_ABS = llvm::ELF::SHN_ABS,
+  SYMBOL_COMMON = llvm::ELF::SHN_COMMON,
+  SYMBOL_HEXAGON_SCOMMON = llvm::ELF::SHN_HEXAGON_SCOMMON,
+  SYMBOL_HEXAGON_SCOMMON_2 = llvm::ELF::SHN_HEXAGON_SCOMMON_2,
+  SYMBOL_HEXAGON_SCOMMON_4 = llvm::ELF::SHN_HEXAGON_SCOMMON_4,
+  SYMBOL_HEXAGON_SCOMMON_8 = llvm::ELF::SHN_HEXAGON_SCOMMON_8,
+};
+
+struct Symbol {
+  uint8_t Binding;
+  SectionBase *DefinedIn;
+  SymbolShndxType ShndxType;
+  uint32_t Index;
+  llvm::StringRef Name;
+  uint32_t NameIndex;
+  uint64_t Size;
+  uint8_t Type;
+  uint64_t Value;
+
+  uint16_t getShndx() const;
+};
+
+class SymbolTableSection : public SectionBase {
+protected:
+  std::vector<std::unique_ptr<Symbol>> Symbols;
+  StringTableSection *SymbolNames;
+
+public:
+  void setStrTab(StringTableSection *StrTab) { SymbolNames = StrTab; }
+  void addSymbol(llvm::StringRef Name, uint8_t Bind, uint8_t Type,
+                 SectionBase *DefinedIn, uint64_t Value, uint16_t Shndx,
+                 uint64_t Sz);
+  void addSymbolNames();
+  const Symbol *getSymbolByIndex(uint32_t Index) const;
+  void finalize() override;
+  static bool classof(const SectionBase *S) {
+    return S->Type == llvm::ELF::SHT_SYMTAB;
+  }
+};
+
+// Only writeSection depends on the ELF type so we implement it in a subclass.
+template <class ELFT> class SymbolTableSectionImpl : public SymbolTableSection {
+  void writeSection(llvm::FileOutputBuffer &Out) const override;
+};
+
+struct Relocation {
+  const Symbol *RelocSymbol;
+  uint64_t Offset;
+  uint64_t Addend;
+  uint32_t Type;
+};
+
+template <class ELFT> class RelocationSection : public SectionBase {
+private:
+  typedef typename ELFT::Rel Elf_Rel;
+  typedef typename ELFT::Rela Elf_Rela;
+
+  std::vector<Relocation> Relocations;
+  SymbolTableSection *Symbols;
+  SectionBase *SecToApplyRel;
+
+  template <class T> void writeRel(T *Buf) const;
+
+public:
+  void setSymTab(SymbolTableSection *StrTab) { Symbols = StrTab; }
+  void setSection(SectionBase *Sec) { SecToApplyRel = Sec; }
+  void addRelocation(Relocation Rel) { Relocations.push_back(Rel); }
+  void finalize() override;
+  void writeSection(llvm::FileOutputBuffer &Out) const override;
+  static bool classof(const SectionBase *S) {
+    return S->Type == llvm::ELF::SHT_REL || S->Type == llvm::ELF::SHT_RELA;
+  }
+};
+
 template <class ELFT> class Object {
 private:
   typedef std::unique_ptr<SectionBase> SecPtr;
@@ -120,6 +202,8 @@ private:
   typedef typename ELFT::Ehdr Elf_Ehdr;
   typedef typename ELFT::Phdr Elf_Phdr;
 
+  void initSymbolTable(const llvm::object::ELFFile<ELFT> &ElfFile,
+                       SymbolTableSection *SymTab);
   SecPtr makeSection(const llvm::object::ELFFile<ELFT> &ElfFile,
                      const Elf_Shdr &Shdr);
   void readProgramHeaders(const llvm::object::ELFFile<ELFT> &ElfFile);
@@ -127,6 +211,7 @@ private:
 
 protected:
   StringTableSection *SectionNames;
+  SymbolTableSection *SymbolTable;
   std::vector<SecPtr> Sections;
   std::vector<SegPtr> Segments;
 

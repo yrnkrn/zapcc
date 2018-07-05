@@ -313,6 +313,10 @@ public:
     return getGeneration() >= GFX9;
   }
 
+  bool hasMadMixInsts() const {
+    return getGeneration() >= GFX9;
+  }
+
   bool hasCARRY() const {
     return (getGeneration() >= EVERGREEN);
   }
@@ -425,6 +429,10 @@ public:
 
   bool hasFlatScratchInsts() const {
     return FlatScratchInsts;
+  }
+
+  bool hasD16LoadStore() const {
+    return getGeneration() >= GFX9;
   }
 
   bool hasAddNoCarry() const {

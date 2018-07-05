@@ -41,7 +41,7 @@ enum {
 #include "Options.inc"
 #undef PREFIX
 
-static const llvm::opt::OptTable::Info infoTable[] = {
+static const llvm::opt::OptTable::Info InfoTable[] = {
 #define OPTION(X1, X2, ID, KIND, GROUP, ALIAS, X7, X8, X9, X10, X11, X12)      \
   {X1, X2, X10,         X11,         OPT_##ID, llvm::opt::Option::KIND##Class, \
    X9, X8, OPT_##GROUP, OPT_##ALIAS, X7,       X12},
@@ -51,26 +51,21 @@ static const llvm::opt::OptTable::Info infoTable[] = {
 
 class DllOptTable : public llvm::opt::OptTable {
 public:
-  DllOptTable() : OptTable(infoTable, false) {}
+  DllOptTable() : OptTable(InfoTable, false) {}
 };
 
 } // namespace
 
-std::vector<std::unique_ptr<MemoryBuffer>> OwningMBs;
-
 // Opens a file. Path has to be resolved already.
-// Newly created memory buffers are owned by this driver.
-Optional<MemoryBufferRef> openFile(StringRef Path) {
+static std::unique_ptr<MemoryBuffer> openFile(const Twine &Path) {
   ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> MB = MemoryBuffer::getFile(Path);
 
   if (std::error_code EC = MB.getError()) {
     llvm::errs() << "cannot open file " << Path << ": " << EC.message() << "\n";
-    return None;
+    return nullptr;
   }
 
-  MemoryBufferRef MBRef = MB.get()->getMemBufferRef();
-  OwningMBs.push_back(std::move(MB.get())); // take ownership
-  return MBRef;
+  return std::move(*MB);
 }
 
 static MachineTypes getEmulation(StringRef S) {
@@ -82,7 +77,7 @@ static MachineTypes getEmulation(StringRef S) {
       .Default(IMAGE_FILE_MACHINE_UNKNOWN);
 }
 
-static std::string getImplibPath(std::string Path) {
+static std::string getImplibPath(StringRef Path) {
   SmallString<128> Out = StringRef("lib");
   Out.append(Path);
   sys::path::replace_extension(Out, ".a");
@@ -104,13 +99,13 @@ int llvm::dlltoolDriverMain(llvm::ArrayRef<const char *> ArgsArr) {
   if (Args.hasArgNoClaim(OPT_INPUT) ||
       (!Args.hasArgNoClaim(OPT_d) && !Args.hasArgNoClaim(OPT_l))) {
     Table.PrintHelp(outs(), ArgsArr[0], "dlltool", false);
-    llvm::outs() << "\nTARGETS: i386, i386:x86-64, arm\n";
+    llvm::outs() << "\nTARGETS: i386, i386:x86-64, arm, arm64\n";
     return 1;
   }
 
   if (!Args.hasArgNoClaim(OPT_m) && Args.hasArgNoClaim(OPT_d)) {
     llvm::errs() << "error: no target machine specified\n"
-                 << "supported targets: i386, i386:x86-64, arm\n";
+                 << "supported targets: i386, i386:x86-64, arm, arm64\n";
     return 1;
   }
 
@@ -122,7 +117,8 @@ int llvm::dlltoolDriverMain(llvm::ArrayRef<const char *> ArgsArr) {
     return 1;
   }
 
-  Optional<MemoryBufferRef> MB = openFile(Args.getLastArg(OPT_d)->getValue());
+  std::unique_ptr<MemoryBuffer> MB =
+      openFile(Args.getLastArg(OPT_d)->getValue());
   if (!MB)
     return 1;
 

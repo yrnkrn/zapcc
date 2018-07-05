@@ -11,7 +11,7 @@
     .svn  { background-color: #FFFF99 }
     .full { background-color: #CCFF99 }
     .na { background-color: #DDDDDD }
-    span:target { background-color: #FFFFBB; outline: #DDDD55 solid thin; }
+    :target { background-color: #FFFFBB; outline: #DDDD55 solid thin; }
     th { background-color: #FFDDAA }
     td { vertical-align: middle }
     tt { white-space: nowrap }
@@ -26,7 +26,7 @@
 <!--*************************************************************************-->
 <h1>C++ Support in Clang</h1>
 <!--*************************************************************************-->
-<p>Last updated: $Date: 2017-08-11 06:39:40 +0300 (éåí å, 11 àåâ 2017) $</p>
+<p>Last updated: $Date: 2017-09-09 04:11:04 +0300 (ùáú, 09 ñôè 2017) $</p>
 
 <p>Clang fully implements all published ISO C++ standards (<a
 href="#cxx98">C++98 / C++03</a>, <a
@@ -524,7 +524,8 @@ version 3.7.
 <p>Clang 5 and later implement all the features
 of the C++ 2017 Draft International Standard.
 
-<p>You can use Clang in C++17 mode with the <code>-std=c++1z</code> option.</p>
+<p>You can use Clang in C++17 mode with the <code>-std=c++17</code> option
+(use <code>-std=c++1z</code> in Clang 4 and earlier).</p>
 
 <details open>
 <summary>List of features and minimum Clang version with support</summary>
@@ -647,7 +648,7 @@ of the C++ 2017 Draft International Standard.
     <tr>
       <td><tt>constexpr</tt> lambda expressions</td>
       <td><a href="http://wg21.link/p0170r1">P0170R1</a></td>
-      <td class="svn" align="center">Clang 5</td>
+      <td class="full" align="center">Clang 5</td>
     </tr>
     <tr>
       <td>Differing <tt>begin</tt> and <tt>end</tt> types in range-based <tt>for</tt></td>
@@ -683,7 +684,7 @@ of the C++ 2017 Draft International Standard.
     <tr>
       <td rowspan="2">Template argument deduction for class templates</td>
       <td><a href="http://wg21.link/p0091r3">P0091R3</a></td>
-      <td rowspan="2" class="svn" align="center">Clang 5</td>
+      <td rowspan="2" class="full" align="center">Clang 5</td>
     </tr>
       <tr> <!-- from Issaquah -->
         <td><a href="http://wg21.link/p0512r0">P0512R0</a></td>
@@ -777,13 +778,12 @@ code. This issue is expected to be rectified soon.
 
 <h2 id="cxx20">C++2a implementation status</h2>
 
-<p>Clang does not yet support any of the proposed features of
-<!--<p>Clang has <b>experimental</b> support for some proposed features of-->
+<p>Clang has <b>experimental</b> support for some proposed features of
 the C++ standard following C++17, provisionally named C++2a.
 Note that support for these features may change or be removed without notice,
 as the draft C++2a standard evolves.
 
-<!--<p>You can use Clang in C++2a mode with the <code>-std=c++2a</code> option.</p>-->
+<p>You can use Clang in C++2a mode with the <code>-std=c++2a</code> option.</p>
 
 <details open>
 <summary>List of features and minimum Clang version with support</summary>
@@ -798,17 +798,17 @@ as the draft C++2a standard evolves.
     <tr>
       <td>Default member initializers for bit-fields</td>
       <td><a href="http://wg21.link/p0683r1">P0683R1</a></td>
-      <td class="none" align="center">No</td>
+      <td class="svn" align="center">SVN</td>
     </tr>
     <tr>
       <td><tt>const&amp;</tt>-qualified pointers to members</td>
       <td><a href="http://wg21.link/p0704r1">P0704R1</a></td>
-      <td class="none" align="center">No</td>
+      <td class="svn" align="center">SVN</td>
     </tr>
     <tr>
       <td>Allow <i>lambda-capture</i> <tt>[=, this]</tt></td>
       <td><a href="http://wg21.link/p0409r2">P0409R2</a></td>
-      <td class="none" align="center">No</td>
+      <td class="svn" align="center">SVN</td>
     </tr>
     <tr>
       <td><tt>__VA_OPT__</tt> for preprocessor comma elision</td>
@@ -828,15 +828,21 @@ as the draft C++2a standard evolves.
     <tr>
       <td>Initializer list constructors in class template argument deduction</td>
       <td><a href="http://wg21.link/p0702r1">P0702R1</a></td>
-      <td class="none" align="center">No</td>
+      <td class="svn" align="center">SVN <a href="#p0702">(13)</a></td>
     </tr>
-    <tr>
+    <tr id="p0374">
       <td>Concepts</td>
       <td><a href="http://wg21.link/p0734r0">P0734R0</a></td>
       <td class="none" align="center">No</td>
     </tr>
 </table>
 </details>
+
+<p>
+<span id="p0702">(13): This is the resolution to a Defect Report, so is applied
+to all language versions supporting class template argument deduction.
+</span>
+</p>
 
 <h2 id="ts">Technical specifications and standing documents</h2>
 
@@ -872,7 +878,7 @@ and library features that are not part of standard C++.</p>
       </td>
     </tr>
     <tr>
-      <td class="svn" align="center">
+      <td class="full" align="center">
         Clang 5 (<a href="http://wg21.link/p0096r4">P0096R4</a>)</a>
       </td>
     </tr>
@@ -894,13 +900,13 @@ and library features that are not part of standard C++.</p>
       <td>[TS] Concepts</td>
       <td><a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2015/p0121r0.pdf">P0121R0</a></td>
       <td></td>
-      <td class="none" align="center">WIP</td>
+      <td class="na" align="center">Superseded by <a href="#p0374">P0734R0</a></td>
     </tr>
     <tr>
       <td>[DRAFT TS] Coroutines</td>
       <td><a href="https://isocpp.org/files/papers/N4663.pdf">N4663</a></td>
       <td><tt>-fcoroutines-ts<br>-stdlib=libc++</tt></td>
-      <td class="svn" align="center">Clang 5</td>
+      <td class="full" align="center">Clang 5</td>
     </tr>
     <tr>
       <td>[TS] Library Fundamentals, Version 1 (invocation type traits)</td>

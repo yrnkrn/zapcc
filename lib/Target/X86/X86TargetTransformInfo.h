@@ -47,6 +47,14 @@ public:
 
   /// @}
 
+  /// \name Cache TTI Implementation
+  /// @{
+  llvm::Optional<unsigned> getCacheSize(
+    TargetTransformInfo::CacheLevel Level) const;
+  llvm::Optional<unsigned> getCacheAssociativity(
+    TargetTransformInfo::CacheLevel Level) const;
+  /// @}
+
   /// \name Vector TTI Implementations
   /// @{
 
@@ -88,6 +96,9 @@ public:
   int getArithmeticReductionCost(unsigned Opcode, Type *Ty,
                                  bool IsPairwiseForm);
 
+  int getMinMaxReductionCost(Type *Ty, Type *CondTy, bool IsPairwiseForm,
+                             bool IsUnsigned);
+
   int getInterleavedMemoryOpCost(unsigned Opcode, Type *VecTy,
                                  unsigned Factor, ArrayRef<unsigned> Indices,
                                  unsigned Alignment, unsigned AddressSpace);
@@ -102,6 +113,8 @@ public:
 
   int getIntImmCost(const APInt &Imm, Type *Ty);
 
+  unsigned getUserCost(const User *U, ArrayRef<const Value *> Operands);
+
   int getIntImmCost(unsigned Opcode, unsigned Idx, const APInt &Imm, Type *Ty);
   int getIntImmCost(Intrinsic::ID IID, unsigned Idx, const APInt &Imm,
                     Type *Ty);
@@ -111,6 +124,7 @@ public:
   bool isLegalMaskedStore(Type *DataType);
   bool isLegalMaskedGather(Type *DataType);
   bool isLegalMaskedScatter(Type *DataType);
+  bool hasDivRemOp(Type *DataType, bool IsSigned);
   bool areInlineCompatible(const Function *Caller,
                            const Function *Callee) const;
   bool expandMemCmp(Instruction *I, unsigned &MaxLoadSize);

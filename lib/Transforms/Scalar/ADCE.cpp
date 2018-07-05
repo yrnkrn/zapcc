@@ -577,16 +577,19 @@ void AggressiveDeadCodeElimination::updateDeadRegions() {
     makeUnconditional(BB, PreferredSucc->BB);
 
     // Inform the dominators about the deleted CFG edges.
+    SmallVector<DominatorTree::UpdateType, 4> DeletedEdges;
     for (auto *Succ : RemovedSuccessors) {
       // It might have happened that the same successor appeared multiple times
       // and the CFG edge wasn't really removed.
       if (Succ != PreferredSucc->BB) {
-        DEBUG(dbgs() << "ADCE: Removing (Post)DomTree edge " << BB->getName()
-                     << " -> " << Succ->getName() << "\n");
-        DT.deleteEdge(BB, Succ);
-        PDT.deleteEdge(BB, Succ);
+        DEBUG(dbgs() << "ADCE: (Post)DomTree edge enqueued for deletion"
+                     << BB->getName() << " -> " << Succ->getName() << "\n");
+        DeletedEdges.push_back({DominatorTree::Delete, BB, Succ});
       }
     }
+
+    DT.applyUpdates(DeletedEdges);
+    PDT.applyUpdates(DeletedEdges);
 
     NumBranchesRemoved += 1;
   }

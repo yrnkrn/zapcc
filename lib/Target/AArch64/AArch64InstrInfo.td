@@ -330,6 +330,8 @@ def AArch64umaxv    : SDNode<"AArch64ISD::UMAXV", SDT_AArch64UnaryVec>;
 let RecomputePerFunction = 1 in {
   def ForCodeSize   : Predicate<"MF->getFunction()->optForSize()">;
   def NotForCodeSize   : Predicate<"!MF->getFunction()->optForSize()">;
+  // Avoid generating STRQro if it is slow, unless we're optimizing for code size.
+  def UseSTRQro : Predicate<"!Subtarget->isSTRQroSlow() || MF->getFunction()->optForSize()">;
 }
 
 include "AArch64InstrFormats.td"
@@ -451,12 +453,21 @@ def SDOTIDX4S : BaseSIMDThreeSameVectorDotIndex<1, 0, "sdot", ".4s", ".16b", ".4
 }
 
 let Predicates = [HasRCPC] in {
-  // v8.3 Release Consistent Processor Consistent support
+  // v8.3 Release Consistent Processor Consistent support, optional in v8.2.
   def LDAPRB  : RCPCLoad<0b00, "ldaprb", GPR32>;
   def LDAPRH  : RCPCLoad<0b01, "ldaprh", GPR32>;
   def LDAPRW  : RCPCLoad<0b10, "ldapr", GPR32>;
   def LDAPRX  : RCPCLoad<0b11, "ldapr", GPR64>;
 }
+
+// v8.3a complex add and multiply-accumulate. No predicate here, that is done
+// inside the multiclass as the FP16 versions need different predicates.
+defm FCMLA : SIMDThreeSameVectorTiedComplexHSD<1, 0b110, complexrotateop,
+                                               "fcmla", null_frag>;
+defm FCADD : SIMDThreeSameVectorComplexHSD<1, 0b111, complexrotateopodd,
+                                           "fcadd", null_frag>;
+defm FCMLA : SIMDIndexedTiedComplexHSD<1, 0, 1, complexrotateop, "fcmla",
+                                       null_frag>;
 
 let Predicates = [HasV8_3a] in {
   // v8.3a Pointer Authentication
@@ -521,6 +532,13 @@ let Predicates = [HasV8_3a] in {
 
   defm LDRAA  : AuthLoad<0, "ldraa", simm10Scaled>;
   defm LDRAB  : AuthLoad<1, "ldrab", simm10Scaled>;
+
+  // v8.3a floating point conversion for javascript
+  let Predicates = [HasV8_3a, HasFPARMv8] in
+  def FJCVTZS  : BaseFPToIntegerUnscaled<0b01, 0b11, 0b110, FPR64, GPR32,
+                                        "fjcvtzs", []> {
+    let Inst{31} = 0;
+  }
 
 } // HasV8_3A
 
@@ -2132,6 +2150,17 @@ defm STRS : Store32RO<0b10,  1, 0b00, FPR32,  "str", f32,     store>;
 defm STRD : Store64RO<0b11,  1, 0b00, FPR64,  "str", f64,     store>;
 defm STRQ : Store128RO<0b00, 1, 0b10, FPR128, "str", f128,    store>;
 
+let Predicates = [UseSTRQro], AddedComplexity = 10 in {
+  def : Pat<(store (f128 FPR128:$Rt),
+                        (ro_Windexed128 GPR64sp:$Rn, GPR32:$Rm,
+                                        ro_Wextend128:$extend)),
+            (STRQroW FPR128:$Rt, GPR64sp:$Rn, GPR32:$Rm, ro_Wextend128:$extend)>;
+  def : Pat<(store (f128 FPR128:$Rt),
+                        (ro_Xindexed128 GPR64sp:$Rn, GPR64:$Rm,
+                                        ro_Xextend128:$extend)),
+            (STRQroX FPR128:$Rt, GPR64sp:$Rn, GPR64:$Rm, ro_Wextend128:$extend)>;
+}
+
 multiclass TruncStoreFrom64ROPat<ROAddrMode ro, SDPatternOperator storeop,
                                  Instruction STRW, Instruction STRX> {
 
@@ -2179,7 +2208,7 @@ defm : VecROStorePat<ro64, v1i64, FPR64, STRDroW, STRDroX>;
 defm : VecROStorePat<ro64, v1f64, FPR64, STRDroW, STRDroX>;
 
 // Match all store 128 bits width whose type is compatible with FPR128
-let Predicates = [IsLE] in {
+let Predicates = [IsLE, UseSTRQro] in {
   // We must use ST1 to store vectors in big-endian.
   defm : VecROStorePat<ro128, v2i64, FPR128, STRQroW, STRQroX>;
   defm : VecROStorePat<ro128, v2f64, FPR128, STRQroW, STRQroX>;
@@ -2683,6 +2712,8 @@ defm FMOV : UnscaledConversion<"fmov">;
 
 // Add pseudo ops for FMOV 0 so we can mark them as isReMaterializable
 let isReMaterializable = 1, isCodeGenOnly = 1, isAsCheapAsAMove = 1 in {
+def FMOVH0 : Pseudo<(outs FPR16:$Rd), (ins), [(set f16:$Rd, (fpimm0))]>,
+    Sched<[WriteF]>;
 def FMOVS0 : Pseudo<(outs FPR32:$Rd), (ins), [(set f32:$Rd, (fpimm0))]>,
     Sched<[WriteF]>;
 def FMOVD0 : Pseudo<(outs FPR64:$Rd), (ins), [(set f64:$Rd, (fpimm0))]>,

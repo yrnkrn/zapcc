@@ -198,7 +198,7 @@ static void addIntrinsicToSummary(
 static void
 computeFunctionSummary(ModuleSummaryIndex &Index, const Module &M,
                        const Function &F, BlockFrequencyInfo *BFI,
-                       ProfileSummaryInfo *PSI, bool HasLocalsInUsed,
+                       ProfileSummaryInfo *PSI, bool HasLocalsInUsedOrAsm,
                        DenseSet<GlobalValue::GUID> &CantBePromoted) {
   // Summary not currently supported for anonymous functions, they should
   // have been named.
@@ -215,9 +215,13 @@ computeFunctionSummary(ModuleSummaryIndex &Index, const Module &M,
   SetVector<FunctionSummary::ConstVCall> TypeTestAssumeConstVCalls,
       TypeCheckedLoadConstVCalls;
   ICallPromotionAnalysis ICallAnalysis;
+  SmallPtrSet<const User *, 8> Visited;
+
+  // Add personality function, prefix data and prologue data to function's ref
+  // list.
+  findRefEdges(Index, &F, RefEdges, Visited);
 
   bool HasInlineAsmMaybeReferencingInternal = false;
-  SmallPtrSet<const User *, 8> Visited;
   for (const BasicBlock &BB : F)
     for (const Instruction &I : BB) {
       if (isa<DbgInfoIntrinsic>(I))
@@ -234,7 +238,7 @@ computeFunctionSummary(ModuleSummaryIndex &Index, const Module &M,
       // a local value from inline assembly to ensure we don't export a
       // reference (which would require renaming and promotion of the
       // referenced value).
-      if (HasLocalsInUsed && CI && CI->isInlineAsm())
+      if (HasLocalsInUsedOrAsm && CI && CI->isInlineAsm())
         HasInlineAsmMaybeReferencingInternal = true;
 
       auto *CalledValue = CS.getCalledValue();
@@ -382,55 +386,7 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     }
   }
 
-  // Compute summaries for all functions defined in module, and save in the
-  // index.
-  for (auto &F : M) {
-    if (F.isDeclaration())
-      continue;
-
-    BlockFrequencyInfo *BFI = nullptr;
-    std::unique_ptr<BlockFrequencyInfo> BFIPtr;
-    if (GetBFICallback)
-      BFI = GetBFICallback(F);
-    else if (F.getEntryCount().hasValue()) {
-      LoopInfo LI{DominatorTree(const_cast<Function &>(F))};
-      BranchProbabilityInfo BPI{F, LI};
-      BFIPtr = llvm::make_unique<BlockFrequencyInfo>(F, BPI, LI);
-      BFI = BFIPtr.get();
-    }
-
-    computeFunctionSummary(Index, M, F, BFI, PSI, !LocalsUsed.empty(),
-                           CantBePromoted);
-  }
-
-  // Compute summaries for all variables defined in module, and save in the
-  // index.
-  for (const GlobalVariable &G : M.globals()) {
-    if (G.isDeclaration())
-      continue;
-    computeVariableSummary(Index, G, CantBePromoted);
-  }
-
-  // Compute summaries for all aliases defined in module, and save in the
-  // index.
-  for (const GlobalAlias &A : M.aliases())
-    computeAliasSummary(Index, A, CantBePromoted);
-
-  for (auto *V : LocalsUsed) {
-    auto *Summary = Index.getGlobalValueSummary(*V);
-    assert(Summary && "Missing summary for global value");
-    Summary->setNotEligibleToImport();
-  }
-
-  // The linker doesn't know about these LLVM produced values, so we need
-  // to flag them as live in the index to ensure index-based dead value
-  // analysis treats them as live roots of the analysis.
-  setLiveRoot(Index, "llvm.used");
-  setLiveRoot(Index, "llvm.compiler.used");
-  setLiveRoot(Index, "llvm.global_ctors");
-  setLiveRoot(Index, "llvm.global_dtors");
-  setLiveRoot(Index, "llvm.global.annotations");
-
+  bool HasLocalInlineAsmSymbol = false;
   if (!M.getModuleInlineAsm().empty()) {
     // Collect the local values defined by module level asm, and set up
     // summaries for these symbols so that they can be marked as NoRename,
@@ -442,12 +398,12 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     // be listed on the llvm.used or llvm.compiler.used global and marked as
     // referenced from there.
     ModuleSymbolTable::CollectAsmSymbols(
-        M, [&M, &Index, &CantBePromoted](StringRef Name,
-                                         object::BasicSymbolRef::Flags Flags) {
+        M, [&](StringRef Name, object::BasicSymbolRef::Flags Flags) {
           // Symbols not marked as Weak or Global are local definitions.
           if (Flags & (object::BasicSymbolRef::SF_Weak |
                        object::BasicSymbolRef::SF_Global))
             return;
+          HasLocalInlineAsmSymbol = true;
           GlobalValue *GV = M.getNamedValue(Name);
           if (!GV)
             return;
@@ -481,6 +437,56 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
           }
         });
   }
+
+  // Compute summaries for all functions defined in module, and save in the
+  // index.
+  for (auto &F : M) {
+    if (F.isDeclaration())
+      continue;
+
+    BlockFrequencyInfo *BFI = nullptr;
+    std::unique_ptr<BlockFrequencyInfo> BFIPtr;
+    if (GetBFICallback)
+      BFI = GetBFICallback(F);
+    else if (F.getEntryCount().hasValue()) {
+      LoopInfo LI{DominatorTree(const_cast<Function &>(F))};
+      BranchProbabilityInfo BPI{F, LI};
+      BFIPtr = llvm::make_unique<BlockFrequencyInfo>(F, BPI, LI);
+      BFI = BFIPtr.get();
+    }
+
+    computeFunctionSummary(Index, M, F, BFI, PSI,
+                           !LocalsUsed.empty() || HasLocalInlineAsmSymbol,
+                           CantBePromoted);
+  }
+
+  // Compute summaries for all variables defined in module, and save in the
+  // index.
+  for (const GlobalVariable &G : M.globals()) {
+    if (G.isDeclaration())
+      continue;
+    computeVariableSummary(Index, G, CantBePromoted);
+  }
+
+  // Compute summaries for all aliases defined in module, and save in the
+  // index.
+  for (const GlobalAlias &A : M.aliases())
+    computeAliasSummary(Index, A, CantBePromoted);
+
+  for (auto *V : LocalsUsed) {
+    auto *Summary = Index.getGlobalValueSummary(*V);
+    assert(Summary && "Missing summary for global value");
+    Summary->setNotEligibleToImport();
+  }
+
+  // The linker doesn't know about these LLVM produced values, so we need
+  // to flag them as live in the index to ensure index-based dead value
+  // analysis treats them as live roots of the analysis.
+  setLiveRoot(Index, "llvm.used");
+  setLiveRoot(Index, "llvm.compiler.used");
+  setLiveRoot(Index, "llvm.global_ctors");
+  setLiveRoot(Index, "llvm.global_dtors");
+  setLiveRoot(Index, "llvm.global.annotations");
 
   bool IsThinLTO = true;
   if (auto *MD =

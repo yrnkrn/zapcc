@@ -91,6 +91,7 @@ extern "C" void LLVMInitializeARMTarget() {
   initializeARMPreAllocLoadStoreOptPass(Registry);
   initializeARMConstantIslandsPass(Registry);
   initializeARMExecutionDepsFixPass(Registry);
+  initializeARMExpandPseudoPass(Registry);
 }
 
 static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
@@ -227,10 +228,10 @@ ARMBaseTargetMachine::ARMBaseTargetMachine(const Target &T, const Triple &TT,
       Options.EABIVersion == EABI::Unknown) {
     // musl is compatible with glibc with regard to EABI version
     if ((TargetTriple.getEnvironment() == Triple::GNUEABI ||
-	 TargetTriple.getEnvironment() == Triple::GNUEABIHF ||
-	 TargetTriple.getEnvironment() == Triple::MuslEABI ||
-	 TargetTriple.getEnvironment() == Triple::MuslEABIHF) &&
-	!(TargetTriple.isOSWindows() || TargetTriple.isOSDarwin()))
+         TargetTriple.getEnvironment() == Triple::GNUEABIHF ||
+         TargetTriple.getEnvironment() == Triple::MuslEABI ||
+         TargetTriple.getEnvironment() == Triple::MuslEABIHF) &&
+        !(TargetTriple.isOSWindows() || TargetTriple.isOSDarwin()))
       this->Options.EABIVersion = EABI::GNU;
     else
       this->Options.EABIVersion = EABI::EABI5;

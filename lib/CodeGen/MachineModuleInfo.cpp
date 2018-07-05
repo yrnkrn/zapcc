@@ -213,8 +213,6 @@ bool MachineModuleInfo::doInitialization(Module &M) {
   Context.CachingMode = M.CachingMode;
   Context.cleanup();
 
-  if (getDebugMetadataVersionFromModule(M))
-    M.getOrInsertNamedMetadata("llvm.dbg.mir");
   return false;
 }
 

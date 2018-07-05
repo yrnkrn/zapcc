@@ -635,6 +635,8 @@ public:
   SDValue getRegister(unsigned Reg, EVT VT);
   SDValue getRegisterMask(const uint32_t *RegMask);
   SDValue getEHLabel(const SDLoc &dl, SDValue Root, MCSymbol *Label);
+  SDValue getLabelNode(unsigned Opcode, const SDLoc &dl, SDValue Root,
+                       MCSymbol *Label);
   SDValue getBlockAddress(const BlockAddress *BA, EVT VT,
                           int64_t Offset = 0, bool isTarget = false,
                           unsigned char TargetFlags = 0);
@@ -1170,16 +1172,19 @@ public:
                           const SDNodeFlags Flags = SDNodeFlags());
 
   /// Creates a SDDbgValue node.
-  SDDbgValue *getDbgValue(MDNode *Var, MDNode *Expr, SDNode *N, unsigned R,
-                          bool IsIndirect, const DebugLoc &DL, unsigned O);
+  SDDbgValue *getDbgValue(DIVariable *Var, DIExpression *Expr, SDNode *N,
+                          unsigned R, bool IsIndirect, const DebugLoc &DL,
+                          unsigned O);
 
   /// Constant
-  SDDbgValue *getConstantDbgValue(MDNode *Var, MDNode *Expr, const Value *C,
-                                  const DebugLoc &DL, unsigned O);
+  SDDbgValue *getConstantDbgValue(DIVariable *Var, DIExpression *Expr,
+                                  const Value *C, const DebugLoc &DL,
+                                  unsigned O);
 
   /// FrameIndex
-  SDDbgValue *getFrameIndexDbgValue(MDNode *Var, MDNode *Expr, unsigned FI,
-                                    const DebugLoc &DL, unsigned O);
+  SDDbgValue *getFrameIndexDbgValue(DIVariable *Var, DIExpression *Expr,
+                                    unsigned FI, const DebugLoc &DL,
+                                    unsigned O);
 
   /// Remove the specified node from the system. If any of its
   /// operands then becomes dead, remove them as well. Inform UpdateListener

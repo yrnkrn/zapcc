@@ -409,7 +409,10 @@ void ELFState<ELFT>::addSymbols(const std::vector<ELFYAML::Symbol> &Symbols,
         exit(1);
       }
       Symbol.st_shndx = Index;
-    } // else Symbol.st_shndex == SHN_UNDEF (== 0), since it was zero'd earlier.
+    } else if (Sym.Index) {
+      Symbol.st_shndx = *Sym.Index;
+    }
+    // else Symbol.st_shndex == SHN_UNDEF (== 0), since it was zero'd earlier.
     Symbol.st_value = Sym.Value;
     Symbol.st_other = Sym.Other;
     Symbol.st_size = Sym.Size;
@@ -459,7 +462,8 @@ ELFState<ELFT>::writeSectionContent(Elf_Shdr &SHeader,
     // Some special relocation, R_ARM_v4BX for instance, does not have
     // an external reference.  So it ignores the return value of lookup()
     // here.
-    SymN2I.lookup(Rel.Symbol, SymIdx);
+    if (Rel.Symbol)
+      SymN2I.lookup(*Rel.Symbol, SymIdx);
 
     if (IsRela) {
       Elf_Rela REntry;

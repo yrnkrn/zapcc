@@ -22,10 +22,7 @@
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtVisitor.h"
-#include "clang/AST/TypeOrdering.h"
 #include "clang/Basic/OpenMPKinds.h"
-#include "clang/Basic/TargetInfo.h"
-#include "clang/Lex/Preprocessor.h"
 #include "clang/Sema/Initialization.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/Sema/Scope.h"
@@ -1281,7 +1278,7 @@ VarDecl *Sema::IsOpenMPCapturedDecl(ValueDecl *D) {
   //
   auto *VD = dyn_cast<VarDecl>(D);
   if (VD && !VD->hasLocalStorage()) {
-    if (DSAStack->getCurrentDirective() == OMPD_target &&
+    if (isOpenMPTargetExecutionDirective(DSAStack->getCurrentDirective()) &&
         !DSAStack->isClauseParsingMode())
       return VD;
     if (DSAStack->hasDirective(
@@ -3337,8 +3334,8 @@ bool OpenMPIterationSpaceChecker::SetStep(Expr *NewStep, bool Subtract) {
   if (!NewStep->isValueDependent()) {
     // Check that the step is integer expression.
     SourceLocation StepLoc = NewStep->getLocStart();
-    ExprResult Val =
-        SemaRef.PerformOpenMPImplicitIntegerConversion(StepLoc, NewStep);
+    ExprResult Val = SemaRef.PerformOpenMPImplicitIntegerConversion(
+        StepLoc, getExprAsWritten(NewStep));
     if (Val.isInvalid())
       return true;
     NewStep = Val.get();
@@ -9057,7 +9054,8 @@ buildDeclareReductionRef(Sema &SemaRef, SourceLocation Loc, SourceRange Range,
       PrevD = D;
     }
   }
-  if (Ty->isDependentType() || Ty->isInstantiationDependentType() ||
+  if (SemaRef.CurContext->isDependentContext() || Ty->isDependentType() ||
+      Ty->isInstantiationDependentType() ||
       Ty->containsUnexpandedParameterPack() ||
       filterLookupForUDR<bool>(Lookups, [](ValueDecl *D) -> bool {
         return !D->isInvalidDecl() &&
@@ -11535,7 +11533,7 @@ void Sema::ActOnOpenMPDeclareReductionCombinerEnd(Decl *D, Expr *Combiner) {
     DRD->setInvalidDecl();
 }
 
-void Sema::ActOnOpenMPDeclareReductionInitializerStart(Scope *S, Decl *D) {
+VarDecl *Sema::ActOnOpenMPDeclareReductionInitializerStart(Scope *S, Decl *D) {
   auto *DRD = cast<OMPDeclareReductionDecl>(D);
 
   // Enter new function scope.
@@ -11574,10 +11572,11 @@ void Sema::ActOnOpenMPDeclareReductionInitializerStart(Scope *S, Decl *D) {
     DRD->addDecl(OmpPrivParm);
     DRD->addDecl(OmpOrigParm);
   }
+  return OmpPrivParm;
 }
 
-void Sema::ActOnOpenMPDeclareReductionInitializerEnd(Decl *D,
-                                                     Expr *Initializer) {
+void Sema::ActOnOpenMPDeclareReductionInitializerEnd(Decl *D, Expr *Initializer,
+                                                     VarDecl *OmpPrivParm) {
   auto *DRD = cast<OMPDeclareReductionDecl>(D);
   DiscardCleanupsInEvaluationContext();
   PopExpressionEvaluationContext();
@@ -11585,10 +11584,16 @@ void Sema::ActOnOpenMPDeclareReductionInitializerEnd(Decl *D,
   PopDeclContext();
   PopFunctionScopeInfo();
 
-  if (Initializer != nullptr)
-    DRD->setInitializer(Initializer);
-  else
+  if (Initializer != nullptr) {
+    DRD->setInitializer(Initializer, OMPDeclareReductionDecl::CallInit);
+  } else if (OmpPrivParm->hasInit()) {
+    DRD->setInitializer(OmpPrivParm->getInit(),
+                        OmpPrivParm->isDirectInit()
+                            ? OMPDeclareReductionDecl::DirectInit
+                            : OMPDeclareReductionDecl::CopyInit);
+  } else {
     DRD->setInvalidDecl();
+  }
 }
 
 Sema::DeclGroupPtrTy Sema::ActOnOpenMPDeclareReductionDirectiveEnd(

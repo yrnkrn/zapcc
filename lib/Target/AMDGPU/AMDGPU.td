@@ -521,6 +521,8 @@ def FeatureISAVersion8_0_0 : SubtargetFeatureISAVersion <8,0,0,
 
 def FeatureISAVersion8_0_1 : SubtargetFeatureISAVersion <8,0,1,
   [FeatureVolcanicIslands,
+   FeatureFastFMAF32,
+   HalfRate64Ops,
    FeatureLDSBankCount32,
    FeatureXNACK]>;
 
@@ -690,6 +692,11 @@ def HasFlatGlobalInsts : Predicate<"Subtarget->hasFlatGlobalInsts()">,
   AssemblerPredicate<"FeatureFlatGlobalInsts">;
 def HasFlatScratchInsts : Predicate<"Subtarget->hasFlatScratchInsts()">,
   AssemblerPredicate<"FeatureFlatScratchInsts">;
+def HasD16LoadStore : Predicate<"Subtarget->hasD16LoadStore()">,
+  AssemblerPredicate<"FeatureGFX9Insts">;
+
+def HasDSAddTid : Predicate<"Subtarget->getGeneration() >= AMDGPUSubtarget::GFX9">,
+  AssemblerPredicate<"FeatureGFX9Insts">;
 
 def HasAddNoCarryInsts : Predicate<"Subtarget->hasAddNoCarryInsts()">,
   AssemblerPredicate<"FeatureAddNoCarryInsts">;
@@ -713,6 +720,9 @@ def HasDPP : Predicate<"Subtarget->hasDPP()">,
 
 def HasIntClamp : Predicate<"Subtarget->hasIntClamp()">,
   AssemblerPredicate<"FeatureIntClamp">;
+
+def HasMadMix : Predicate<"Subtarget->hasMadMixInsts()">,
+  AssemblerPredicate<"FeatureGFX9Insts">;
 
 class PredicateControl {
   Predicate SubtargetPredicate;

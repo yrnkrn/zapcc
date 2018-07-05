@@ -1,6 +1,6 @@
 ; REQUIRES: object-emission
 
-; RUN: %llc_dwarf -filetype=obj -O0 < %s | llvm-dwarfdump -debug-dump=info - | FileCheck %s
+; RUN: %llc_dwarf -filetype=obj -O0 < %s | llvm-dwarfdump -v -debug-info - | FileCheck %s
 
 ; This isn't a very pretty test case - I imagine there might be other ways to
 ; tickle the optimizers into producing the desired code, but I haven't found
@@ -201,7 +201,7 @@ attributes #3 = { nounwind }
 !llvm.module.flags = !{!17, !18}
 !llvm.ident = !{!19}
 
-!0 = !DIGlobalVariableExpression(var: !1)
+!0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = !DIGlobalVariable(name: "x", scope: null, file: !2, line: 13, type: !3, isLocal: false, isDefinition: true)
 !2 = !DIFile(filename: "recursive_inlining.cpp", directory: "/usr/local/google/home/blaikie/dev/scratch/missing_concrete_variable_on_darwin/reduce")
 !3 = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !4, size: 64, align: 64)

@@ -537,6 +537,7 @@ namespace  {
     void VisitCXXBoolLiteralExpr(const CXXBoolLiteralExpr *Node);
     void VisitCXXThisExpr(const CXXThisExpr *Node);
     void VisitCXXFunctionalCastExpr(const CXXFunctionalCastExpr *Node);
+    void VisitCXXUnresolvedConstructExpr(const CXXUnresolvedConstructExpr *Node);
     void VisitCXXConstructExpr(const CXXConstructExpr *Node);
     void VisitCXXBindTemporaryExpr(const CXXBindTemporaryExpr *Node);
     void VisitCXXNewExpr(const CXXNewExpr *Node);
@@ -1316,6 +1317,16 @@ void ASTDumper::VisitOMPDeclareReductionDecl(const OMPDeclareReductionDecl *D) {
   dumpStmt(D->getCombiner());
   if (auto *Initializer = D->getInitializer()) {
     OS << " initializer";
+    switch (D->getInitializerKind()) {
+    case OMPDeclareReductionDecl::DirectInit:
+      OS << " omp_priv = ";
+      break;
+    case OMPDeclareReductionDecl::CopyInit:
+      OS << " omp_priv ()";
+      break;
+    case OMPDeclareReductionDecl::CallInit:
+      break;
+    }
     dumpStmt(Initializer);
   }
 }
@@ -2169,12 +2180,24 @@ void ASTDumper::VisitCXXFunctionalCastExpr(const CXXFunctionalCastExpr *Node) {
      << " <" << Node->getCastKindName() << ">";
 }
 
+void ASTDumper::VisitCXXUnresolvedConstructExpr(
+    const CXXUnresolvedConstructExpr *Node) {
+  VisitExpr(Node);
+  dumpType(Node->getTypeAsWritten());
+  if (Node->isListInitialization())
+    OS << " list";
+}
+
 void ASTDumper::VisitCXXConstructExpr(const CXXConstructExpr *Node) {
   VisitExpr(Node);
   CXXConstructorDecl *Ctor = Node->getConstructor();
   dumpType(Ctor->getType());
   if (Node->isElidable())
     OS << " elidable";
+  if (Node->isListInitialization())
+    OS << " list";
+  if (Node->isStdInitListInitialization())
+    OS << " std::initializer_list";
   if (Node->requiresZeroInitialization())
     OS << " zeroing";
 }

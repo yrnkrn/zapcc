@@ -1048,6 +1048,10 @@ void SlotTracker::CreateFunctionSlot(const Value *V) {
 void SlotTracker::CreateMetadataSlot(const MDNode *N) {
   assert(N && "Can't insert a null Value into SlotTracker!");
 
+  // Don't make slots for DIExpressions. We just print them inline everywhere.
+  if (isa<DIExpression>(N))
+    return;
+
   unsigned DestSlot = mdnNext;
   if (!mdnMap.insert(std::make_pair(N, DestSlot)).second)
     return;
@@ -2075,6 +2079,13 @@ static void WriteAsOperandInternal(raw_ostream &Out, const Metadata *MD,
                                    TypePrinting *TypePrinter,
                                    SlotTracker *Machine, const Module *Context,
                                    bool FromValue) {
+  // Write DIExpressions inline when used as a value. Improves readability of
+  // debug info intrinsics.
+  if (const DIExpression *Expr = dyn_cast<DIExpression>(MD)) {
+    writeDIExpression(Out, Expr, TypePrinter, Machine, Context);
+    return;
+  }
+
   if (const MDNode *N = dyn_cast<MDNode>(MD)) {
     std::unique_ptr<SlotTracker> MachineStorage;
     if (!Machine) {
@@ -2426,7 +2437,16 @@ void AssemblyWriter::printNamedMDNode(const NamedMDNode *NMD) {
   for (unsigned i = 0, e = NMD->getNumOperands(); i != e; ++i) {
     if (i)
       Out << ", ";
-    int Slot = Machine.getMetadataSlot(NMD->getOperand(i));
+
+    // Write DIExpressions inline.
+    // FIXME: Ban DIExpressions in NamedMDNodes, they will serve no purpose.
+    MDNode *Op = NMD->getOperand(i);
+    if (auto *Expr = dyn_cast<DIExpression>(Op)) {
+      writeDIExpression(Out, Expr, nullptr, nullptr, nullptr);
+      continue;
+    }
+
+    int Slot = Machine.getMetadataSlot(Op);
     if (Slot == -1)
       Out << "<badref>";
     else
@@ -3577,7 +3597,7 @@ static void printMetadataImpl(raw_ostream &ROS, const Metadata &MD,
                          /* FromValue */ true);
 
   auto *N = dyn_cast<MDNode>(&MD);
-  if (OnlyAsOperand || !N)
+  if (OnlyAsOperand || !N || isa<DIExpression>(MD))
     return;
 
   OS << " = ";

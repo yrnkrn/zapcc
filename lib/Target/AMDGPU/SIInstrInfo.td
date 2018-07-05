@@ -770,6 +770,8 @@ def VOP3OpSel0 : ComplexPattern<untyped, 3, "SelectVOP3OpSel0">;
 def VOP3OpSelMods  : ComplexPattern<untyped, 2, "SelectVOP3OpSelMods">;
 def VOP3OpSelMods0 : ComplexPattern<untyped, 3, "SelectVOP3OpSelMods0">;
 
+def VOP3PMadMixMods  : ComplexPattern<untyped, 2, "SelectVOP3PMadMixMods">;
+
 //===----------------------------------------------------------------------===//
 // SI assembler operands
 //===----------------------------------------------------------------------===//
@@ -847,7 +849,7 @@ class EXP_Helper<bit done, SDPatternOperator node = null_frag> : EXPCommon<
 // Split EXP instruction into EXP and EXP_DONE so we can set
 // mayLoad for done=1.
 multiclass EXP_m<bit done, SDPatternOperator node> {
-  let mayLoad = done in {
+  let mayLoad = done, DisableWQM = 1 in {
     let isPseudo = 1, isCodeGenOnly = 1 in {
       def "" : EXP_Helper<done, node>,
                SIMCInstr <"exp"#!if(done, "_done", ""), SIEncodingFamily.NONE>;
@@ -1529,6 +1531,8 @@ class VOPProfile <list<ValueType> _ArgVT> {
   field bit HasSDWAClamp = EmitDst;
   field bit HasFPClamp = BitAnd<isFloatType<DstVT>.ret, HasClamp>.ret;
   field bit HasIntClamp = !if(isFloatType<DstVT>.ret, 0, HasClamp);
+  field bit HasClampLo = HasClamp;
+  field bit HasClampHi = BitAnd<isPackedType<DstVT>.ret, HasClamp>.ret;
   field bit HasHigh = 0;
 
   field bit IsPacked = isPackedType<Src0VT>.ret;
@@ -1636,6 +1640,7 @@ def VOP_I32_F32_F32 : VOPProfile <[i32, f32, f32, untyped]>;
 def VOP_I32_F32_I32 : VOPProfile <[i32, f32, i32, untyped]>;
 def VOP_I32_I32_I32 : VOPProfile <[i32, i32, i32, untyped]>;
 def VOP_V2F16_F32_F32 : VOPProfile <[v2f16, f32, f32, untyped]>;
+def VOP_F32_F16_F16_F16 : VOPProfile <[f32, f16, f16, f16]>;
 
 def VOP_I64_I64_I32 : VOPProfile <[i64, i64, i32, untyped]>;
 def VOP_I64_I32_I64 : VOPProfile <[i64, i32, i64, untyped]>;

@@ -275,6 +275,8 @@ class InstrItineraryData;
       return (Kind != ScalarCondVectorVal);
     }
 
+    bool isReadOnly(const GlobalValue *GV) const;
+
     /// getSetCCResultType - Return the value type to use for ISD::SETCC.
     EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                            EVT VT) const override;
@@ -328,6 +330,10 @@ class InstrItineraryData;
                              unsigned AS) const override;
 
     bool isLegalT2ScaledAddressingMode(const AddrMode &AM, EVT VT) const;
+
+    /// \brief Returns true if the addresing mode representing by AM is legal
+    /// for the Thumb1 target, for a load/store of the specified type.
+    bool isLegalT1ScaledAddressingMode(const AddrMode &AM, EVT VT) const;
 
     /// isLegalICmpImmediate - Return true if the specified immediate is legal
     /// icmp immediate, that is the target has icmp instructions which can

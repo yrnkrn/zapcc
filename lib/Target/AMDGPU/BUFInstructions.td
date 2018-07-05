@@ -805,6 +805,42 @@ def BUFFER_WBINVL1_SC : MUBUF_Invalidate <"buffer_wbinvl1_sc",
                                           int_amdgcn_buffer_wbinvl1_sc>;
 }
 
+let SubtargetPredicate = HasD16LoadStore in {
+
+defm BUFFER_LOAD_UBYTE_D16 : MUBUF_Pseudo_Loads <
+  "buffer_load_ubyte_d16", VGPR_32, i32
+>;
+
+defm BUFFER_LOAD_UBYTE_D16_HI : MUBUF_Pseudo_Loads <
+  "buffer_load_ubyte_d16_hi", VGPR_32, i32
+>;
+
+defm BUFFER_LOAD_SBYTE_D16 : MUBUF_Pseudo_Loads <
+  "buffer_load_sbyte_d16", VGPR_32, i32
+>;
+
+defm BUFFER_LOAD_SBYTE_D16_HI : MUBUF_Pseudo_Loads <
+  "buffer_load_sbyte_d16_hi", VGPR_32, i32
+>;
+
+defm BUFFER_LOAD_SHORT_D16 : MUBUF_Pseudo_Loads <
+  "buffer_load_short_d16", VGPR_32, i32
+>;
+
+defm BUFFER_LOAD_SHORT_D16_HI : MUBUF_Pseudo_Loads <
+  "buffer_load_short_d16_hi", VGPR_32, i32
+>;
+
+defm BUFFER_STORE_BYTE_D16_HI : MUBUF_Pseudo_Stores <
+  "buffer_store_byte_d16_hi", VGPR_32, i32
+>;
+
+defm BUFFER_STORE_SHORT_D16_HI : MUBUF_Pseudo_Stores <
+  "buffer_store_short_d16_hi", VGPR_32, i32
+>;
+
+} // End HasD16LoadStore
+
 def BUFFER_WBINVL1 : MUBUF_Invalidate <"buffer_wbinvl1",
                                        int_amdgcn_buffer_wbinvl1>;
 
@@ -1094,6 +1130,8 @@ defm : MUBUFLoad_Pattern <BUFFER_LOAD_UBYTE_OFFSET, i16, az_extloadi8_constant>;
 defm : MUBUFLoad_Pattern <BUFFER_LOAD_SBYTE_OFFSET, i16, mubuf_sextloadi8>;
 defm : MUBUFLoad_Pattern <BUFFER_LOAD_UBYTE_OFFSET, i16, mubuf_az_extloadi8>;
 
+defm : MUBUFLoad_Pattern <BUFFER_LOAD_USHORT_OFFSET, i16, mubuf_load>;
+
 } // End Predicates = [Has16BitInsts]
 
 multiclass MUBUFScratchLoadPat <MUBUF_Pseudo InstrOffen,
@@ -1117,6 +1155,7 @@ defm : MUBUFScratchLoadPat <BUFFER_LOAD_SBYTE_OFFEN, BUFFER_LOAD_SBYTE_OFFSET, i
 defm : MUBUFScratchLoadPat <BUFFER_LOAD_UBYTE_OFFEN, BUFFER_LOAD_UBYTE_OFFSET, i16, extloadi8_private>;
 defm : MUBUFScratchLoadPat <BUFFER_LOAD_SSHORT_OFFEN, BUFFER_LOAD_SSHORT_OFFSET, i32, sextloadi16_private>;
 defm : MUBUFScratchLoadPat <BUFFER_LOAD_USHORT_OFFEN, BUFFER_LOAD_USHORT_OFFSET, i32, extloadi16_private>;
+defm : MUBUFScratchLoadPat <BUFFER_LOAD_USHORT_OFFEN, BUFFER_LOAD_USHORT_OFFSET, i16, load_private>;
 defm : MUBUFScratchLoadPat <BUFFER_LOAD_DWORD_OFFEN, BUFFER_LOAD_DWORD_OFFSET, i32, load_private>;
 defm : MUBUFScratchLoadPat <BUFFER_LOAD_DWORDX2_OFFEN, BUFFER_LOAD_DWORDX2_OFFSET, v2i32, load_private>;
 defm : MUBUFScratchLoadPat <BUFFER_LOAD_DWORDX4_OFFEN, BUFFER_LOAD_DWORDX4_OFFSET, v4i32, load_private>;
@@ -1546,11 +1585,20 @@ defm BUFFER_LOAD_DWORDX2        : MUBUF_Real_AllAddr_vi <0x15>;
 defm BUFFER_LOAD_DWORDX3        : MUBUF_Real_AllAddr_vi <0x16>;
 defm BUFFER_LOAD_DWORDX4        : MUBUF_Real_AllAddr_vi <0x17>;
 defm BUFFER_STORE_BYTE          : MUBUF_Real_AllAddr_vi <0x18>;
+defm BUFFER_STORE_BYTE_D16_HI   : MUBUF_Real_AllAddr_vi <0x19>;
 defm BUFFER_STORE_SHORT         : MUBUF_Real_AllAddr_vi <0x1a>;
+defm BUFFER_STORE_SHORT_D16_HI  : MUBUF_Real_AllAddr_vi <0x1b>;
 defm BUFFER_STORE_DWORD         : MUBUF_Real_AllAddr_vi <0x1c>;
 defm BUFFER_STORE_DWORDX2       : MUBUF_Real_AllAddr_vi <0x1d>;
 defm BUFFER_STORE_DWORDX3       : MUBUF_Real_AllAddr_vi <0x1e>;
 defm BUFFER_STORE_DWORDX4       : MUBUF_Real_AllAddr_vi <0x1f>;
+
+defm BUFFER_LOAD_UBYTE_D16      : MUBUF_Real_AllAddr_vi <0x20>;
+defm BUFFER_LOAD_UBYTE_D16_HI   : MUBUF_Real_AllAddr_vi <0x21>;
+defm BUFFER_LOAD_SBYTE_D16      : MUBUF_Real_AllAddr_vi <0x22>;
+defm BUFFER_LOAD_SBYTE_D16_HI   : MUBUF_Real_AllAddr_vi <0x23>;
+defm BUFFER_LOAD_SHORT_D16      : MUBUF_Real_AllAddr_vi <0x24>;
+defm BUFFER_LOAD_SHORT_D16_HI   : MUBUF_Real_AllAddr_vi <0x25>;
 
 defm BUFFER_ATOMIC_SWAP         : MUBUF_Real_Atomic_vi <0x40>;
 defm BUFFER_ATOMIC_CMPSWAP      : MUBUF_Real_Atomic_vi <0x41>;

@@ -13,7 +13,7 @@
 ; }
 ;
 ; RUN: llc -filetype=asm %s -o - | FileCheck %s
-; RUN: llc -filetype=obj %s -o - | llvm-dwarfdump - --debug-dump=info | FileCheck %s --check-prefix=DWARF
+; RUN: llc -filetype=obj %s -o - | llvm-dwarfdump -v - ---debug-info | FileCheck %s --check-prefix=DWARF
 
 ; CHECK-LABEL: _main:
 ; CHECK: movaps {{.*}}, (%rsp)
@@ -21,8 +21,7 @@
 ; CHECK: callq _f
 
 ; DWARF: DW_TAG_variable
-; 	"<0x2> 91 00" means fbreg 0, i.e. offset RSP+0.
-; DWARF-NEXT:              DW_AT_location [DW_FORM_exprloc]      (<0x2> 91 00 )
+; DWARF-NEXT:              DW_AT_location [DW_FORM_exprloc]      (DW_OP_fbreg +0)
 ; DWARF-NEXT:              DW_AT_name [DW_FORM_strp]     ( {{.*}} = "array")
 
 ; ModuleID = '/tmp/array.c'

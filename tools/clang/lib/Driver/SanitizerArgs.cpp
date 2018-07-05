@@ -29,6 +29,7 @@ enum : SanitizerMask {
   NeedsUbsanRt = Undefined | Integer | Nullability | CFI,
   NeedsUbsanCxxRt = Vptr | CFI,
   NotAllowedWithTrap = Vptr,
+  NotAllowedWithMinimalRuntime = Vptr,
   RequiresPIE = DataFlow,
   NeedsUnwindTables = Address | Thread | Memory | DataFlow,
   SupportsCoverage = Address | KernelAddress | Memory | Leak | Undefined |
@@ -41,6 +42,7 @@ enum : SanitizerMask {
                       Nullability | LocalBounds | CFI,
   TrappingDefault = CFI,
   CFIClasses = CFIVCall | CFINVCall | CFIDerivedCast | CFIUnrelatedCast,
+  CompatibleWithMinimalRuntime = TrappingSupported,
 };
 
 enum CoverageFeature {
@@ -58,6 +60,7 @@ enum CoverageFeature {
   CoverageNoPrune = 1 << 11,
   CoverageInline8bitCounters = 1 << 12,
   CoveragePCTable = 1 << 13,
+  CoverageStackDepth = 1 << 14,
 };
 
 /// Parse a -fsanitize= or -fno-sanitize= argument's values, diagnosing any
@@ -211,6 +214,10 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   SanitizerMask TrappingKinds = parseSanitizeTrapArgs(D, Args);
   SanitizerMask InvalidTrappingKinds = TrappingKinds & NotAllowedWithTrap;
 
+  MinimalRuntime =
+      Args.hasFlag(options::OPT_fsanitize_minimal_runtime,
+                   options::OPT_fno_sanitize_minimal_runtime, MinimalRuntime);
+
   // The object size sanitizer should not be enabled at -O0.
   Arg *OptLevel = Args.getLastArg(options::OPT_O_Group);
   bool RemoveObjectSizeAtO0 =
@@ -248,6 +255,18 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
         DiagnosedKinds |= KindsToDiagnose;
       }
       Add &= ~InvalidTrappingKinds;
+
+      if (MinimalRuntime) {
+        if (SanitizerMask KindsToDiagnose =
+                Add & NotAllowedWithMinimalRuntime & ~DiagnosedKinds) {
+          std::string Desc = describeSanitizeArg(*I, KindsToDiagnose);
+          D.Diag(diag::err_drv_argument_not_allowed_with)
+              << Desc << "-fsanitize-minimal-runtime";
+          DiagnosedKinds |= KindsToDiagnose;
+        }
+        Add &= ~NotAllowedWithMinimalRuntime;
+      }
+
       if (SanitizerMask KindsToDiagnose = Add & ~Supported & ~DiagnosedKinds) {
         std::string Desc = describeSanitizeArg(*I, KindsToDiagnose);
         D.Diag(diag::err_drv_unsupported_opt_for_target)
@@ -284,15 +303,22 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
       // Silently discard any unsupported sanitizers implicitly enabled through
       // group expansion.
       Add &= ~InvalidTrappingKinds;
+      if (MinimalRuntime) {
+        Add &= ~NotAllowedWithMinimalRuntime;
+      }
       Add &= Supported;
 
       if (Add & Fuzzer)
         Add |= FuzzerNoLink;
 
       // Enable coverage if the fuzzing flag is set.
-      if (Add & FuzzerNoLink)
-        CoverageFeatures |= CoverageTracePCGuard | CoverageIndirCall |
+      if (Add & FuzzerNoLink) {
+        CoverageFeatures |= CoverageInline8bitCounters | CoverageIndirCall |
                             CoverageTraceCmp | CoveragePCTable;
+        // Due to TLS differences, stack depth tracking is only enabled on Linux
+        if (TC.getTriple().isOSLinux())
+          CoverageFeatures |= CoverageStackDepth;
+      }
 
       Kinds |= Add;
     } else if (Arg->getOption().matches(options::OPT_fno_sanitize_EQ)) {
@@ -491,6 +517,21 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   Stats = Args.hasFlag(options::OPT_fsanitize_stats,
                        options::OPT_fno_sanitize_stats, false);
 
+  if (MinimalRuntime) {
+    SanitizerMask IncompatibleMask =
+        Kinds & ~setGroupBits(CompatibleWithMinimalRuntime);
+    if (IncompatibleMask)
+      D.Diag(clang::diag::err_drv_argument_not_allowed_with)
+          << "-fsanitize-minimal-runtime"
+          << lastArgumentForMask(D, Args, IncompatibleMask);
+
+    SanitizerMask NonTrappingCfi = Kinds & CFI & ~TrappingKinds;
+    if (NonTrappingCfi)
+      D.Diag(clang::diag::err_drv_argument_only_allowed_with)
+          << "fsanitize-minimal-runtime"
+          << "fsanitize-trap=cfi";
+  }
+
   // Parse -f(no-)?sanitize-coverage flags if coverage is supported by the
   // enabled sanitizers.
   for (const auto *Arg : Args) {
@@ -556,10 +597,14 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   }
 
   // trace-pc w/o func/bb/edge implies edge.
-  if ((CoverageFeatures &
-       (CoverageTracePC | CoverageTracePCGuard | CoverageInline8bitCounters)) &&
-      !(CoverageFeatures & InsertionPointTypes))
-    CoverageFeatures |= CoverageEdge;
+  if (!(CoverageFeatures & InsertionPointTypes)) {
+    if (CoverageFeatures &
+        (CoverageTracePC | CoverageTracePCGuard | CoverageInline8bitCounters))
+      CoverageFeatures |= CoverageEdge;
+
+    if (CoverageFeatures & CoverageStackDepth)
+      CoverageFeatures |= CoverageFunc;
+  }
 
   if (AllAddedKinds & Address) {
     AsanSharedRuntime =
@@ -672,7 +717,8 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
     std::make_pair(CoverageTracePCGuard, "-fsanitize-coverage-trace-pc-guard"),
     std::make_pair(CoverageInline8bitCounters, "-fsanitize-coverage-inline-8bit-counters"),
     std::make_pair(CoveragePCTable, "-fsanitize-coverage-pc-table"),
-    std::make_pair(CoverageNoPrune, "-fsanitize-coverage-no-prune")};
+    std::make_pair(CoverageNoPrune, "-fsanitize-coverage-no-prune"),
+    std::make_pair(CoverageStackDepth, "-fsanitize-coverage-stack-depth")};
   for (auto F : CoverageFlags) {
     if (CoverageFeatures & F.first)
       CmdArgs.push_back(F.second);
@@ -751,6 +797,9 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
 
   if (Stats)
     CmdArgs.push_back("-fsanitize-stats");
+
+  if (MinimalRuntime)
+    CmdArgs.push_back("-fsanitize-minimal-runtime");
 
   if (AsanFieldPadding)
     CmdArgs.push_back(Args.MakeArgString("-fsanitize-address-field-padding=" +
@@ -835,6 +884,7 @@ int parseCoverageFeatures(const Driver &D, const llvm::opt::Arg *A) {
         .Case("no-prune", CoverageNoPrune)
         .Case("inline-8bit-counters", CoverageInline8bitCounters)
         .Case("pc-table", CoveragePCTable)
+        .Case("stack-depth", CoverageStackDepth)
         .Default(0);
     if (F == 0)
       D.Diag(clang::diag::err_drv_unsupported_option_argument)

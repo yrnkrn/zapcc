@@ -851,6 +851,7 @@ CCAssignFn *AMDGPUCallLowering::CCAssignFnForCall(CallingConv::ID CC,
     return CC_AMDGPU;
   case CallingConv::C:
   case CallingConv::Fast:
+  case CallingConv::Cold:
     return CC_AMDGPU_Func;
   default:
     report_fatal_error("Unsupported calling convention.");
@@ -871,6 +872,7 @@ CCAssignFn *AMDGPUCallLowering::CCAssignFnForReturn(CallingConv::ID CC,
     return RetCC_SI_Shader;
   case CallingConv::C:
   case CallingConv::Fast:
+  case CallingConv::Cold:
     return RetCC_AMDGPU_Func;
   default:
     report_fatal_error("Unsupported calling convention.");
@@ -2708,11 +2710,21 @@ SDValue AMDGPUTargetLowering::performShlCombine(SDNode *N,
   case ISD::ZERO_EXTEND:
   case ISD::SIGN_EXTEND:
   case ISD::ANY_EXTEND: {
+    SDValue X = LHS->getOperand(0);
+
+    if (VT == MVT::i32 && RHSVal == 16 && X.getValueType() == MVT::i16 &&
+        isTypeLegal(MVT::v2i16)) {
+      // Prefer build_vector as the canonical form if packed types are legal.
+      // (shl ([asz]ext i16:x), 16 -> build_vector 0, x
+      SDValue Vec = DAG.getBuildVector(MVT::v2i16, SL,
+       { DAG.getConstant(0, SL, MVT::i16), LHS->getOperand(0) });
+      return DAG.getNode(ISD::BITCAST, SL, MVT::i32, Vec);
+    }
+
     // shl (ext x) => zext (shl x), if shift does not overflow int
     if (VT != MVT::i64)
       break;
     KnownBits Known;
-    SDValue X = LHS->getOperand(0);
     DAG.computeKnownBits(X, Known);
     unsigned LZ = Known.countMinLeadingZeros();
     if (LZ < RHSVal)
@@ -3841,7 +3853,6 @@ void AMDGPUTargetLowering::computeKnownBitsForTargetNode(
 
   Known.resetAll(); // Don't know anything.
 
-  KnownBits Known2;
   unsigned Opc = Op.getOpcode();
 
   switch (Opc) {
@@ -3872,6 +3883,37 @@ void AMDGPUTargetLowering::computeKnownBitsForTargetNode(
 
     // High bits are zero.
     Known.Zero = APInt::getHighBitsSet(BitWidth, BitWidth - 16);
+    break;
+  }
+  case AMDGPUISD::MUL_U24:
+  case AMDGPUISD::MUL_I24: {
+    KnownBits LHSKnown, RHSKnown;
+    DAG.computeKnownBits(Op.getOperand(0), LHSKnown, Depth + 1);
+    DAG.computeKnownBits(Op.getOperand(1), RHSKnown, Depth + 1);
+
+    unsigned TrailZ = LHSKnown.countMinTrailingZeros() +
+                      RHSKnown.countMinTrailingZeros();
+    Known.Zero.setLowBits(std::min(TrailZ, 32u));
+
+    unsigned LHSValBits = 32 - std::max(LHSKnown.countMinSignBits(), 8u);
+    unsigned RHSValBits = 32 - std::max(RHSKnown.countMinSignBits(), 8u);
+    unsigned MaxValBits = std::min(LHSValBits + RHSValBits, 32u);
+    if (MaxValBits >= 32)
+      break;
+    bool Negative = false;
+    if (Opc == AMDGPUISD::MUL_I24) {
+      bool LHSNegative = !!(LHSKnown.One  & (1 << 23));
+      bool LHSPositive = !!(LHSKnown.Zero & (1 << 23));
+      bool RHSNegative = !!(RHSKnown.One  & (1 << 23));
+      bool RHSPositive = !!(RHSKnown.Zero & (1 << 23));
+      if ((!LHSNegative && !LHSPositive) || (!RHSNegative && !RHSPositive))
+        break;
+      Negative = (LHSNegative && RHSPositive) || (LHSPositive && RHSNegative);
+    }
+    if (Negative)
+      Known.One.setHighBits(32 - MaxValBits);
+    else
+      Known.Zero.setHighBits(32 - MaxValBits);
     break;
   }
   }

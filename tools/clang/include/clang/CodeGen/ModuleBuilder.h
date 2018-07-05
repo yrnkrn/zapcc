@@ -88,6 +88,10 @@ public:
   ///   definition has been registered with this code generator.
   llvm::Constant *GetAddrOfGlobal(GlobalDecl decl, bool isForDefinition);
   CodeGen::CodeGenModule *getBuilder();
+
+  /// Create a new \c llvm::Module after calling HandleTranslationUnit. This
+  /// enable codegen in interactive processing environments.
+  llvm::Module* StartModule(llvm::StringRef ModuleName, llvm::LLVMContext &C);
 };
 
 /// CreateLLVMCodeGen - Create a CodeGenerator instance.

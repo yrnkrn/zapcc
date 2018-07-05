@@ -1,4 +1,5 @@
 ; RUN: opt -S -force-vector-width=2 -force-vector-interleave=1 -loop-vectorize -verify-loop-info -simplifycfg < %s | FileCheck %s
+; RUN: opt -S -force-vector-width=1 -force-vector-interleave=2 -loop-vectorize -verify-loop-info < %s | FileCheck %s --check-prefix=UNROLL-NO-VF
 
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 
@@ -228,6 +229,29 @@ entry:
 ; CHECK:   phi <2 x i32> [ %[[T05]], %[[CONT0]] ], [ %[[T10]], %[[IF1]] ]
 ; CHECK:   br i1 {{.*}}, label %middle.block, label %vector.body
 
+; Test predicating an instruction that feeds a vectorizable use, when unrolled
+; but not vectorized. Derived from pr34248 reproducer.
+;
+; UNROLL-NO-VF-LABEL: predicated_udiv_scalarized_operand
+; UNROLL-NO-VF: vector.body:
+; UNROLL-NO-VF:   %[[LOAD0:.+]] = load i32, i32*
+; UNROLL-NO-VF:   %[[LOAD1:.+]] = load i32, i32*
+; UNROLL-NO-VF:   br i1 {{.*}}, label %[[IF0:.+]], label %[[CONT0:.+]]
+; UNROLL-NO-VF: [[IF0]]:
+; UNROLL-NO-VF:   %[[ADD0:.+]] = add nsw i32 %[[LOAD0]], %x
+; UNROLL-NO-VF:   %[[DIV0:.+]] = udiv i32 %[[LOAD0]], %[[ADD0]]
+; UNROLL-NO-VF:   br label %[[CONT0]]
+; UNROLL-NO-VF: [[CONT0]]:
+; UNROLL-NO-VF:   phi i32 [ undef, %vector.body ], [ %[[DIV0]], %[[IF0]] ]
+; UNROLL-NO-VF:   br i1 {{.*}}, label %[[IF1:.+]], label %[[CONT1:.+]]
+; UNROLL-NO-VF: [[IF1]]:
+; UNROLL-NO-VF:   %[[ADD1:.+]] = add nsw i32 %[[LOAD1]], %x
+; UNROLL-NO-VF:   %[[DIV1:.+]] = udiv i32 %[[LOAD1]], %[[ADD1]]
+; UNROLL-NO-VF:   br label %[[CONT1]]
+; UNROLL-NO-VF: [[CONT1]]:
+; UNROLL-NO-VF:   phi i32 [ undef, %[[CONT0]] ], [ %[[DIV1]], %[[IF1]] ]
+; UNROLL-NO-VF:   br i1 {{.*}}, label %middle.block, label %vector.body
+;
 for.body:
   %i = phi i64 [ 0, %entry ], [ %i.next, %for.inc ]
   %r = phi i32 [ 0, %entry ], [ %tmp6, %for.inc ]

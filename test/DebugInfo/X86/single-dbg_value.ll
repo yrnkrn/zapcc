@@ -1,18 +1,17 @@
 ; RUN: %llc_dwarf -stop-after=livedebugvalues -o - %s \
 ; RUN:   | FileCheck %s --check-prefix=SANITY
 ; RUN: %llc_dwarf -march=x86-64 -o - %s -filetype=obj \
-; RUN:   | llvm-dwarfdump -debug-dump=all - | FileCheck %s
+; RUN:   | llvm-dwarfdump -v -all - | FileCheck %s
 ;
 ; CHECK: .debug_info contents:
 ; CHECK: DW_TAG_variable
-; CHECK-NEXT:   DW_AT_location [DW_FORM_data4]
+; CHECK-NEXT:   DW_AT_location [DW_FORM_data4] (
+; CHECK-NEXT:     {{.*}}: DW_OP_reg0 RAX)
 ; CHECK-NEXT:   DW_AT_name{{.*}}"a"
-; CHECK: .debug_loc contents:
-;                               rax
-; CHECK:  Location description: 50
+
 ; SANITY: DBG_VALUE
 ; SANITY-NOT: DBG_VALUE
-; ModuleID = 'test.ll'
+
 ; Compiled with -O:
 ;   void h(int);
 ;   int g();
@@ -21,6 +20,8 @@
 ;     int a = g();
 ;     h(a);
 ;   }
+
+; ModuleID = 'test.ll'
 target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx"
 

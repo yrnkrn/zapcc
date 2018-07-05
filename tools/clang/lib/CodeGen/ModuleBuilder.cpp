@@ -125,6 +125,14 @@ namespace {
 
     CodeGen::CodeGenModule *getBuilder() { return Builder.get(); }
 
+    llvm::Module *StartModule(llvm::StringRef ModuleName,
+                              llvm::LLVMContext &C) {
+      assert(!M && "Replacing existing Module?");
+      M.reset(new llvm::Module(ModuleName, C));
+      Initialize(*Ctx);
+      return M.get();
+    }
+
     void Initialize(ASTContext &Context) override {
       Ctx = &Context;
 
@@ -325,6 +333,11 @@ llvm::Constant *CodeGenerator::GetAddrOfGlobal(GlobalDecl global,
 
 CodeGen::CodeGenModule *CodeGenerator::getBuilder() {
   return static_cast<CodeGeneratorImpl *>(this)->getBuilder();
+}
+
+llvm::Module *CodeGenerator::StartModule(llvm::StringRef ModuleName,
+                                         llvm::LLVMContext &C) {
+  return static_cast<CodeGeneratorImpl*>(this)->StartModule(ModuleName, C);
 }
 
 CodeGenerator *clang::CreateLLVMCodeGen(

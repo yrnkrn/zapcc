@@ -66,6 +66,57 @@ X86TTIImpl::getPopcntSupport(unsigned TyWidth) {
   return ST->hasPOPCNT() ? TTI::PSK_FastHardware : TTI::PSK_Software;
 }
 
+llvm::Optional<unsigned> X86TTIImpl::getCacheSize(
+  TargetTransformInfo::CacheLevel Level) const {
+  switch (Level) {
+  case TargetTransformInfo::CacheLevel::L1D:
+    //   - Penry
+    //   - Nehalem
+    //   - Westmere
+    //   - Sandy Bridge
+    //   - Ivy Bridge
+    //   - Haswell
+    //   - Broadwell
+    //   - Skylake
+    //   - Kabylake
+    return 32 * 1024;  //  32 KByte
+  case TargetTransformInfo::CacheLevel::L2D:
+    //   - Penry
+    //   - Nehalem
+    //   - Westmere
+    //   - Sandy Bridge
+    //   - Ivy Bridge
+    //   - Haswell
+    //   - Broadwell
+    //   - Skylake
+    //   - Kabylake
+    return 256 * 1024; // 256 KByte
+  }
+
+  llvm_unreachable("Unknown TargetTransformInfo::CacheLevel");
+}
+
+llvm::Optional<unsigned> X86TTIImpl::getCacheAssociativity(
+  TargetTransformInfo::CacheLevel Level) const {
+  //   - Penry
+  //   - Nehalem
+  //   - Westmere
+  //   - Sandy Bridge
+  //   - Ivy Bridge
+  //   - Haswell
+  //   - Broadwell
+  //   - Skylake
+  //   - Kabylake
+  switch (Level) {
+  case TargetTransformInfo::CacheLevel::L1D:
+    LLVM_FALLTHROUGH;
+  case TargetTransformInfo::CacheLevel::L2D:
+    return 8;
+  }
+
+  llvm_unreachable("Unknown TargetTransformInfo::CacheLevel");
+}
+
 unsigned X86TTIImpl::getNumberOfRegisters(bool Vector) {
   if (Vector && !ST->hasSSE1())
     return 0;
@@ -1119,7 +1170,11 @@ int X86TTIImpl::getCastInstrCost(unsigned Opcode, Type *Dst, Type *Src,
     { ISD::FP_TO_UINT,  MVT::v2i32,  MVT::v2f32,  1 },
     { ISD::FP_TO_UINT,  MVT::v4i32,  MVT::v4f32,  1 },
     { ISD::FP_TO_UINT,  MVT::v8i32,  MVT::v8f32,  1 },
+    { ISD::FP_TO_UINT,  MVT::v8i16,  MVT::v8f64,  2 },
+    { ISD::FP_TO_UINT,  MVT::v8i8,   MVT::v8f64,  2 },
     { ISD::FP_TO_UINT,  MVT::v16i32, MVT::v16f32, 1 },
+    { ISD::FP_TO_UINT,  MVT::v16i16, MVT::v16f32, 2 },
+    { ISD::FP_TO_UINT,  MVT::v16i8,  MVT::v16f32, 2 },
   };
 
   static const TypeConversionCostTblEntry AVX2ConversionTbl[] = {
@@ -1944,6 +1999,152 @@ int X86TTIImpl::getArithmeticReductionCost(unsigned Opcode, Type *ValTy,
   return BaseT::getArithmeticReductionCost(Opcode, ValTy, IsPairwise);
 }
 
+int X86TTIImpl::getMinMaxReductionCost(Type *ValTy, Type *CondTy,
+                                       bool IsPairwise, bool IsUnsigned) {
+  std::pair<int, MVT> LT = TLI->getTypeLegalizationCost(DL, ValTy);
+
+  MVT MTy = LT.second;
+
+  int ISD;
+  if (ValTy->isIntOrIntVectorTy()) {
+    ISD = IsUnsigned ? ISD::UMIN : ISD::SMIN;
+  } else {
+    assert(ValTy->isFPOrFPVectorTy() &&
+           "Expected float point or integer vector type.");
+    ISD = ISD::FMINNUM;
+  }
+
+  // We use the Intel Architecture Code Analyzer(IACA) to measure the throughput
+  // and make it as the cost.
+
+  static const CostTblEntry SSE42CostTblPairWise[] = {
+      {ISD::FMINNUM, MVT::v2f64, 3},
+      {ISD::FMINNUM, MVT::v4f32, 2},
+      {ISD::SMIN, MVT::v2i64, 7}, // The data reported by the IACA is "6.8"
+      {ISD::UMIN, MVT::v2i64, 8}, // The data reported by the IACA is "8.6"
+      {ISD::SMIN, MVT::v4i32, 1}, // The data reported by the IACA is "1.5"
+      {ISD::UMIN, MVT::v4i32, 2}, // The data reported by the IACA is "1.8"
+      {ISD::SMIN, MVT::v8i16, 2},
+      {ISD::UMIN, MVT::v8i16, 2},
+  };
+
+  static const CostTblEntry AVX1CostTblPairWise[] = {
+      {ISD::FMINNUM, MVT::v4f32, 1},
+      {ISD::FMINNUM, MVT::v4f64, 1},
+      {ISD::FMINNUM, MVT::v8f32, 2},
+      {ISD::SMIN, MVT::v2i64, 3},
+      {ISD::UMIN, MVT::v2i64, 3},
+      {ISD::SMIN, MVT::v4i32, 1},
+      {ISD::UMIN, MVT::v4i32, 1},
+      {ISD::SMIN, MVT::v8i16, 1},
+      {ISD::UMIN, MVT::v8i16, 1},
+      {ISD::SMIN, MVT::v8i32, 3},
+      {ISD::UMIN, MVT::v8i32, 3},
+  };
+
+  static const CostTblEntry AVX2CostTblPairWise[] = {
+      {ISD::SMIN, MVT::v4i64, 2},
+      {ISD::UMIN, MVT::v4i64, 2},
+      {ISD::SMIN, MVT::v8i32, 1},
+      {ISD::UMIN, MVT::v8i32, 1},
+      {ISD::SMIN, MVT::v16i16, 1},
+      {ISD::UMIN, MVT::v16i16, 1},
+      {ISD::SMIN, MVT::v32i8, 2},
+      {ISD::UMIN, MVT::v32i8, 2},
+  };
+
+  static const CostTblEntry AVX512CostTblPairWise[] = {
+      {ISD::FMINNUM, MVT::v8f64, 1},
+      {ISD::FMINNUM, MVT::v16f32, 2},
+      {ISD::SMIN, MVT::v8i64, 2},
+      {ISD::UMIN, MVT::v8i64, 2},
+      {ISD::SMIN, MVT::v16i32, 1},
+      {ISD::UMIN, MVT::v16i32, 1},
+  };
+
+  static const CostTblEntry SSE42CostTblNoPairWise[] = {
+      {ISD::FMINNUM, MVT::v2f64, 3},
+      {ISD::FMINNUM, MVT::v4f32, 3},
+      {ISD::SMIN, MVT::v2i64, 7}, // The data reported by the IACA is "6.8"
+      {ISD::UMIN, MVT::v2i64, 9}, // The data reported by the IACA is "8.6"
+      {ISD::SMIN, MVT::v4i32, 1}, // The data reported by the IACA is "1.5"
+      {ISD::UMIN, MVT::v4i32, 2}, // The data reported by the IACA is "1.8"
+      {ISD::SMIN, MVT::v8i16, 1}, // The data reported by the IACA is "1.5"
+      {ISD::UMIN, MVT::v8i16, 2}, // The data reported by the IACA is "1.8"
+  };
+
+  static const CostTblEntry AVX1CostTblNoPairWise[] = {
+      {ISD::FMINNUM, MVT::v4f32, 1},
+      {ISD::FMINNUM, MVT::v4f64, 1},
+      {ISD::FMINNUM, MVT::v8f32, 1},
+      {ISD::SMIN, MVT::v2i64, 3},
+      {ISD::UMIN, MVT::v2i64, 3},
+      {ISD::SMIN, MVT::v4i32, 1},
+      {ISD::UMIN, MVT::v4i32, 1},
+      {ISD::SMIN, MVT::v8i16, 1},
+      {ISD::UMIN, MVT::v8i16, 1},
+      {ISD::SMIN, MVT::v8i32, 2},
+      {ISD::UMIN, MVT::v8i32, 2},
+  };
+
+  static const CostTblEntry AVX2CostTblNoPairWise[] = {
+      {ISD::SMIN, MVT::v4i64, 1},
+      {ISD::UMIN, MVT::v4i64, 1},
+      {ISD::SMIN, MVT::v8i32, 1},
+      {ISD::UMIN, MVT::v8i32, 1},
+      {ISD::SMIN, MVT::v16i16, 1},
+      {ISD::UMIN, MVT::v16i16, 1},
+      {ISD::SMIN, MVT::v32i8, 1},
+      {ISD::UMIN, MVT::v32i8, 1},
+  };
+
+  static const CostTblEntry AVX512CostTblNoPairWise[] = {
+      {ISD::FMINNUM, MVT::v8f64, 1},
+      {ISD::FMINNUM, MVT::v16f32, 2},
+      {ISD::SMIN, MVT::v8i64, 1},
+      {ISD::UMIN, MVT::v8i64, 1},
+      {ISD::SMIN, MVT::v16i32, 1},
+      {ISD::UMIN, MVT::v16i32, 1},
+  };
+
+  if (IsPairwise) {
+    if (ST->hasAVX512())
+      if (const auto *Entry = CostTableLookup(AVX512CostTblPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+
+    if (ST->hasAVX2())
+      if (const auto *Entry = CostTableLookup(AVX2CostTblPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+
+    if (ST->hasAVX())
+      if (const auto *Entry = CostTableLookup(AVX1CostTblPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+
+    if (ST->hasSSE42())
+      if (const auto *Entry = CostTableLookup(SSE42CostTblPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+  } else {
+    if (ST->hasAVX512())
+      if (const auto *Entry =
+              CostTableLookup(AVX512CostTblNoPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+
+    if (ST->hasAVX2())
+      if (const auto *Entry = CostTableLookup(AVX2CostTblNoPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+
+    if (ST->hasAVX())
+      if (const auto *Entry = CostTableLookup(AVX1CostTblNoPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+
+    if (ST->hasSSE42())
+      if (const auto *Entry = CostTableLookup(SSE42CostTblNoPairWise, ISD, MTy))
+        return LT.first * Entry->Cost;
+  }
+
+  return BaseT::getMinMaxReductionCost(ValTy, CondTy, IsPairwise, IsUnsigned);
+}
+
 /// \brief Calculate the cost of materializing a 64-bit value. This helper
 /// method might only calculate a fraction of a larger immediate. Therefore it
 /// is valid to return a cost of ZERO.
@@ -2111,6 +2312,21 @@ int X86TTIImpl::getIntImmCost(Intrinsic::ID IID, unsigned Idx, const APInt &Imm,
     break;
   }
   return X86TTIImpl::getIntImmCost(Imm, Ty);
+}
+
+unsigned X86TTIImpl::getUserCost(const User *U,
+                                 ArrayRef<const Value *> Operands) {
+  if (isa<StoreInst>(U)) {
+    Value *Ptr = U->getOperand(1);
+    // Store instruction with index and scale costs 2 Uops.
+    // Check the preceding GEP to identify non-const indices.
+    if (auto GEP = dyn_cast<GetElementPtrInst>(Ptr)) {
+      if (!all_of(GEP->indices(), [](Value *V) { return isa<Constant>(V); }))
+        return TTI::TCC_Basic * 2;
+    }
+    return TTI::TCC_Basic;
+  }
+  return BaseT::getUserCost(U, Operands);
 }
 
 // Return an average cost of Gather / Scatter instruction, maybe improved later
@@ -2297,6 +2513,11 @@ bool X86TTIImpl::isLegalMaskedGather(Type *DataTy) {
 
 bool X86TTIImpl::isLegalMaskedScatter(Type *DataType) {
   return isLegalMaskedGather(DataType);
+}
+
+bool X86TTIImpl::hasDivRemOp(Type *DataType, bool IsSigned) {
+  EVT VT = TLI->getValueType(DL, DataType);
+  return TLI->isOperationLegal(IsSigned ? ISD::SDIVREM : ISD::UDIVREM, VT);
 }
 
 bool X86TTIImpl::areInlineCompatible(const Function *Caller,

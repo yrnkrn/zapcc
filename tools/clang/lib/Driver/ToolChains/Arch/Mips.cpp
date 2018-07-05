@@ -35,7 +35,7 @@ void mips::getMipsCPUAndABI(const ArgList &Args, const llvm::Triple &Triple,
   // MIPS32r6 is the default for mips(el)?-img-linux-gnu and MIPS64r6 is the
   // default for mips64(el)?-img-linux-gnu.
   if (Triple.getVendor() == llvm::Triple::ImaginationTechnologies &&
-      Triple.getEnvironment() == llvm::Triple::GNU) {
+      Triple.isGNUEnvironment()) {
     DefMips32CPU = "mips32r6";
     DefMips64CPU = "mips64r6";
   }
@@ -232,8 +232,7 @@ void mips::getMIPSTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   Arg *ABICallsArg =
       Args.getLastArg(options::OPT_mabicalls, options::OPT_mno_abicalls);
   UseAbiCalls =
-      !ABICallsArg ||
-      (ABICallsArg && ABICallsArg->getOption().matches(options::OPT_mabicalls));
+      !ABICallsArg || ABICallsArg->getOption().matches(options::OPT_mabicalls);
 
   if (UseAbiCalls && IsN64 && NonPIC) {
     D.Diag(diag::warn_drv_unsupported_abicalls);
@@ -266,14 +265,14 @@ void mips::getMIPSTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   if (Arg *A = Args.getLastArg(options::OPT_mnan_EQ)) {
     StringRef Val = StringRef(A->getValue());
     if (Val == "2008") {
-      if (mips::getSupportedNanEncoding(CPUName) & mips::Nan2008)
+      if (mips::getIEEE754Standard(CPUName) & mips::Std2008)
         Features.push_back("+nan2008");
       else {
         Features.push_back("-nan2008");
         D.Diag(diag::warn_target_unsupported_nan2008) << CPUName;
       }
     } else if (Val == "legacy") {
-      if (mips::getSupportedNanEncoding(CPUName) & mips::NanLegacy)
+      if (mips::getIEEE754Standard(CPUName) & mips::Legacy)
         Features.push_back("-nan2008");
       else {
         Features.push_back("+nan2008");
@@ -282,6 +281,28 @@ void mips::getMIPSTargetFeatures(const Driver &D, const llvm::Triple &Triple,
     } else
       D.Diag(diag::err_drv_unsupported_option_argument)
           << A->getOption().getName() << Val;
+  }
+
+  if (Arg *A = Args.getLastArg(options::OPT_mabs_EQ)) {
+    StringRef Val = StringRef(A->getValue());
+    if (Val == "2008") {
+      if (mips::getIEEE754Standard(CPUName) & mips::Std2008) {
+        Features.push_back("+abs2008");
+      } else {
+        Features.push_back("-abs2008");
+        D.Diag(diag::warn_target_unsupported_abs2008) << CPUName;
+      }
+    } else if (Val == "legacy") {
+      if (mips::getIEEE754Standard(CPUName) & mips::Legacy) {
+        Features.push_back("-abs2008");
+      } else {
+        Features.push_back("+abs2008");
+        D.Diag(diag::warn_target_unsupported_abslegacy) << CPUName;
+      }
+    } else {
+      D.Diag(diag::err_drv_unsupported_option_argument)
+          << A->getOption().getName() << Val;
+    }
   }
 
   AddTargetFeature(Args, Features, options::OPT_msingle_float,
@@ -324,27 +345,28 @@ void mips::getMIPSTargetFeatures(const Driver &D, const llvm::Triple &Triple,
   AddTargetFeature(Args, Features, options::OPT_mmt, options::OPT_mno_mt, "mt");
 }
 
-mips::NanEncoding mips::getSupportedNanEncoding(StringRef &CPU) {
-  // Strictly speaking, mips32r2 and mips64r2 are NanLegacy-only since Nan2008
-  // was first introduced in Release 3. However, other compilers have
-  // traditionally allowed it for Release 2 so we should do the same.
-  return (NanEncoding)llvm::StringSwitch<int>(CPU)
-      .Case("mips1", NanLegacy)
-      .Case("mips2", NanLegacy)
-      .Case("mips3", NanLegacy)
-      .Case("mips4", NanLegacy)
-      .Case("mips5", NanLegacy)
-      .Case("mips32", NanLegacy)
-      .Case("mips32r2", NanLegacy | Nan2008)
-      .Case("mips32r3", NanLegacy | Nan2008)
-      .Case("mips32r5", NanLegacy | Nan2008)
-      .Case("mips32r6", Nan2008)
-      .Case("mips64", NanLegacy)
-      .Case("mips64r2", NanLegacy | Nan2008)
-      .Case("mips64r3", NanLegacy | Nan2008)
-      .Case("mips64r5", NanLegacy | Nan2008)
-      .Case("mips64r6", Nan2008)
-      .Default(NanLegacy);
+mips::IEEE754Standard mips::getIEEE754Standard(StringRef &CPU) {
+  // Strictly speaking, mips32r2 and mips64r2 do not conform to the
+  // IEEE754-2008 standard. Support for this standard was first introduced
+  // in Release 3. However, other compilers have traditionally allowed it
+  // for Release 2 so we should do the same.
+  return (IEEE754Standard)llvm::StringSwitch<int>(CPU)
+      .Case("mips1", Legacy)
+      .Case("mips2", Legacy)
+      .Case("mips3", Legacy)
+      .Case("mips4", Legacy)
+      .Case("mips5", Legacy)
+      .Case("mips32", Legacy)
+      .Case("mips32r2", Legacy | Std2008)
+      .Case("mips32r3", Legacy | Std2008)
+      .Case("mips32r5", Legacy | Std2008)
+      .Case("mips32r6", Std2008)
+      .Case("mips64", Legacy)
+      .Case("mips64r2", Legacy | Std2008)
+      .Case("mips64r3", Legacy | Std2008)
+      .Case("mips64r5", Legacy | Std2008)
+      .Case("mips64r6", Std2008)
+      .Default(Std2008);
 }
 
 bool mips::hasCompactBranches(StringRef &CPU) {
