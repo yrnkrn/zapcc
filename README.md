@@ -43,6 +43,7 @@ Full builds are 2x-5x faster, see
 * [ETL](https://baptiste-wicht.com/posts/2016/12/zapcc-cpp-compilation-speed-against-gcc-54-and-clang-39.html)
 * [MKVToolNix](https://www.bunkus.org/blog/2018/06/speeding-up-mkvtoolnix-compilation-speed-with-zapcc)
 * [A Performance-Based Comparison of C/C++ Compilers](https://colfaxresearch.com/compiler-comparison)
+
 Typically re-compilation of one modified source file is 10x-50x faster, see [Boost.Math](https://www.zapcc.com/demo-incremental-build/). 
 
 Acceleration depends on the complexity of the header files vs. the complexity of the source files. It can range from no acceleration at all for plain C projects where caching is disabled to x2-x5 for build-all of heavily templated projects, up to cases of x50 speedups in developer-mode incremental change of one source file.
