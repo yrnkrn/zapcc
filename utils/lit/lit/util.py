@@ -1,12 +1,43 @@
 import errno
 import itertools
 import math
+import numbers
 import os
 import platform
 import signal
 import subprocess
 import sys
 import threading
+
+def norm_path(path):
+    path = os.path.realpath(path)
+    path = os.path.normpath(path)
+    path = os.path.normcase(path)
+    return path
+
+def is_string(value):
+    try:
+        # Python 2 and Python 3 are different here.
+        return isinstance(value, basestring)
+    except NameError:
+        return isinstance(value, str)
+
+def pythonize_bool(value):
+    if value is None:
+        return False
+    if type(value) is bool:
+        return value
+    if isinstance(value, numbers.Number):
+        return value != 0
+    if is_string(value):
+        if value.lower() in ('1', 'true', 'on', 'yes'):
+            return True
+        if value.lower() in ('', '0', 'false', 'off', 'no'):
+            return False
+    raise ValueError('"{}" is not a valid boolean'.format(value))
+
+def make_word_regex(word):
+    return r'\b' + word + r'\b'
 
 def to_bytes(s):
     """Return the parameter as type 'bytes', possibly encoding it.

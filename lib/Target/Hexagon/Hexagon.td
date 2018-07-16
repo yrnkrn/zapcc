@@ -44,6 +44,9 @@ def UseHVXSgl          : Predicate<"HST->useHVXSglOps()">;
 def UseHVX             : Predicate<"HST->useHVXSglOps() ||HST->useHVXDblOps()">,
                          AssemblerPredicate<"ExtensionHVX">;
 
+def Hvx64   : HwMode<"+hvx,-hvx-double">;
+def Hvx128  : HwMode<"+hvx,+hvx-double">;
+
 //===----------------------------------------------------------------------===//
 // Classes used for relation maps.
 //===----------------------------------------------------------------------===//
@@ -155,7 +158,7 @@ def getNonNVStore : InstrMapping {
   let ValueCols = [["false"]];
 }
 
-def getBaseWithImmOffset : InstrMapping {
+def changeAddrMode_abs_io: InstrMapping {
   let FilterClass = "AddrModeRel";
   let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore",
                    "isFloat"];
@@ -164,7 +167,7 @@ def getBaseWithImmOffset : InstrMapping {
   let ValueCols = [["BaseImmOffset"]];
 }
 
-def getAbsoluteForm : InstrMapping {
+def changeAddrMode_io_abs: InstrMapping {
   let FilterClass = "AddrModeRel";
   let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore",
                    "isFloat"];
@@ -173,7 +176,7 @@ def getAbsoluteForm : InstrMapping {
   let ValueCols = [["Absolute"]];
 }
 
-def getBaseWithRegOffset : InstrMapping {
+def changeAddrMode_io_rr: InstrMapping {
   let FilterClass = "AddrModeRel";
   let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore"];
   let ColFields = ["addrMode"];
@@ -181,7 +184,7 @@ def getBaseWithRegOffset : InstrMapping {
   let ValueCols = [["BaseRegOffset"]];
 }
 
-def xformRegToImmOffset : InstrMapping {
+def changeAddrMode_rr_io: InstrMapping {
   let FilterClass = "AddrModeRel";
   let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore"];
   let ColFields = ["addrMode"];
@@ -189,7 +192,7 @@ def xformRegToImmOffset : InstrMapping {
   let ValueCols = [["BaseImmOffset"]];
 }
 
-def getBaseWithLongOffset : InstrMapping {
+def changeAddrMode_rr_ur: InstrMapping {
   let FilterClass = "ImmRegShl";
   let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore"];
   let ColFields = ["addrMode"];
@@ -197,17 +200,17 @@ def getBaseWithLongOffset : InstrMapping {
   let ValueCols = [["BaseLongOffset"]];
 }
 
+def changeAddrMode_ur_rr : InstrMapping {
+  let FilterClass = "ImmRegShl";
+  let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore"];
+  let ColFields = ["addrMode"];
+  let KeyCol = ["BaseLongOffset"];
+  let ValueCols = [["BaseRegOffset"]];
+}
+
 def getRegForm : InstrMapping {
   let FilterClass = "ImmRegRel";
   let RowFields = ["CextOpcode", "PredSense", "PNewValue"];
-  let ColFields = ["InputType"];
-  let KeyCol = ["imm"];
-  let ValueCols = [["reg"]];
-}
-
-def getRegShlForm : InstrMapping {
-  let FilterClass = "ImmRegShl";
-  let RowFields = ["CextOpcode", "PredSense", "PNewValue", "isNVStore"];
   let ColFields = ["InputType"];
   let KeyCol = ["imm"];
   let ValueCols = [["reg"]];

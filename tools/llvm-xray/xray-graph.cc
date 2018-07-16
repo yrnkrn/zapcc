@@ -208,13 +208,15 @@ Error GraphRenderer::accountRecord(const XRayRecord &Record) {
 
   auto &ThreadStack = PerThreadFunctionStack[Record.TId];
   switch (Record.Type) {
-  case RecordTypes::ENTER: {
+  case RecordTypes::ENTER:
+  case RecordTypes::ENTER_ARG: {
     if (Record.FuncId != 0 && G.count(Record.FuncId) == 0)
       G[Record.FuncId].SymbolName = FuncIdHelper.SymbolOrNumber(Record.FuncId);
     ThreadStack.push_back({Record.FuncId, Record.TSC});
     break;
   }
-  case RecordTypes::EXIT: {
+  case RecordTypes::EXIT:
+  case RecordTypes::TAIL_EXIT: {
     // FIXME: Refactor this and the account subcommand to reduce code
     // duplication
     if (ThreadStack.size() == 0 || ThreadStack.back().FuncId != Record.FuncId) {

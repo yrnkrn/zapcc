@@ -214,6 +214,10 @@ public:
            TargetTriple.getEnvironmentName() == "amdgizcl";
   }
 
+  bool isAmdPalOS() const {
+    return TargetTriple.getOS() == Triple::AMDPAL;
+  }
+
   Generation getGeneration() const {
     return Gen;
   }
@@ -883,6 +887,10 @@ public:
   /// subtarget's specifications, or does not meet number of waves per execution
   /// unit requirement.
   unsigned getMaxNumVGPRs(const MachineFunction &MF) const;
+
+  void getPostRAMutations(
+      std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
+      const override;
 };
 
 } // end namespace llvm

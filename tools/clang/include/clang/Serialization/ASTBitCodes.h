@@ -716,6 +716,9 @@ namespace clang {
       /// \brief Specifies some declarations with initializers that must be
       /// emitted to initialize the module.
       SUBMODULE_INITIALIZERS = 16,
+      /// \brief Specifies the name of the module that will eventually
+      /// re-export the entities in this module.
+      SUBMODULE_EXPORT_AS = 17,
     };
 
     /// \brief Record types used within a comments block.
@@ -937,7 +940,9 @@ namespace clang {
       /// \brief A DeducedTemplateSpecializationType record.
       TYPE_DEDUCED_TEMPLATE_SPECIALIZATION = 45,
       /// \brief A DependentSizedExtVectorType record.
-      TYPE_DEPENDENT_SIZED_EXT_VECTOR = 46
+      TYPE_DEPENDENT_SIZED_EXT_VECTOR = 46,
+      /// \brief A DependentAddressSpaceType record.
+      TYPE_DEPENDENT_ADDRESS_SPACE = 47
     };
 
     /// \brief The type IDs for special types constructed by semantic

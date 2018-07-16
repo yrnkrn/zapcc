@@ -477,7 +477,7 @@ bool MachineCombiner::combineInstructions(MachineBasicBlock *MBB) {
 
       if (IncrementalUpdate) {
         // Update depths since the last incremental update.
-        MinInstr->updateDepths(LastUpdate, std::next(BlockIter), RegUnits);
+        MinInstr->updateDepths(LastUpdate, BlockIter, RegUnits);
         LastUpdate = BlockIter;
       }
 

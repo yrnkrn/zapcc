@@ -1062,6 +1062,7 @@ RetainSummaryManager::getFunctionSummary(const FunctionDecl *FD) {
 
     // Inspect the result type.
     QualType RetTy = FT->getReturnType();
+    std::string RetTyName = RetTy.getAsString();
 
     // FIXME: This should all be refactored into a chain of "summary lookup"
     //  filters.
@@ -1081,12 +1082,14 @@ RetainSummaryManager::getFunctionSummary(const FunctionDecl *FD) {
       AllowAnnotations = false;
     } else if (FName == "CFPlugInInstanceCreate") {
       S = getPersistentSummary(RetEffect::MakeNoRet());
-    } else if (FName == "IOBSDNameMatching" ||
+    } else if (FName == "IORegistryEntrySearchCFProperty"
+        || (RetTyName == "CFMutableDictionaryRef" && (
+               FName == "IOBSDNameMatching" ||
                FName == "IOServiceMatching" ||
                FName == "IOServiceNameMatching" ||
-               FName == "IORegistryEntrySearchCFProperty" ||
                FName == "IORegistryEntryIDMatching" ||
-               FName == "IOOpenFirmwarePathMatching") {
+               FName == "IOOpenFirmwarePathMatching"
+            ))) {
       // Part of <rdar://problem/6961230>. (IOKit)
       // This should be addressed using a API table.
       S = getPersistentSummary(RetEffect::MakeOwned(RetEffect::CF),
@@ -1211,7 +1214,8 @@ RetainSummaryManager::getFunctionSummary(const FunctionDecl *FD) {
 
     // Check for release functions, the only kind of functions that we care
     // about that don't return a pointer type.
-    if (FName[0] == 'C' && (FName[1] == 'F' || FName[1] == 'G')) {
+    if (FName.size() >= 2 &&
+        FName[0] == 'C' && (FName[1] == 'F' || FName[1] == 'G')) {
       // Test for 'CGCF'.
       FName = FName.substr(FName.startswith("CGCF") ? 4 : 2);
 

@@ -48,7 +48,7 @@ Error readBinaryFormatHeader(StringRef Data, XRayFileHeader &FileHeader) {
   FileHeader.NonstopTSC = Bitfield & 1uL << 1;
   FileHeader.CycleFrequency = HeaderExtractor.getU64(&OffsetPtr);
   std::memcpy(&FileHeader.FreeFormData, Data.bytes_begin() + OffsetPtr, 16);
-  if (FileHeader.Version != 1)
+  if (FileHeader.Version != 1 && FileHeader.Version != 2)
     return make_error<StringError>(
         Twine("Unsupported XRay file version: ") + Twine(FileHeader.Version),
         std::make_error_code(std::errc::invalid_argument));
@@ -57,7 +57,6 @@ Error readBinaryFormatHeader(StringRef Data, XRayFileHeader &FileHeader) {
 
 Error loadNaiveFormatLog(StringRef Data, XRayFileHeader &FileHeader,
                          std::vector<XRayRecord> &Records) {
-  // Check that there is at least a header
   if (Data.size() < 32)
     return make_error<StringError>(
         "Not enough bytes for an XRay log.",
@@ -83,26 +82,59 @@ Error loadNaiveFormatLog(StringRef Data, XRayFileHeader &FileHeader,
   for (auto S = Data.drop_front(32); !S.empty(); S = S.drop_front(32)) {
     DataExtractor RecordExtractor(S, true, 8);
     uint32_t OffsetPtr = 0;
-    Records.emplace_back();
-    auto &Record = Records.back();
-    Record.RecordType = RecordExtractor.getU16(&OffsetPtr);
-    Record.CPU = RecordExtractor.getU8(&OffsetPtr);
-    auto Type = RecordExtractor.getU8(&OffsetPtr);
-    switch (Type) {
-    case 0:
-      Record.Type = RecordTypes::ENTER;
+    switch (auto RecordType = RecordExtractor.getU16(&OffsetPtr)) {
+    case 0: { // Normal records.
+      Records.emplace_back();
+      auto &Record = Records.back();
+      Record.RecordType = RecordType;
+      Record.CPU = RecordExtractor.getU8(&OffsetPtr);
+      auto Type = RecordExtractor.getU8(&OffsetPtr);
+      switch (Type) {
+      case 0:
+        Record.Type = RecordTypes::ENTER;
+        break;
+      case 1:
+        Record.Type = RecordTypes::EXIT;
+        break;
+      case 2:
+        Record.Type = RecordTypes::TAIL_EXIT;
+        break;
+      case 3:
+        Record.Type = RecordTypes::ENTER_ARG;
+        break;
+      default:
+        return make_error<StringError>(
+            Twine("Unknown record type '") + Twine(int{Type}) + "'",
+            std::make_error_code(std::errc::executable_format_error));
+      }
+      Record.FuncId = RecordExtractor.getSigned(&OffsetPtr, sizeof(int32_t));
+      Record.TSC = RecordExtractor.getU64(&OffsetPtr);
+      Record.TId = RecordExtractor.getU32(&OffsetPtr);
       break;
-    case 1:
-      Record.Type = RecordTypes::EXIT;
+    }
+    case 1: { // Arg payload record.
+      auto &Record = Records.back();
+      // Advance two bytes to avoid padding.
+      OffsetPtr += 2;
+      int32_t FuncId = RecordExtractor.getSigned(&OffsetPtr, sizeof(int32_t));
+      auto TId = RecordExtractor.getU32(&OffsetPtr);
+      if (Record.FuncId != FuncId || Record.TId != TId)
+        return make_error<StringError>(
+            Twine("Corrupted log, found payload following non-matching "
+                  "function + thread record. Record for ") +
+                Twine(Record.FuncId) + " != " + Twine(FuncId),
+            std::make_error_code(std::errc::executable_format_error));
+      // Advance another four bytes to avoid padding.
+      OffsetPtr += 4;
+      auto Arg = RecordExtractor.getU64(&OffsetPtr);
+      Record.CallArgs.push_back(Arg);
       break;
+    }
     default:
       return make_error<StringError>(
-          Twine("Unknown record type '") + Twine(int{Type}) + "'",
+          Twine("Unknown record type == ") + Twine(RecordType),
           std::make_error_code(std::errc::executable_format_error));
     }
-    Record.FuncId = RecordExtractor.getSigned(&OffsetPtr, sizeof(int32_t));
-    Record.TSC = RecordExtractor.getU64(&OffsetPtr);
-    Record.TId = RecordExtractor.getU32(&OffsetPtr);
   }
   return Error::success();
 }
@@ -126,6 +158,7 @@ struct FDRState {
     FUNCTION_SEQUENCE,
     SCAN_TO_END_OF_THREAD_BUF,
     CUSTOM_EVENT_DATA,
+    CALL_ARGUMENT,
   };
   Token Expects;
 
@@ -149,6 +182,8 @@ const char *fdrStateToTwine(const FDRState::Token &state) {
     return "SCAN_TO_END_OF_THREAD_BUF";
   case FDRState::Token::CUSTOM_EVENT_DATA:
     return "CUSTOM_EVENT_DATA";
+  case FDRState::Token::CALL_ARGUMENT:
+    return "CALL_ARGUMENT";
   }
   return "UNKNOWN";
 }
@@ -229,10 +264,26 @@ Error processCustomEventMarker(FDRState &State, uint8_t RecordFirstByte,
   uint32_t DataSize = RecordExtractor.getU32(&OffsetPtr);
   uint64_t TSC = RecordExtractor.getU64(&OffsetPtr);
 
-  // FIXME: Actually represent the record through the API. For now we only skip
-  // through the data.
+  // FIXME: Actually represent the record through the API. For now we only
+  // skip through the data.
   (void)TSC;
   RecordSize = 16 + DataSize;
+  return Error::success();
+}
+
+/// State transition when a CallArgumentRecord is encountered.
+Error processFDRCallArgumentRecord(FDRState &State, uint8_t RecordFirstByte,
+                                   DataExtractor &RecordExtractor,
+                                   std::vector<XRayRecord> &Records) {
+  uint32_t OffsetPtr = 1; // Read starting after the first byte.
+  auto &Enter = Records.back();
+
+  if (Enter.Type != RecordTypes::ENTER)
+    return make_error<StringError>(
+        "CallArgument needs to be right after a function entry",
+        std::make_error_code(std::errc::executable_format_error));
+  Enter.Type = RecordTypes::ENTER_ARG;
+  Enter.CallArgs.emplace_back(RecordExtractor.getU64(&OffsetPtr));
   return Error::success();
 }
 
@@ -243,7 +294,8 @@ Error processCustomEventMarker(FDRState &State, uint8_t RecordFirstByte,
 /// to determine that this is a metadata record as opposed to a function record.
 Error processFDRMetadataRecord(FDRState &State, uint8_t RecordFirstByte,
                                DataExtractor &RecordExtractor,
-                               size_t &RecordSize) {
+                               size_t &RecordSize,
+                               std::vector<XRayRecord> &Records) {
   // The remaining 7 bits are the RecordKind enum.
   uint8_t RecordKind = RecordFirstByte >> 1;
   switch (RecordKind) {
@@ -275,6 +327,11 @@ Error processFDRMetadataRecord(FDRState &State, uint8_t RecordFirstByte,
   case 5: // CustomEventMarker
     if (auto E = processCustomEventMarker(State, RecordFirstByte,
                                           RecordExtractor, RecordSize))
+      return E;
+    break;
+  case 6: // CallArgument
+    if (auto E = processFDRCallArgumentRecord(State, RecordFirstByte,
+                                              RecordExtractor, Records))
       return E;
     break;
   default:
@@ -321,12 +378,13 @@ Error processFDRFunctionRecord(FDRState &State, uint8_t RecordFirstByte,
       Record.Type = RecordTypes::ENTER;
       break;
     case static_cast<uint8_t>(RecordTypes::EXIT):
-    case 2: // TAIL_EXIT is not yet defined in RecordTypes.
       Record.Type = RecordTypes::EXIT;
       break;
+    case static_cast<uint8_t>(RecordTypes::TAIL_EXIT):
+      Record.Type = RecordTypes::TAIL_EXIT;
+      break;
     default:
-      // When initializing the error, convert to uint16_t so that the record
-      // type isn't interpreted as a char.
+      // Cast to an unsigned integer to not interpret the record type as a char.
       return make_error<StringError>(
           Twine("Illegal function record type: ")
               .concat(Twine(static_cast<unsigned>(RecordType))),
@@ -347,9 +405,9 @@ Error processFDRFunctionRecord(FDRState &State, uint8_t RecordFirstByte,
     // FunctionRecords have a 32 bit delta from the previous absolute TSC
     // or TSC delta. If this would overflow, we should read a TSCWrap record
     // with an absolute TSC reading.
-    uint64_t new_tsc = State.BaseTSC + RecordExtractor.getU32(&OffsetPtr);
-    State.BaseTSC = new_tsc;
-    Record.TSC = new_tsc;
+    uint64_t NewTSC = State.BaseTSC + RecordExtractor.getU32(&OffsetPtr);
+    State.BaseTSC = NewTSC;
+    Record.TSC = NewTSC;
   }
   return Error::success();
 }
@@ -361,7 +419,7 @@ Error processFDRFunctionRecord(FDRState &State, uint8_t RecordFirstByte,
 ///
 /// The following is an attempt to document the grammar of the format, which is
 /// parsed by this function for little-endian machines. Since the format makes
-/// use of BitFields, when we support big-Endian architectures, we will need to
+/// use of BitFields, when we support big-endian architectures, we will need to
 /// adjust not only the endianness parameter to llvm's RecordExtractor, but also
 /// the bit twiddling logic, which is consistent with the little-endian
 /// convention that BitFields within a struct will first be packed into the
@@ -416,11 +474,10 @@ Error loadFDRLog(StringRef Data, XRayFileHeader &FileHeader,
     uint32_t OffsetPtr = 0;
     if (State.Expects == FDRState::Token::SCAN_TO_END_OF_THREAD_BUF) {
       RecordSize = State.CurrentBufferSize - State.CurrentBufferConsumed;
-      if (S.size() < State.CurrentBufferSize - State.CurrentBufferConsumed) {
+      if (S.size() < RecordSize) {
         return make_error<StringError>(
-            Twine("Incomplete thread buffer. Expected ") +
-                Twine(State.CurrentBufferSize - State.CurrentBufferConsumed) +
-                " remaining bytes but found " + Twine(S.size()),
+            Twine("Incomplete thread buffer. Expected at least ") +
+                Twine(RecordSize) + " bytes but found " + Twine(S.size()),
             make_error_code(std::errc::invalid_argument));
       }
       State.CurrentBufferConsumed = 0;
@@ -432,21 +489,22 @@ Error loadFDRLog(StringRef Data, XRayFileHeader &FileHeader,
     if (isMetadataRecord) {
       RecordSize = 16;
       if (auto E = processFDRMetadataRecord(State, BitField, RecordExtractor,
-                                            RecordSize))
+                                            RecordSize, Records))
         return E;
-      State.CurrentBufferConsumed += RecordSize;
     } else { // Process Function Record
       RecordSize = 8;
       if (auto E = processFDRFunctionRecord(State, BitField, RecordExtractor,
                                             Records))
         return E;
-      State.CurrentBufferConsumed += RecordSize;
     }
+    State.CurrentBufferConsumed += RecordSize;
   }
-  // There are two conditions
-  if (State.Expects != FDRState::Token::NEW_BUFFER_RECORD_OR_EOF &&
-      !(State.Expects == FDRState::Token::SCAN_TO_END_OF_THREAD_BUF &&
-        State.CurrentBufferSize == State.CurrentBufferConsumed))
+
+  // Having iterated over everything we've been given, we've either consumed
+  // everything and ended up in the end state, or were told to skip the rest.
+  bool Finished = State.Expects == FDRState::Token::SCAN_TO_END_OF_THREAD_BUF &&
+                  State.CurrentBufferSize == State.CurrentBufferConsumed;
+  if (State.Expects != FDRState::Token::NEW_BUFFER_RECORD_OR_EOF && !Finished)
     return make_error<StringError>(
         Twine("Encountered EOF with unexpected state expectation ") +
             fdrStateToTwine(State.Expects) +
@@ -459,7 +517,6 @@ Error loadFDRLog(StringRef Data, XRayFileHeader &FileHeader,
 
 Error loadYAMLLog(StringRef Data, XRayFileHeader &FileHeader,
                   std::vector<XRayRecord> &Records) {
-  // Load the documents from the MappedFile.
   YAMLXRayTrace Trace;
   Input In(Data);
   In >> Trace;
@@ -480,8 +537,8 @@ Error loadYAMLLog(StringRef Data, XRayFileHeader &FileHeader,
   Records.clear();
   std::transform(Trace.Records.begin(), Trace.Records.end(),
                  std::back_inserter(Records), [&](const YAMLXRayRecord &R) {
-                   return XRayRecord{R.RecordType, R.CPU, R.Type,
-                                     R.FuncId,     R.TSC, R.TId};
+                   return XRayRecord{R.RecordType, R.CPU, R.Type,    R.FuncId,
+                                     R.TSC,        R.TId, R.CallArgs};
                  });
   return Error::success();
 }
@@ -494,7 +551,6 @@ Expected<Trace> llvm::xray::loadTraceFile(StringRef Filename, bool Sort) {
         Twine("Cannot read log from '") + Filename + "'", EC);
   }
 
-  // Attempt to get the filesize.
   uint64_t FileSize;
   if (auto EC = sys::fs::file_size(Filename, FileSize)) {
     return make_error<StringError>(
@@ -506,7 +562,7 @@ Expected<Trace> llvm::xray::loadTraceFile(StringRef Filename, bool Sort) {
         std::make_error_code(std::errc::executable_format_error));
   }
 
-  // Attempt to mmap the file.
+  // Map the opened file into memory and use a StringRef to access it later.
   std::error_code EC;
   sys::fs::mapped_file_region MappedFile(
       Fd, sys::fs::mapped_file_region::mapmode::readonly, FileSize, 0, EC);
@@ -514,16 +570,17 @@ Expected<Trace> llvm::xray::loadTraceFile(StringRef Filename, bool Sort) {
     return make_error<StringError>(
         Twine("Cannot read log from '") + Filename + "'", EC);
   }
+  auto Data = StringRef(MappedFile.data(), MappedFile.size());
 
   // Attempt to detect the file type using file magic. We have a slight bias
   // towards the binary format, and we do this by making sure that the first 4
   // bytes of the binary file is some combination of the following byte
-  // patterns:
+  // patterns: (observe the code loading them assumes they're little endian)
   //
-  //   0x0001 0x0000 - version 1, "naive" format
-  //   0x0001 0x0001 - version 1, "flight data recorder" format
+  //   0x01 0x00 0x00 0x00 - version 1, "naive" format
+  //   0x01 0x00 0x01 0x00 - version 1, "flight data recorder" format
   //
-  // YAML files dont' typically have those first four bytes as valid text so we
+  // YAML files don't typically have those first four bytes as valid text so we
   // try loading assuming YAML if we don't find these bytes.
   //
   // Only if we can't load either the binary or the YAML format will we yield an
@@ -537,18 +594,14 @@ Expected<Trace> llvm::xray::loadTraceFile(StringRef Filename, bool Sort) {
   enum BinaryFormatType { NAIVE_FORMAT = 0, FLIGHT_DATA_RECORDER_FORMAT = 1 };
 
   Trace T;
-  if (Version == 1 && Type == NAIVE_FORMAT) {
-    if (auto E =
-            loadNaiveFormatLog(StringRef(MappedFile.data(), MappedFile.size()),
-                               T.FileHeader, T.Records))
+  if (Type == NAIVE_FORMAT && (Version == 1 || Version == 2)) {
+    if (auto E = loadNaiveFormatLog(Data, T.FileHeader, T.Records))
       return std::move(E);
   } else if (Version == 1 && Type == FLIGHT_DATA_RECORDER_FORMAT) {
-    if (auto E = loadFDRLog(StringRef(MappedFile.data(), MappedFile.size()),
-                            T.FileHeader, T.Records))
+    if (auto E = loadFDRLog(Data, T.FileHeader, T.Records))
       return std::move(E);
   } else {
-    if (auto E = loadYAMLLog(StringRef(MappedFile.data(), MappedFile.size()),
-                             T.FileHeader, T.Records))
+    if (auto E = loadYAMLLog(Data, T.FileHeader, T.Records))
       return std::move(E);
   }
 

@@ -104,7 +104,7 @@ static bool getDefaultBlacklist(const Driver &D, SanitizerMask Kinds,
     BlacklistFile = "dfsan_abilist.txt";
   else if (Kinds & CFI)
     BlacklistFile = "cfi_blacklist.txt";
-  else if (Kinds & Undefined)
+  else if (Kinds & (Undefined | Integer | Nullability))
     BlacklistFile = "ubsan_blacklist.txt";
 
   if (BlacklistFile) {
@@ -489,9 +489,13 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
       }
     }
     MsanUseAfterDtor =
-        Args.hasArg(options::OPT_fsanitize_memory_use_after_dtor);
+        Args.hasFlag(options::OPT_fsanitize_memory_use_after_dtor,
+                     options::OPT_fno_sanitize_memory_use_after_dtor,
+                     MsanUseAfterDtor);
     NeedPIE |= !(TC.getTriple().isOSLinux() &&
                  TC.getTriple().getArch() == llvm::Triple::x86_64);
+  } else {
+    MsanUseAfterDtor = false;
   }
 
   if (AllAddedKinds & Thread) {
@@ -606,10 +610,11 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
       CoverageFeatures |= CoverageFunc;
   }
 
+  SharedRuntime =
+      Args.hasFlag(options::OPT_shared_libsan, options::OPT_static_libsan,
+                   TC.getTriple().isAndroid() || TC.getTriple().isOSFuchsia());
+
   if (AllAddedKinds & Address) {
-    AsanSharedRuntime =
-        Args.hasArg(options::OPT_shared_libasan) ||
-        TC.getTriple().isAndroid() || TC.getTriple().isOSFuchsia();
     NeedPIE |= TC.getTriple().isAndroid() || TC.getTriple().isOSFuchsia();
     if (Arg *A =
             Args.getLastArg(options::OPT_fsanitize_address_field_padding)) {

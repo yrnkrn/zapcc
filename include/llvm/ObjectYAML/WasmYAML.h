@@ -109,6 +109,13 @@ struct NameEntry {
   StringRef Name;
 };
 
+struct SegmentInfo {
+  uint32_t Index;
+  StringRef Name;
+  uint32_t Alignment;
+  uint32_t Flags;
+};
+
 struct Signature {
   uint32_t Index;
   SignatureForm Form = wasm::WASM_TYPE_FUNC;
@@ -160,9 +167,9 @@ struct LinkingSection : CustomSection {
     return C && C->Name == "linking";
   }
 
-  std::vector<SymbolInfo> SymbolInfos;
   uint32_t DataSize;
-  uint32_t DataAlignment;
+  std::vector<SymbolInfo> SymbolInfos;
+  std::vector<SegmentInfo> SegmentInfos;
 };
 
 struct TypeSection : Section {
@@ -297,6 +304,7 @@ LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::WasmYAML::Function)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::WasmYAML::LocalDecl)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::WasmYAML::Relocation)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::WasmYAML::NameEntry)
+LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::WasmYAML::SegmentInfo)
 LLVM_YAML_IS_SEQUENCE_VECTOR(llvm::WasmYAML::SymbolInfo)
 
 namespace llvm {
@@ -352,6 +360,10 @@ template <> struct MappingTraits<WasmYAML::Relocation> {
 
 template <> struct MappingTraits<WasmYAML::NameEntry> {
   static void mapping(IO &IO, WasmYAML::NameEntry &NameEntry);
+};
+
+template <> struct MappingTraits<WasmYAML::SegmentInfo> {
+  static void mapping(IO &IO, WasmYAML::SegmentInfo &SegmentInfo);
 };
 
 template <> struct MappingTraits<WasmYAML::LocalDecl> {

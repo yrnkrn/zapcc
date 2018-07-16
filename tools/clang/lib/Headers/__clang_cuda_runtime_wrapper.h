@@ -173,7 +173,18 @@ inline __host__ double __signbitd(double x) {
 // __device__.
 #pragma push_macro("__forceinline__")
 #define __forceinline__ __device__ __inline__ __attribute__((always_inline))
+
+#pragma push_macro("__float2half_rn")
+#if CUDA_VERSION >= 9000
+// CUDA-9 has conflicting prototypes for __float2half_rn(float f) in
+// cuda_fp16.h[pp] and device_functions.hpp. We need to get the one in
+// device_functions.hpp out of the way.
+#define __float2half_rn  __float2half_rn_disabled
+#endif
+
 #include "device_functions.hpp"
+#pragma pop_macro("__float2half_rn")
+
 
 // math_function.hpp uses the __USE_FAST_MATH__ macro to determine whether we
 // get the slow-but-accurate or fast-but-inaccurate versions of functions like
@@ -254,7 +265,17 @@ static inline __device__ void __brkpt(int __c) { __brkpt(); }
 #pragma push_macro("__GNUC__")
 #undef __GNUC__
 #define signbit __ignored_cuda_signbit
+
+// CUDA-9 omits device-side definitions of some math functions if it sees
+// include guard from math.h wrapper from libstdc++. We have to undo the header
+// guard temporarily to get the definitions we need.
+#pragma push_macro("_GLIBCXX_MATH_H")
+#if CUDA_VERSION >= 9000
+#undef _GLIBCXX_MATH_H
+#endif
+
 #include "math_functions.hpp"
+#pragma pop_macro("_GLIBCXX_MATH_H")
 #pragma pop_macro("__GNUC__")
 #pragma pop_macro("signbit")
 

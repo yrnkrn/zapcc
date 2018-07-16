@@ -1112,37 +1112,6 @@ static SDValue performADDCombine(SDNode *N, SelectionDAG &DAG,
   return DAG.getNode(ISD::ADD, DL, ValTy, Add1, Lo);
 }
 
-static SDValue performAssertZextCombine(SDNode *N, SelectionDAG &DAG,
-                                        TargetLowering::DAGCombinerInfo &DCI,
-                                        const MipsSubtarget &Subtarget) {
-  SDValue N0 = N->getOperand(0);
-  EVT NarrowerVT = cast<VTSDNode>(N->getOperand(1))->getVT();
-
-  if (N0.getOpcode() != ISD::TRUNCATE)
-    return SDValue();
-
-  if (N0.getOperand(0).getOpcode() != ISD::AssertZext)
-    return SDValue();
-
-  // fold (AssertZext (trunc (AssertZext x))) -> (trunc (AssertZext x))
-  // if the type of the extension of the innermost AssertZext node is
-  // smaller from that of the outermost node, eg:
-  // (AssertZext:i32 (trunc:i32 (AssertZext:i64 X, i32)), i8)
-  //   -> (trunc:i32 (AssertZext X, i8))
-  SDValue WiderAssertZext = N0.getOperand(0);
-  EVT WiderVT = cast<VTSDNode>(WiderAssertZext->getOperand(1))->getVT();
-
-  if (NarrowerVT.bitsLT(WiderVT)) {
-    SDValue NewAssertZext = DAG.getNode(
-        ISD::AssertZext, SDLoc(N), WiderAssertZext.getValueType(),
-        WiderAssertZext.getOperand(0), DAG.getValueType(NarrowerVT));
-    return DAG.getNode(ISD::TRUNCATE, SDLoc(N), N->getValueType(0),
-                       NewAssertZext);
-  }
-
-  return SDValue();
-}
-
 static SDValue performSHLCombine(SDNode *N, SelectionDAG &DAG,
                                  TargetLowering::DAGCombinerInfo &DCI,
                                  const MipsSubtarget &Subtarget) {
@@ -1215,8 +1184,6 @@ SDValue  MipsTargetLowering::PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI)
     return performORCombine(N, DAG, DCI, Subtarget);
   case ISD::ADD:
     return performADDCombine(N, DAG, DCI, Subtarget);
-  case ISD::AssertZext:
-    return performAssertZextCombine(N, DAG, DCI, Subtarget);
   case ISD::SHL:
     return performSHLCombine(N, DAG, DCI, Subtarget);
   case ISD::SUB:
@@ -3025,16 +2992,6 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   if (IsTailCall)
     ++NumTailCalls;
 
-  // Chain is the output chain of the last Load/Store or CopyToReg node.
-  // ByValChain is the output chain of the last Memcpy node created for copying
-  // byval arguments to the stack.
-  unsigned StackAlignment = TFL->getStackAlignment();
-  NextStackOffset = alignTo(NextStackOffset, StackAlignment);
-  SDValue NextStackOffsetVal = DAG.getIntPtrConstant(NextStackOffset, DL, true);
-
-  if (!IsTailCall)
-    Chain = DAG.getCALLSEQ_START(Chain, NextStackOffset, 0, DL);
-
   SDValue StackPtr =
       DAG.getCopyFromReg(Chain, DL, ABI.IsN64() ? Mips::SP_64 : Mips::SP,
                          getPointerTy(DAG.getDataLayout()));
@@ -3063,7 +3020,7 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
       assert(ByValIdx < CCInfo.getInRegsParamsCount());
       assert(!IsTailCall &&
              "Do not tail-call optimize if there is a byval argument.");
-      passByValArg(Chain, DL, RegsToPass, MemOpChains, StackPtr, MFI, DAG, Arg,
+      Chain = passByValArg(Chain, DL, RegsToPass, MemOpChains, StackPtr, MFI, DAG, Arg,
                    FirstByValReg, LastByValReg, Flags, Subtarget.isLittle(),
                    VA);
       CCInfo.nextInRegsParam();
@@ -3154,6 +3111,16 @@ MipsTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   SDValue CalleeLo;
   EVT Ty = Callee.getValueType();
   bool GlobalOrExternal = false, IsCallReloc = false;
+
+  // Chain is the output chain of the last Load/Store or CopyToReg node.
+  // ByValChain is the output chain of the last Memcpy node created for copying
+  // byval arguments to the stack.
+  unsigned StackAlignment = TFL->getStackAlignment();
+  NextStackOffset = alignTo(NextStackOffset, StackAlignment);
+  SDValue NextStackOffsetVal = DAG.getIntPtrConstant(NextStackOffset, DL, true);
+
+  if (!IsTailCall)
+    Chain = DAG.getCALLSEQ_START(Chain, NextStackOffset, 0, DL);
 
   // The long-calls feature is ignored in case of PIC.
   // While we do not support -mshared / -mno-shared properly,
@@ -4128,7 +4095,7 @@ void MipsTargetLowering::copyByValRegs(
 }
 
 // Copy byVal arg to registers and stack.
-void MipsTargetLowering::passByValArg(
+SDValue MipsTargetLowering::passByValArg(
     SDValue Chain, const SDLoc &DL,
     std::deque<std::pair<unsigned, SDValue>> &RegsToPass,
     SmallVectorImpl<SDValue> &MemOpChains, SDValue StackPtr,
@@ -4161,7 +4128,7 @@ void MipsTargetLowering::passByValArg(
 
     // Return if the struct has been fully copied.
     if (ByValSizeInBytes == OffsetInBytes)
-      return;
+      return Chain;
 
     // Copy the remainder of the byval argument with sub-word loads and shifts.
     if (LeftoverBytes) {
@@ -4206,7 +4173,7 @@ void MipsTargetLowering::passByValArg(
 
       unsigned ArgReg = ArgRegs[FirstReg + I];
       RegsToPass.push_back(std::make_pair(ArgReg, Val));
-      return;
+      return Chain;
     }
   }
 
@@ -4216,12 +4183,13 @@ void MipsTargetLowering::passByValArg(
                             DAG.getConstant(OffsetInBytes, DL, PtrTy));
   SDValue Dst = DAG.getNode(ISD::ADD, DL, PtrTy, StackPtr,
                             DAG.getIntPtrConstant(VA.getLocMemOffset(), DL));
-  Chain = DAG.getMemcpy(Chain, DL, Dst, Src,
-                        DAG.getConstant(MemCpySize, DL, PtrTy),
-                        Alignment, /*isVolatile=*/false, /*AlwaysInline=*/false,
-                        /*isTailCall=*/false,
-                        MachinePointerInfo(), MachinePointerInfo());
+  Chain = DAG.getMemcpy(
+      Chain, DL, Dst, Src, DAG.getConstant(MemCpySize, DL, PtrTy), Alignment,
+      /*isVolatile=*/false, /*AlwaysInline=*/false,
+      /*isTailCall=*/false, MachinePointerInfo(), MachinePointerInfo());
   MemOpChains.push_back(Chain);
+
+  return Chain;
 }
 
 void MipsTargetLowering::writeVarArgRegs(std::vector<SDValue> &OutChains,

@@ -145,15 +145,21 @@ class DS_1A2D_Off8_RET<string opName,
   let hasPostISelHook = 1;
 }
 
-class DS_1A_RET<string opName, RegisterClass rc = VGPR_32, Operand ofs = offset>
+class DS_1A_RET<string opName, RegisterClass rc = VGPR_32, bit HasTiedOutput = 0, Operand ofs = offset>
 : DS_Pseudo<opName,
   (outs rc:$vdst),
-  (ins VGPR_32:$addr, ofs:$offset, gds:$gds),
+  !if(HasTiedOutput,
+    (ins VGPR_32:$addr, ofs:$offset, gds:$gds, rc:$vdst_in),
+    (ins VGPR_32:$addr, ofs:$offset, gds:$gds)),
   "$vdst, $addr$offset$gds"> {
-
+  let Constraints = !if(HasTiedOutput, "$vdst = $vdst_in", "");
+  let DisableEncoding = !if(HasTiedOutput, "$vdst_in", "");
   let has_data0 = 0;
   let has_data1 = 0;
 }
+
+class DS_1A_RET_Tied<string opName, RegisterClass rc = VGPR_32> :
+  DS_1A_RET<opName, rc, 1>;
 
 class DS_1A_Off8_RET <string opName, RegisterClass rc = VGPR_32>
 : DS_Pseudo<opName,
@@ -450,7 +456,7 @@ def DS_WRITE_SRC2_B32 : DS_1A<"ds_write_src2_b32">;
 def DS_WRITE_SRC2_B64 : DS_1A<"ds_write_src2_b64">;
 
 let Uses = [EXEC], mayLoad = 0, mayStore = 0, isConvergent = 1 in {
-def DS_SWIZZLE_B32 : DS_1A_RET <"ds_swizzle_b32", VGPR_32, SwizzleImm>;
+def DS_SWIZZLE_B32 : DS_1A_RET <"ds_swizzle_b32", VGPR_32, 0, SwizzleImm>;
 }
 
 let mayStore = 0 in {
@@ -468,12 +474,12 @@ def DS_READ2_B64     : DS_1A_Off8_RET<"ds_read2_b64", VReg_128>;
 def DS_READ2ST64_B64 : DS_1A_Off8_RET<"ds_read2st64_b64", VReg_128>;
 
 let SubtargetPredicate = HasD16LoadStore in {
-def DS_READ_U8_D16     : DS_1A_RET<"ds_read_u8_d16">;
-def DS_READ_U8_D16_HI  : DS_1A_RET<"ds_read_u8_d16_hi">;
-def DS_READ_I8_D16     : DS_1A_RET<"ds_read_i8_d16">;
-def DS_READ_I8_D16_HI  : DS_1A_RET<"ds_read_i8_d16_hi">;
-def DS_READ_U16_D16    : DS_1A_RET<"ds_read_u16_d16">;
-def DS_READ_U16_D16_HI : DS_1A_RET<"ds_read_u16_d16_hi">;
+def DS_READ_U8_D16     : DS_1A_RET_Tied<"ds_read_u8_d16">;
+def DS_READ_U8_D16_HI  : DS_1A_RET_Tied<"ds_read_u8_d16_hi">;
+def DS_READ_I8_D16     : DS_1A_RET_Tied<"ds_read_i8_d16">;
+def DS_READ_I8_D16_HI  : DS_1A_RET_Tied<"ds_read_i8_d16_hi">;
+def DS_READ_U16_D16    : DS_1A_RET_Tied<"ds_read_u16_d16">;
+def DS_READ_U16_D16_HI : DS_1A_RET_Tied<"ds_read_u16_d16_hi">;
 }
 
 let SubtargetPredicate = HasDSAddTid in {
@@ -531,70 +537,94 @@ def DS_BPERMUTE_B32 : DS_1A1D_PERMUTE <"ds_bpermute_b32",
 // DS Patterns
 //===----------------------------------------------------------------------===//
 
-let Predicates = [isGCN] in {
-
-def : Pat <
+def : GCNPat <
   (int_amdgcn_ds_swizzle i32:$src, imm:$offset16),
   (DS_SWIZZLE_B32 $src, (as_i16imm $offset16), (i1 0))
 >;
 
-class DSReadPat <DS_Pseudo inst, ValueType vt, PatFrag frag> : Pat <
+class DSReadPat <DS_Pseudo inst, ValueType vt, PatFrag frag> : GCNPat <
   (vt (frag (DS1Addr1Offset i32:$ptr, i32:$offset))),
   (inst $ptr, (as_i16imm $offset), (i1 0))
 >;
 
-def : DSReadPat <DS_READ_I8,  i32, si_sextload_local_i8>;
-def : DSReadPat <DS_READ_U8,  i32, si_az_extload_local_i8>;
-def : DSReadPat <DS_READ_I8,  i16, si_sextload_local_i8>;
-def : DSReadPat <DS_READ_U8,  i16, si_az_extload_local_i8>;
-def : DSReadPat <DS_READ_I16, i32, si_sextload_local_i16>;
-def : DSReadPat <DS_READ_I16, i32, si_sextload_local_i16>;
-def : DSReadPat <DS_READ_U16, i32, si_az_extload_local_i16>;
-def : DSReadPat <DS_READ_U16, i16, si_load_local>;
-def : DSReadPat <DS_READ_B32, i32, si_load_local>;
+multiclass DSReadPat_Hi16 <DS_Pseudo inst, PatFrag frag, ValueType vt = i16> {
+  def : GCNPat <
+    (build_vector vt:$lo, (vt (frag (DS1Addr1Offset i32:$ptr, i32:$offset)))),
+    (v2i16 (inst $ptr, (as_i16imm $offset), (i1 0), $lo))
+  >;
+
+  def : GCNPat <
+    (build_vector f16:$lo, (f16 (bitconvert (vt (frag (DS1Addr1Offset i32:$ptr, i32:$offset)))))),
+    (v2f16 (inst $ptr, (as_i16imm $offset), (i1 0), $lo))
+  >;
+}
+
+def : DSReadPat <DS_READ_I8,  i32, sextloadi8_local_m0>;
+def : DSReadPat <DS_READ_U8,  i32, az_extloadi8_local_m0>;
+def : DSReadPat <DS_READ_I8,  i16, sextloadi8_local_m0>;
+def : DSReadPat <DS_READ_U8,  i16, az_extloadi8_local_m0>;
+def : DSReadPat <DS_READ_I16, i32, sextloadi16_local_m0>;
+def : DSReadPat <DS_READ_I16, i32, sextloadi16_local_m0>;
+def : DSReadPat <DS_READ_U16, i32, az_extloadi16_local_m0>;
+def : DSReadPat <DS_READ_U16, i16, load_local_m0>;
+def : DSReadPat <DS_READ_B32, i32, load_local_m0>;
 
 let AddedComplexity = 100 in {
 
-def : DSReadPat <DS_READ_B64, v2i32, si_load_local_align8>;
+def : DSReadPat <DS_READ_B64, v2i32, load_align8_local_m0>;
 
 } // End AddedComplexity = 100
 
-def : Pat <
-  (v2i32 (si_load_local (DS64Bit4ByteAligned i32:$ptr, i8:$offset0,
-                                                    i8:$offset1))),
+def : GCNPat <
+  (v2i32 (load_local_m0 (DS64Bit4ByteAligned i32:$ptr, i8:$offset0,
+                                                       i8:$offset1))),
   (DS_READ2_B32 $ptr, $offset0, $offset1, (i1 0))
 >;
 
-class DSWritePat <DS_Pseudo inst, ValueType vt, PatFrag frag> : Pat <
+
+let OtherPredicates = [HasD16LoadStore] in {
+let AddedComplexity = 100 in {
+defm : DSReadPat_Hi16<DS_READ_U16_D16_HI, load_local>;
+defm : DSReadPat_Hi16<DS_READ_U8_D16_HI, az_extloadi8_local>;
+defm : DSReadPat_Hi16<DS_READ_I8_D16_HI, sextloadi8_local>;
+}
+}
+
+class DSWritePat <DS_Pseudo inst, ValueType vt, PatFrag frag> : GCNPat <
   (frag vt:$value, (DS1Addr1Offset i32:$ptr, i32:$offset)),
   (inst $ptr, $value, (as_i16imm $offset), (i1 0))
 >;
 
-def : DSWritePat <DS_WRITE_B8, i32, si_truncstore_local_i8>;
-def : DSWritePat <DS_WRITE_B16, i32, si_truncstore_local_i16>;
-def : DSWritePat <DS_WRITE_B8, i16, si_truncstore_local_i8>;
-def : DSWritePat <DS_WRITE_B16, i16, si_store_local>;
-def : DSWritePat <DS_WRITE_B32, i32, si_store_local>;
+def : DSWritePat <DS_WRITE_B8, i32, truncstorei8_local_m0>;
+def : DSWritePat <DS_WRITE_B16, i32, truncstorei16_local_m0>;
+def : DSWritePat <DS_WRITE_B8, i16, truncstorei8_local_m0>;
+def : DSWritePat <DS_WRITE_B16, i16, store_local_m0>;
+def : DSWritePat <DS_WRITE_B32, i32, store_local_m0>;
+
+let OtherPredicates = [HasD16LoadStore] in {
+def : DSWritePat <DS_WRITE_B16_D16_HI, i32, store_local_hi16>;
+def : DSWritePat <DS_WRITE_B8_D16_HI, i32, truncstorei8_local_hi16>;
+}
 
 let AddedComplexity = 100 in {
 
-def : DSWritePat <DS_WRITE_B64, v2i32, si_store_local_align8>;
+def : DSWritePat <DS_WRITE_B64, v2i32, store_align8_local_m0>;
 } // End AddedComplexity = 100
 
-def : Pat <
-  (si_store_local v2i32:$value, (DS64Bit4ByteAligned i32:$ptr, i8:$offset0,
+def : GCNPat <
+  (store_local_m0 v2i32:$value, (DS64Bit4ByteAligned i32:$ptr, i8:$offset0,
                                                                i8:$offset1)),
   (DS_WRITE2_B32 $ptr, (i32 (EXTRACT_SUBREG $value, sub0)),
                        (i32 (EXTRACT_SUBREG $value, sub1)), $offset0, $offset1,
                        (i1 0))
 >;
 
-class DSAtomicRetPat<DS_Pseudo inst, ValueType vt, PatFrag frag> : Pat <
+class DSAtomicRetPat<DS_Pseudo inst, ValueType vt, PatFrag frag> : GCNPat <
   (frag (DS1Addr1Offset i32:$ptr, i32:$offset), vt:$value),
   (inst $ptr, $value, (as_i16imm $offset), (i1 0))
 >;
 
-class DSAtomicCmpXChg<DS_Pseudo inst, ValueType vt, PatFrag frag> : Pat <
+class DSAtomicCmpXChg<DS_Pseudo inst, ValueType vt, PatFrag frag> : GCNPat <
   (frag (DS1Addr1Offset i32:$ptr, i32:$offset), vt:$cmp, vt:$swap),
   (inst $ptr, $cmp, $swap, (as_i16imm $offset), (i1 0))
 >;
@@ -630,8 +660,6 @@ def : DSAtomicRetPat<DS_MIN_RTN_U64, i64, si_atomic_load_umin_local>;
 def : DSAtomicRetPat<DS_MAX_RTN_U64, i64, si_atomic_load_umax_local>;
 
 def : DSAtomicCmpXChg<DS_CMPST_RTN_B64, i64, si_atomic_cmp_swap_64_local>;
-
-} // let Predicates = [isGCN]
 
 //===----------------------------------------------------------------------===//
 // Real instructions

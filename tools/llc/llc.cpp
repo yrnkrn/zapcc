@@ -167,9 +167,9 @@ static cl::opt<RunPassOption, true, cl::parser<std::string>> RunPass(
 
 static int compileModule(char **, LLVMContext &);
 
-static std::unique_ptr<tool_output_file>
-GetOutputStream(const char *TargetName, Triple::OSType OS,
-                const char *ProgName) {
+static std::unique_ptr<ToolOutputFile> GetOutputStream(const char *TargetName,
+                                                       Triple::OSType OS,
+                                                       const char *ProgName) {
   // If we don't yet have an output filename, make one.
   if (OutputFilename.empty()) {
     if (InputFilename == "-")
@@ -225,8 +225,7 @@ GetOutputStream(const char *TargetName, Triple::OSType OS,
   sys::fs::OpenFlags OpenFlags = sys::fs::F_None;
   if (!Binary)
     OpenFlags |= sys::fs::F_Text;
-  auto FDOut = llvm::make_unique<tool_output_file>(OutputFilename, EC,
-                                                   OpenFlags);
+  auto FDOut = llvm::make_unique<ToolOutputFile>(OutputFilename, EC, OpenFlags);
   if (EC) {
     errs() << EC.message() << '\n';
     return nullptr;
@@ -235,20 +234,24 @@ GetOutputStream(const char *TargetName, Triple::OSType OS,
   return FDOut;
 }
 
-static void DiagnosticHandler(const DiagnosticInfo &DI, void *Context) {
-  bool *HasError = static_cast<bool *>(Context);
-  if (DI.getSeverity() == DS_Error)
-    *HasError = true;
+struct LLCDiagnosticHandler : public DiagnosticHandler {
+  bool *HasError;
+  LLCDiagnosticHandler(bool *HasErrorPtr) : HasError(HasErrorPtr) {}
+  bool handleDiagnostics(const DiagnosticInfo &DI) override {
+    if (DI.getSeverity() == DS_Error)
+      *HasError = true;
 
-  if (auto *Remark = dyn_cast<DiagnosticInfoOptimizationBase>(&DI))
-    if (!Remark->isEnabled())
-      return;
+    if (auto *Remark = dyn_cast<DiagnosticInfoOptimizationBase>(&DI))
+      if (!Remark->isEnabled())
+        return true;
 
-  DiagnosticPrinterRawOStream DP(errs());
-  errs() << LLVMContext::getDiagnosticMessagePrefix(DI.getSeverity()) << ": ";
-  DI.print(DP);
-  errs() << "\n";
-}
+    DiagnosticPrinterRawOStream DP(errs());
+    errs() << LLVMContext::getDiagnosticMessagePrefix(DI.getSeverity()) << ": ";
+    DI.print(DP);
+    errs() << "\n";
+    return true;
+  }
+};
 
 static void InlineAsmDiagHandler(const SMDiagnostic &SMD, void *Context,
                                  unsigned LocCookie) {
@@ -308,7 +311,8 @@ int main(int argc, char **argv) {
 
   // Set a diagnostic handler that doesn't exit on the first error
   bool HasError = false;
-  Context.setDiagnosticHandler(DiagnosticHandler, &HasError);
+  Context.setDiagnosticHandler(
+      llvm::make_unique<LLCDiagnosticHandler>(&HasError));
   Context.setInlineAsmDiagnosticHandler(InlineAsmDiagHandler, &HasError);
 
   if (PassRemarksWithHotness)
@@ -317,11 +321,11 @@ int main(int argc, char **argv) {
   if (PassRemarksHotnessThreshold)
     Context.setDiagnosticsHotnessThreshold(PassRemarksHotnessThreshold);
 
-  std::unique_ptr<tool_output_file> YamlFile;
+  std::unique_ptr<ToolOutputFile> YamlFile;
   if (RemarksFilename != "") {
     std::error_code EC;
-    YamlFile = llvm::make_unique<tool_output_file>(RemarksFilename, EC,
-                                                   sys::fs::F_None);
+    YamlFile =
+        llvm::make_unique<ToolOutputFile>(RemarksFilename, EC, sys::fs::F_None);
     if (EC) {
       errs() << EC.message() << '\n';
       return 1;
@@ -465,7 +469,7 @@ static int compileModule(char **argv, LLVMContext &Context) {
     Options.FloatABIType = FloatABIForCalls;
 
   // Figure out where we are going to send the output.
-  std::unique_ptr<tool_output_file> Out =
+  std::unique_ptr<ToolOutputFile> Out =
       GetOutputStream(TheTarget->getName(), TheTriple.getOS(), argv[0]);
   if (!Out) return 1;
 
@@ -564,8 +568,9 @@ static int compileModule(char **argv, LLVMContext &Context) {
 
     PM.run(*M);
 
-    auto HasError = *static_cast<bool *>(Context.getDiagnosticContext());
-    if (HasError)
+    auto HasError =
+        ((const LLCDiagnosticHandler *)(Context.getDiagHandlerPtr()))->HasError;
+    if (*HasError)
       return 1;
 
     // Compare the two outputs and make sure they're the same

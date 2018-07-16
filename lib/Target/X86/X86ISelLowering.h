@@ -346,9 +346,6 @@ namespace llvm {
       ADD, SUB, ADC, SBB, SMUL,
       INC, DEC, OR, XOR, AND,
 
-      // Bit field extract.
-      BEXTR,
-
       // LOW, HI, FLAGS = umul LHS, RHS.
       UMUL,
 
@@ -397,7 +394,6 @@ namespace llvm {
       MOVSHDUP,
       MOVSLDUP,
       MOVLHPS,
-      MOVLHPD,
       MOVHLPS,
       MOVLPS,
       MOVLPD,
@@ -451,8 +447,6 @@ namespace llvm {
       /// SSE4A Extraction and Insertion.
       EXTRQI, INSERTQI,
 
-      // XOP variable/immediate rotations.
-      VPROT, VPROTI,
       // XOP arithmetic/logical shifts.
       VPSHA, VPSHL,
       // XOP signed/unsigned integer comparisons.
@@ -471,6 +465,10 @@ namespace llvm {
 
       // Multiply and Add Packed Integers.
       VPMADDUBSW, VPMADDWD,
+
+      // AVX512IFMA multiply and add.
+      // NOTE: These are different than the instruction and perform
+      // op0 x op1 + op2.
       VPMADD52L, VPMADD52H,
 
       // FMA nodes.
@@ -628,46 +626,6 @@ namespace llvm {
 
   /// Define some predicates that are used for node matching.
   namespace X86 {
-    /// Return true if the specified
-    /// EXTRACT_SUBVECTOR operand specifies a vector extract that is
-    /// suitable for input to VEXTRACTF128, VEXTRACTI128 instructions.
-    bool isVEXTRACT128Index(SDNode *N);
-
-    /// Return true if the specified
-    /// INSERT_SUBVECTOR operand specifies a subvector insert that is
-    /// suitable for input to VINSERTF128, VINSERTI128 instructions.
-    bool isVINSERT128Index(SDNode *N);
-
-    /// Return true if the specified
-    /// EXTRACT_SUBVECTOR operand specifies a vector extract that is
-    /// suitable for input to VEXTRACTF64X4, VEXTRACTI64X4 instructions.
-    bool isVEXTRACT256Index(SDNode *N);
-
-    /// Return true if the specified
-    /// INSERT_SUBVECTOR operand specifies a subvector insert that is
-    /// suitable for input to VINSERTF64X4, VINSERTI64X4 instructions.
-    bool isVINSERT256Index(SDNode *N);
-
-    /// Return the appropriate
-    /// immediate to extract the specified EXTRACT_SUBVECTOR index
-    /// with VEXTRACTF128, VEXTRACTI128 instructions.
-    unsigned getExtractVEXTRACT128Immediate(SDNode *N);
-
-    /// Return the appropriate
-    /// immediate to insert at the specified INSERT_SUBVECTOR index
-    /// with VINSERTF128, VINSERT128 instructions.
-    unsigned getInsertVINSERT128Immediate(SDNode *N);
-
-    /// Return the appropriate
-    /// immediate to extract the specified EXTRACT_SUBVECTOR index
-    /// with VEXTRACTF64X4, VEXTRACTI64x4 instructions.
-    unsigned getExtractVEXTRACT256Immediate(SDNode *N);
-
-    /// Return the appropriate
-    /// immediate to insert at the specified INSERT_SUBVECTOR index
-    /// with VINSERTF64x4, VINSERTI64x4 instructions.
-    unsigned getInsertVINSERT256Immediate(SDNode *N);
-
     /// Returns true if Elt is a constant zero or floating point constant +0.0.
     bool isZeroNode(SDValue Elt);
 
@@ -1040,6 +998,13 @@ namespace llvm {
     bool isExtractSubvectorCheap(EVT ResVT, EVT SrcVT,
                                  unsigned Index) const override;
 
+    bool storeOfVectorConstantIsCheap(EVT MemVT, unsigned NumElem,
+                                      unsigned AddrSpace) const override {
+      // If we can replace more than 2 scalar stores, there will be a reduction
+      // in instructions even after we add a vector constant load.
+      return NumElem > 2;
+    }
+
     /// Intel processors have a unified instruction and data cache
     const char * getClearCacheBuiltinName() const override {
       return nullptr; // nothing to do, move along.
@@ -1224,6 +1189,7 @@ namespace llvm {
     SDValue LowerWin64_i128OP(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerGC_TRANSITION_START(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerGC_TRANSITION_END(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
 
     SDValue
     LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv, bool isVarArg,

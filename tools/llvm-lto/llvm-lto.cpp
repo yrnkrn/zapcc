@@ -235,34 +235,40 @@ static void handleDiagnostics(lto_codegen_diagnostic_severity_t Severity,
 }
 
 static std::string CurrentActivity;
-static void diagnosticHandler(const DiagnosticInfo &DI, void *Context) {
-  raw_ostream &OS = errs();
-  OS << "llvm-lto: ";
-  switch (DI.getSeverity()) {
-  case DS_Error:
-    OS << "error";
-    break;
-  case DS_Warning:
-    OS << "warning";
-    break;
-  case DS_Remark:
-    OS << "remark";
-    break;
-  case DS_Note:
-    OS << "note";
-    break;
+
+namespace {
+  struct LLVMLTODiagnosticHandler : public DiagnosticHandler {
+    bool handleDiagnostics(const DiagnosticInfo &DI) override {
+      raw_ostream &OS = errs();
+      OS << "llvm-lto: ";
+      switch (DI.getSeverity()) {
+      case DS_Error:
+        OS << "error";
+        break;
+      case DS_Warning:
+        OS << "warning";
+        break;
+      case DS_Remark:
+        OS << "remark";
+        break;
+      case DS_Note:
+        OS << "note";
+        break;
+      }
+      if (!CurrentActivity.empty())
+        OS << ' ' << CurrentActivity;
+      OS << ": ";
+  
+      DiagnosticPrinterRawOStream DP(OS);
+      DI.print(DP);
+      OS << '\n';
+  
+      if (DI.getSeverity() == DS_Error)
+        exit(1);
+      return true;
+    }
+  };
   }
-  if (!CurrentActivity.empty())
-    OS << ' ' << CurrentActivity;
-  OS << ": ";
-
-  DiagnosticPrinterRawOStream DP(OS);
-  DI.print(DP);
-  OS << '\n';
-
-  if (DI.getSeverity() == DS_Error)
-    exit(1);
-}
 
 static void error(const Twine &Msg) {
   errs() << "llvm-lto: " << Msg << '\n';
@@ -293,7 +299,8 @@ getLocalLTOModule(StringRef Path, std::unique_ptr<MemoryBuffer> &Buffer,
   Buffer = std::move(BufferOrErr.get());
   CurrentActivity = ("loading file '" + Path + "'").str();
   std::unique_ptr<LLVMContext> Context = llvm::make_unique<LLVMContext>();
-  Context->setDiagnosticHandler(diagnosticHandler, nullptr, true);
+  Context->setDiagnosticHandler(llvm::make_unique<LLVMLTODiagnosticHandler>(),
+                                true);
   ErrorOr<std::unique_ptr<LTOModule>> Ret = LTOModule::createInLocalContext(
       std::move(Context), Buffer->getBufferStart(), Buffer->getBufferSize(),
       Options, Path);
@@ -837,7 +844,8 @@ int main(int argc, char **argv) {
   unsigned BaseArg = 0;
 
   LLVMContext Context;
-  Context.setDiagnosticHandler(diagnosticHandler, nullptr, true);
+  Context.setDiagnosticHandler(llvm::make_unique<LLVMLTODiagnosticHandler>(),
+                               true);
 
   LTOCodeGenerator CodeGen(Context);
 
@@ -928,7 +936,7 @@ int main(int argc, char **argv) {
         error("writing merged module failed.");
     }
 
-    std::list<tool_output_file> OSs;
+    std::list<ToolOutputFile> OSs;
     std::vector<raw_pwrite_stream *> OSPtrs;
     for (unsigned I = 0; I != Parallelism; ++I) {
       std::string PartFilename = OutputFilename;
@@ -945,7 +953,7 @@ int main(int argc, char **argv) {
       // Diagnostic messages should have been printed by the handler.
       error("error compiling the code");
 
-    for (tool_output_file &OS : OSs)
+    for (ToolOutputFile &OS : OSs)
       OS.keep();
   } else {
     if (Parallelism != 1)

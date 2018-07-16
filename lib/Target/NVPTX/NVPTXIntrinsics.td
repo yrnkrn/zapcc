@@ -71,6 +71,38 @@ def INT_BARRIER0_OR : NVPTXInst<(outs Int32Regs:$dst), (ins Int32Regs:$pred),
 def INT_BAR_SYNC : NVPTXInst<(outs), (ins i32imm:$i), "bar.sync \t$i;",
                              [(int_nvvm_bar_sync imm:$i)]>;
 
+def INT_BAR_WARP_SYNC_I : NVPTXInst<(outs), (ins i32imm:$i), "bar.warp.sync \t$i;",
+                             [(int_nvvm_bar_warp_sync imm:$i)]>,
+        Requires<[hasPTX60, hasSM30]>;
+def INT_BAR_WARP_SYNC_R : NVPTXInst<(outs), (ins Int32Regs:$i), "bar.warp.sync \t$i;",
+                             [(int_nvvm_bar_warp_sync Int32Regs:$i)]>,
+        Requires<[hasPTX60, hasSM30]>;
+
+def INT_BARRIER_SYNC_I : NVPTXInst<(outs), (ins i32imm:$i), "barrier.sync \t$i;",
+                                   [(int_nvvm_barrier_sync imm:$i)]>,
+        Requires<[hasPTX60, hasSM30]>;
+def INT_BARRIER_SYNC_R : NVPTXInst<(outs), (ins Int32Regs:$i), "barrier.sync \t$i;",
+                                   [(int_nvvm_barrier_sync Int32Regs:$i)]>,
+        Requires<[hasPTX60, hasSM30]>;
+
+def INT_BARRIER_SYNC_CNT_RR : NVPTXInst<(outs), (ins Int32Regs:$id, Int32Regs:$cnt),
+                 "barrier.sync \t$id, $cnt;",
+                 [(int_nvvm_barrier_sync_cnt Int32Regs:$id, Int32Regs:$cnt)]>,
+        Requires<[hasPTX60, hasSM30]>;
+def INT_BARRIER_SYNC_CNT_RI : NVPTXInst<(outs), (ins Int32Regs:$id, i32imm:$cnt),
+                 "barrier.sync \t$id, $cnt;",
+                 [(int_nvvm_barrier_sync_cnt Int32Regs:$id, imm:$cnt)]>,
+        Requires<[hasPTX60, hasSM30]>;
+def INT_BARRIER_SYNC_CNT_IR : NVPTXInst<(outs), (ins i32imm:$id, Int32Regs:$cnt),
+                 "barrier.sync \t$id, $cnt;",
+                 [(int_nvvm_barrier_sync_cnt imm:$id, Int32Regs:$cnt)]>,
+        Requires<[hasPTX60, hasSM30]>;
+def INT_BARRIER_SYNC_CNT_II : NVPTXInst<(outs), (ins i32imm:$id, i32imm:$cnt),
+                 "barrier.sync \t$id, $cnt;",
+                 [(int_nvvm_barrier_sync_cnt imm:$id, imm:$cnt)]>,
+        Requires<[hasPTX60, hasSM30]>;
+
+
 // shfl.{up,down,bfly,idx}.b32
 multiclass SHFL<NVPTXRegClass regclass, string mode, Intrinsic IntOp> {
   // The last two parameters to shfl can be regs or imms.  ptxas is smart
@@ -111,8 +143,168 @@ defm INT_SHFL_BFLY_F32 : SHFL<Float32Regs, "bfly", int_nvvm_shfl_bfly_f32>;
 defm INT_SHFL_IDX_I32 : SHFL<Int32Regs, "idx", int_nvvm_shfl_idx_i32>;
 defm INT_SHFL_IDX_F32 : SHFL<Float32Regs, "idx", int_nvvm_shfl_idx_f32>;
 
-} // isConvergent = 1
+multiclass SHFL_SYNC<NVPTXRegClass regclass, string mode, Intrinsic IntOp> {
+  // Threadmask and the last two parameters to shfl.sync can be regs or imms.
+  // ptxas is smart enough to inline constant registers, so strictly speaking we
+  // don't need to handle immediates here.  But it's easy enough, and it makes
+  // our ptx more readable.
+  def rrr : NVPTXInst<
+      (outs regclass:$dst),
+      (ins Int32Regs:$threadmask, regclass:$src, Int32Regs:$offset, Int32Regs:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp Int32Regs:$threadmask, regclass:$src,
+                            Int32Regs:$offset, Int32Regs:$mask))]>;
 
+  def rri : NVPTXInst<
+      (outs regclass:$dst),
+      (ins Int32Regs:$threadmask, regclass:$src, Int32Regs:$offset, i32imm:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp Int32Regs:$threadmask, regclass:$src,
+                            Int32Regs:$offset, imm:$mask))]>;
+
+  def rir : NVPTXInst<
+      (outs regclass:$dst),
+      (ins Int32Regs:$threadmask, regclass:$src, i32imm:$offset, Int32Regs:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp Int32Regs:$threadmask, regclass:$src,
+                            imm:$offset, Int32Regs:$mask))]>;
+
+  def rii : NVPTXInst<
+      (outs regclass:$dst),
+      (ins Int32Regs:$threadmask, regclass:$src, i32imm:$offset, i32imm:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp Int32Regs:$threadmask, regclass:$src,
+                            imm:$offset, imm:$mask))]>;
+
+  def irr : NVPTXInst<
+      (outs regclass:$dst),
+      (ins i32imm:$threadmask, regclass:$src, Int32Regs:$offset, Int32Regs:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp imm:$threadmask, regclass:$src,
+                            Int32Regs:$offset, Int32Regs:$mask))]>;
+
+  def iri : NVPTXInst<
+      (outs regclass:$dst),
+      (ins i32imm:$threadmask, regclass:$src, Int32Regs:$offset, i32imm:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp imm:$threadmask, regclass:$src,
+                            Int32Regs:$offset, imm:$mask))]>;
+
+  def iir : NVPTXInst<
+      (outs regclass:$dst),
+      (ins i32imm:$threadmask, regclass:$src, i32imm:$offset, Int32Regs:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp imm:$threadmask, regclass:$src,
+                            imm:$offset, Int32Regs:$mask))]>;
+
+  def iii : NVPTXInst<
+      (outs regclass:$dst),
+      (ins i32imm:$threadmask, regclass:$src, i32imm:$offset, i32imm:$mask),
+      !strconcat("shfl.sync.", mode, ".b32 $dst, $src, $offset, $mask, $threadmask;"),
+      [(set regclass:$dst, (IntOp imm:$threadmask, regclass:$src,
+                            imm:$offset, imm:$mask))]>;
+}
+
+// On sm_70 these don't have to be convergent, so we may eventually want to
+// implement non-convergent variant of this intrinsic.
+defm INT_SHFL_SYNC_DOWN_I32 : SHFL_SYNC<Int32Regs, "down", int_nvvm_shfl_sync_down_i32>;
+defm INT_SHFL_SYNC_DOWN_F32 : SHFL_SYNC<Float32Regs, "down", int_nvvm_shfl_sync_down_f32>;
+defm INT_SHFL_SYNC_UP_I32 : SHFL_SYNC<Int32Regs, "up", int_nvvm_shfl_sync_up_i32>;
+defm INT_SHFL_SYNC_UP_F32 : SHFL_SYNC<Float32Regs, "up", int_nvvm_shfl_sync_up_f32>;
+defm INT_SHFL_SYNC_BFLY_I32 : SHFL_SYNC<Int32Regs, "bfly", int_nvvm_shfl_sync_bfly_i32>;
+defm INT_SHFL_SYNC_BFLY_F32 : SHFL_SYNC<Float32Regs, "bfly", int_nvvm_shfl_sync_bfly_f32>;
+defm INT_SHFL_SYNC_IDX_I32 : SHFL_SYNC<Int32Regs, "idx", int_nvvm_shfl_sync_idx_i32>;
+defm INT_SHFL_SYNC_IDX_F32 : SHFL_SYNC<Float32Regs, "idx", int_nvvm_shfl_sync_idx_f32>;
+
+
+// vote.{all,any,uni,ballot}
+multiclass VOTE<NVPTXRegClass regclass, string mode, Intrinsic IntOp> {
+  def : NVPTXInst<(outs regclass:$dest), (ins Int1Regs:$pred),
+              "vote." # mode # " \t$dest, $pred;",
+              [(set regclass:$dest, (IntOp Int1Regs:$pred))]>,
+        Requires<[hasPTX60, hasSM30]>;
+}
+
+defm VOTE_ALL : VOTE<Int1Regs, "all.pred", int_nvvm_vote_all>;
+defm VOTE_ANY : VOTE<Int1Regs, "any.pred", int_nvvm_vote_any>;
+defm VOTE_UNI : VOTE<Int1Regs, "uni.pred", int_nvvm_vote_uni>;
+defm VOTE_BALLOT : VOTE<Int32Regs, "ballot.b32", int_nvvm_vote_ballot>;
+
+// vote.sync.{all,any,uni,ballot}
+multiclass VOTE_SYNC<NVPTXRegClass regclass, string mode, Intrinsic IntOp> {
+  def i : NVPTXInst<(outs regclass:$dest), (ins i32imm:$mask, Int1Regs:$pred),
+              "vote.sync." # mode # " \t$dest, $pred, $mask;",
+              [(set regclass:$dest, (IntOp imm:$mask, Int1Regs:$pred))]>,
+          Requires<[hasPTX60, hasSM30]>;
+  def r : NVPTXInst<(outs regclass:$dest), (ins Int32Regs:$mask, Int1Regs:$pred),
+              "vote.sync." # mode #" \t$dest, $pred, $mask;",
+              [(set regclass:$dest, (IntOp Int32Regs:$mask, Int1Regs:$pred))]>,
+          Requires<[hasPTX60, hasSM30]>;
+}
+
+defm VOTE_SYNC_ALL : VOTE_SYNC<Int1Regs, "all.pred", int_nvvm_vote_all_sync>;
+defm VOTE_SYNC_ANY : VOTE_SYNC<Int1Regs, "any.pred", int_nvvm_vote_any_sync>;
+defm VOTE_SYNC_UNI : VOTE_SYNC<Int1Regs, "uni.pred", int_nvvm_vote_uni_sync>;
+defm VOTE_SYNC_BALLOT : VOTE_SYNC<Int32Regs, "ballot.b32", int_nvvm_vote_ballot_sync>;
+
+multiclass MATCH_ANY_SYNC<NVPTXRegClass regclass, string ptxtype, Intrinsic IntOp,
+                          Operand ImmOp> {
+  def ii : NVPTXInst<(outs regclass:$dest), (ins i32imm:$mask, ImmOp:$value),
+              "match.any.sync." # ptxtype # " \t$dest, $value, $mask;",
+              [(set regclass:$dest, (IntOp imm:$mask, imm:$value))]>,
+           Requires<[hasPTX60, hasSM70]>;
+  def ir : NVPTXInst<(outs regclass:$dest), (ins Int32Regs:$mask, ImmOp:$value),
+              "match.any.sync." # ptxtype # " \t$dest, $value, $mask;",
+              [(set regclass:$dest, (IntOp Int32Regs:$mask, imm:$value))]>,
+           Requires<[hasPTX60, hasSM70]>;
+  def ri : NVPTXInst<(outs regclass:$dest), (ins i32imm:$mask, regclass:$value),
+              "match.any.sync." # ptxtype # " \t$dest, $value, $mask;",
+              [(set regclass:$dest, (IntOp imm:$mask, regclass:$value))]>,
+           Requires<[hasPTX60, hasSM70]>;
+  def rr : NVPTXInst<(outs regclass:$dest), (ins Int32Regs:$mask, regclass:$value),
+              "match.any.sync." # ptxtype # " \t$dest, $value, $mask;",
+              [(set regclass:$dest, (IntOp Int32Regs:$mask, regclass:$value))]>,
+           Requires<[hasPTX60, hasSM70]>;
+}
+
+defm MATCH_ANY_SYNC_32 : MATCH_ANY_SYNC<Int32Regs, "b32", int_nvvm_match_any_sync_i32,
+                                        i32imm>;
+defm MATCH_ANY_SYNC_64 : MATCH_ANY_SYNC<Int64Regs, "b64", int_nvvm_match_any_sync_i64,
+                                        i64imm>;
+
+multiclass MATCH_ALLP_SYNC<NVPTXRegClass regclass, string ptxtype, Intrinsic IntOp,
+                          Operand ImmOp> {
+  def ii : NVPTXInst<(outs regclass:$dest, Int1Regs:$pred),
+                     (ins i32imm:$mask, ImmOp:$value),
+              "match.all.sync." # ptxtype # " \t$dest|$pred, $value, $mask;",
+              // If would be nice if tablegen could match multiple return values,
+              // but it does not seem to be the case. Thus we have an empty pattern and
+              // lower intrinsic to instruction manually.
+              // [(set regclass:$dest, Int1Regs:$pred, (IntOp imm:$value, imm:$mask))]>,
+              []>,
+           Requires<[hasPTX60, hasSM70]>;
+  def ir : NVPTXInst<(outs regclass:$dest, Int1Regs:$pred),
+                     (ins Int32Regs:$mask, ImmOp:$value),
+              "match.all.sync." # ptxtype # " \t$dest|$pred, $value, $mask;",
+              []>,
+           Requires<[hasPTX60, hasSM70]>;
+  def ri : NVPTXInst<(outs regclass:$dest, Int1Regs:$pred),
+                     (ins i32imm:$mask, regclass:$value),
+              "match.all.sync." # ptxtype # " \t$dest|$pred, $value, $mask;",
+              []>,
+           Requires<[hasPTX60, hasSM70]>;
+  def rr : NVPTXInst<(outs regclass:$dest, Int1Regs:$pred),
+                     (ins Int32Regs:$mask, regclass:$value),
+              "match.all.sync." # ptxtype # " \t$dest|$pred, $value, $mask;",
+              []>,
+           Requires<[hasPTX60, hasSM70]>;
+}
+defm MATCH_ALLP_SYNC_32 : MATCH_ALLP_SYNC<Int32Regs, "b32", int_nvvm_match_all_sync_i32p,
+                                         i32imm>;
+defm MATCH_ALLP_SYNC_64 : MATCH_ALLP_SYNC<Int64Regs, "b64", int_nvvm_match_all_sync_i64p,
+                                         i64imm>;
+
+} // isConvergent = 1
 
 //-----------------------------------
 // Explicit Memory Fence Functions

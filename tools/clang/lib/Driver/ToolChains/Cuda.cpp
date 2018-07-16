@@ -438,7 +438,7 @@ void NVPTX::OpenMPLinker::ConstructJob(Compilation &C, const JobAction &JA,
     if (!II.isFilename())
       continue;
 
-    SmallString<256> Name = llvm::sys::path::filename(II.getFilename());
+    SmallString<256> Name(II.getFilename());
     llvm::sys::path::replace_extension(Name, "cubin");
 
     const char *CubinF =
@@ -492,14 +492,18 @@ void CudaToolChain::addClangTargetOptions(
     if (DriverArgs.hasFlag(options::OPT_fcuda_approx_transcendentals,
                            options::OPT_fno_cuda_approx_transcendentals, false))
       CC1Args.push_back("-fcuda-approx-transcendentals");
-
-    if (DriverArgs.hasArg(options::OPT_nocudalib))
-      return;
   }
+
+  if (DriverArgs.hasArg(options::OPT_nocudalib))
+    return;
 
   std::string LibDeviceFile = CudaInstallation.getLibDeviceFile(GpuArch);
 
   if (LibDeviceFile.empty()) {
+    if (DeviceOffloadingKind == Action::OFK_OpenMP &&
+        DriverArgs.hasArg(options::OPT_S))
+      return;
+
     getDriver().Diag(diag::err_drv_no_cuda_libdevice) << GpuArch;
     return;
   }
@@ -507,11 +511,17 @@ void CudaToolChain::addClangTargetOptions(
   CC1Args.push_back("-mlink-cuda-bitcode");
   CC1Args.push_back(DriverArgs.MakeArgString(LibDeviceFile));
 
-  // Libdevice in CUDA-7.0 requires PTX version that's more recent
-  // than LLVM defaults to. Use PTX4.2 which is the PTX version that
-  // came with CUDA-7.0.
-  CC1Args.push_back("-target-feature");
-  CC1Args.push_back("+ptx42");
+  if (CudaInstallation.version() >= CudaVersion::CUDA_90) {
+    // CUDA-9 uses new instructions that are only available in PTX6.0
+    CC1Args.push_back("-target-feature");
+    CC1Args.push_back("+ptx60");
+  } else {
+    // Libdevice in CUDA-7.0 requires PTX version that's more recent
+    // than LLVM defaults to. Use PTX4.2 which is the PTX version that
+    // came with CUDA-7.0.
+    CC1Args.push_back("-target-feature");
+    CC1Args.push_back("+ptx42");
+  }
 }
 
 void CudaToolChain::AddCudaIncludeArgs(const ArgList &DriverArgs,

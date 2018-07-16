@@ -35,7 +35,9 @@
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/ToolOutputFile.h"
+
 #include <functional>
+#include <map>
 #include <system_error>
 
 using namespace llvm;
@@ -350,8 +352,22 @@ std::unique_ptr<CoverageMapping> CodeCoverageTool::load() {
   }
   auto Coverage = std::move(CoverageOrErr.get());
   unsigned Mismatched = Coverage->getMismatchedCount();
-  if (Mismatched)
+  if (Mismatched) {
     warning(utostr(Mismatched) + " functions have mismatched data");
+
+    if (ViewOpts.Debug) {
+      for (const auto &HashMismatch : Coverage->getHashMismatches())
+        errs() << "hash-mismatch: "
+               << "No profile record found for '" << HashMismatch.first << "'"
+               << " with hash = 0x" << utohexstr(HashMismatch.second) << "\n";
+
+      for (const auto &CounterMismatch : Coverage->getCounterMismatches())
+        errs() << "counter-mismatch: "
+               << "Coverage mapping for " << CounterMismatch.first
+               << " only has " << CounterMismatch.second
+               << " valid counter expressions\n";
+    }
+  }
 
   remapPathNames(*Coverage);
 
@@ -432,7 +448,7 @@ void CodeCoverageTool::demangleSymbols(const CoverageMapping &Coverage) {
     error(InputPath, EC.message());
     return;
   }
-  tool_output_file InputTOF{InputPath, InputFD};
+  ToolOutputFile InputTOF{InputPath, InputFD};
 
   unsigned NumSymbols = 0;
   for (const auto &Function : Coverage.getCoveredFunctions()) {
@@ -450,7 +466,7 @@ void CodeCoverageTool::demangleSymbols(const CoverageMapping &Coverage) {
     error(OutputPath, EC.message());
     return;
   }
-  tool_output_file OutputTOF{OutputPath, OutputFD};
+  ToolOutputFile OutputTOF{OutputPath, OutputFD};
   OutputTOF.os().close();
 
   // Invoke the demangler.
@@ -458,10 +474,7 @@ void CodeCoverageTool::demangleSymbols(const CoverageMapping &Coverage) {
   for (const std::string &Arg : ViewOpts.DemanglerOpts)
     ArgsV.push_back(Arg.c_str());
   ArgsV.push_back(nullptr);
-  StringRef InputPathRef = InputPath.str();
-  StringRef OutputPathRef = OutputPath.str();
-  StringRef StderrRef;
-  const StringRef *Redirects[] = {&InputPathRef, &OutputPathRef, &StderrRef};
+  Optional<StringRef> Redirects[] = {InputPath.str(), OutputPath.str(), {""}};
   std::string ErrMsg;
   int RC = sys::ExecuteAndWait(ViewOpts.DemanglerOpts[0], ArgsV.data(),
                                /*env=*/nullptr, Redirects, /*secondsToWait=*/0,
@@ -515,7 +528,8 @@ void CodeCoverageTool::writeSourceFileView(StringRef SourceFile,
   auto OS = std::move(OSOrErr.get());
 
   View->print(*OS.get(), /*Wholefile=*/true,
-              /*ShowSourceName=*/ShowFilenames);
+              /*ShowSourceName=*/ShowFilenames,
+              /*ShowTitle=*/ViewOpts.hasOutputDirectory());
   Printer->closeViewFile(std::move(OS));
 }
 
@@ -834,37 +848,6 @@ int CodeCoverageTool::show(int argc, const char **argv,
 
   auto Printer = CoveragePrinter::create(ViewOpts);
 
-  if (!Filters.empty()) {
-    auto OSOrErr = Printer->createViewFile("functions", /*InToplevel=*/true);
-    if (Error E = OSOrErr.takeError()) {
-      error("Could not create view file!", toString(std::move(E)));
-      return 1;
-    }
-    auto OS = std::move(OSOrErr.get());
-
-    // Show functions.
-    for (const auto &Function : Coverage->getCoveredFunctions()) {
-      if (!Filters.matches(Function))
-        continue;
-
-      auto mainView = createFunctionView(Function, *Coverage);
-      if (!mainView) {
-        warning("Could not read coverage for '" + Function.Name + "'.");
-        continue;
-      }
-
-      mainView->print(*OS.get(), /*WholeFile=*/false, /*ShowSourceName=*/true);
-    }
-
-    Printer->closeViewFile(std::move(OS));
-    return 0;
-  }
-
-  // Show files
-  bool ShowFilenames =
-      (SourceFiles.size() != 1) || ViewOpts.hasOutputDirectory() ||
-      (ViewOpts.Format == CoverageViewOptions::OutputFormat::HTML);
-
   if (SourceFiles.empty())
     // Get the source files from the function coverage mapping.
     for (StringRef Filename : Coverage->getUniqueSourceFiles())
@@ -872,11 +855,54 @@ int CodeCoverageTool::show(int argc, const char **argv,
 
   // Create an index out of the source files.
   if (ViewOpts.hasOutputDirectory()) {
-    if (Error E = Printer->createIndexFile(SourceFiles, *Coverage)) {
+    if (Error E = Printer->createIndexFile(SourceFiles, *Coverage, Filters)) {
       error("Could not create index file!", toString(std::move(E)));
       return 1;
     }
   }
+
+  if (!Filters.empty()) {
+    // Build the map of filenames to functions.
+    std::map<llvm::StringRef, std::vector<const FunctionRecord *>>
+        FilenameFunctionMap;
+    for (const auto &SourceFile : SourceFiles)
+      for (const auto &Function : Coverage->getCoveredFunctions(SourceFile))
+        if (Filters.matches(*Coverage.get(), Function))
+          FilenameFunctionMap[SourceFile].push_back(&Function);
+
+    // Only print filter matching functions for each file.
+    for (const auto &FileFunc : FilenameFunctionMap) {
+      StringRef File = FileFunc.first;
+      const auto &Functions = FileFunc.second;
+
+      auto OSOrErr = Printer->createViewFile(File, /*InToplevel=*/false);
+      if (Error E = OSOrErr.takeError()) {
+        error("Could not create view file!", toString(std::move(E)));
+        return 1;
+      }
+      auto OS = std::move(OSOrErr.get());
+
+      bool ShowTitle = ViewOpts.hasOutputDirectory();
+      for (const auto *Function : Functions) {
+        auto FunctionView = createFunctionView(*Function, *Coverage);
+        if (!FunctionView) {
+          warning("Could not read coverage for '" + Function->Name + "'.");
+          continue;
+        }
+        FunctionView->print(*OS.get(), /*WholeFile=*/false,
+                            /*ShowSourceName=*/true, ShowTitle);
+        ShowTitle = false;
+      }
+
+      Printer->closeViewFile(std::move(OS));
+    }
+    return 0;
+  }
+
+  // Show files
+  bool ShowFilenames =
+      (SourceFiles.size() != 1) || ViewOpts.hasOutputDirectory() ||
+      (ViewOpts.Format == CoverageViewOptions::OutputFormat::HTML);
 
   // If NumThreads is not specified, auto-detect a good default.
   if (NumThreads == 0)
@@ -920,10 +946,17 @@ int CodeCoverageTool::report(int argc, const char **argv,
     return 1;
 
   CoverageReport Report(ViewOpts, *Coverage.get());
-  if (!ShowFunctionSummaries)
+  if (!ShowFunctionSummaries) {
     Report.renderFileReports(llvm::outs());
-  else
+  } else {
+    if (SourceFiles.empty()) {
+      error("Source files must be specified when -show-functions=true is "
+            "specified");
+      return 1;
+    }
+
     Report.renderFunctionReports(SourceFiles, DC, llvm::outs());
+  }
   return 0;
 }
 

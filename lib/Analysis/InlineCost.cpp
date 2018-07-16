@@ -82,7 +82,7 @@ static cl::opt<int> HotCallSiteRelFreq(
              "entry frequency, for a callsite to be hot in the absence of "
              "profile information."));
 
-static cl::opt<bool> ComputeFullInlineCost(
+static cl::opt<bool> OptComputeFullInlineCost(
     "inline-cost-full", cl::Hidden, cl::init(false),
     cl::desc("Compute the full inline cost of a call site even when the cost "
              "exceeds the threshold."));
@@ -124,6 +124,7 @@ class CallAnalyzer : public InstVisitor<CallAnalyzer, bool> {
 
   int Threshold;
   int Cost;
+  bool ComputeFullInlineCost;
 
   bool IsCallerRecursive;
   bool IsRecursiveCall;
@@ -171,6 +172,7 @@ class CallAnalyzer : public InstVisitor<CallAnalyzer, bool> {
   void accumulateSROACost(DenseMap<Value *, int>::iterator CostIt,
                           int InstructionCost);
   bool isGEPFree(GetElementPtrInst &GEP);
+  bool canFoldInboundsGEP(GetElementPtrInst &I);
   bool accumulateGEPOffset(GEPOperator &GEP, APInt &Offset);
   bool simplifyCallSite(Function *F, CallSite CS);
   template <typename Callable>
@@ -240,6 +242,7 @@ class CallAnalyzer : public InstVisitor<CallAnalyzer, bool> {
   bool visitCallSite(CallSite CS);
   bool visitReturnInst(ReturnInst &RI);
   bool visitBranchInst(BranchInst &BI);
+  bool visitSelectInst(SelectInst &SI);
   bool visitSwitchInst(SwitchInst &SI);
   bool visitIndirectBrInst(IndirectBrInst &IBI);
   bool visitResumeInst(ResumeInst &RI);
@@ -256,7 +259,9 @@ public:
       : TTI(TTI), GetAssumptionCache(GetAssumptionCache), GetBFI(GetBFI),
         PSI(PSI), F(Callee), DL(F.getParent()->getDataLayout()), ORE(ORE),
         CandidateCS(CSArg), Params(Params), Threshold(Params.DefaultThreshold),
-        Cost(0), IsCallerRecursive(false), IsRecursiveCall(false),
+        Cost(0), ComputeFullInlineCost(OptComputeFullInlineCost ||
+                                       Params.ComputeFullInlineCost || ORE),
+        IsCallerRecursive(false), IsRecursiveCall(false),
         ExposesReturnsTwice(false), HasDynamicAlloca(false),
         ContainsNoDuplicateCall(false), HasReturn(false), HasIndirectBr(false),
         HasFrameEscape(false), AllocatedSize(0), NumInstructions(0),
@@ -427,39 +432,33 @@ bool CallAnalyzer::visitPHI(PHINode &I) {
   return true;
 }
 
+/// \brief Check we can fold GEPs of constant-offset call site argument pointers.
+/// This requires target data and inbounds GEPs.
+///
+/// \return true if the specified GEP can be folded.
+bool CallAnalyzer::canFoldInboundsGEP(GetElementPtrInst &I) {
+  // Check if we have a base + offset for the pointer.
+  std::pair<Value *, APInt> BaseAndOffset =
+      ConstantOffsetPtrs.lookup(I.getPointerOperand());
+  if (!BaseAndOffset.first)
+    return false;
+
+  // Check if the offset of this GEP is constant, and if so accumulate it
+  // into Offset.
+  if (!accumulateGEPOffset(cast<GEPOperator>(I), BaseAndOffset.second))
+    return false;
+
+  // Add the result as a new mapping to Base + Offset.
+  ConstantOffsetPtrs[&I] = BaseAndOffset;
+
+  return true;
+}
+
 bool CallAnalyzer::visitGetElementPtr(GetElementPtrInst &I) {
   Value *SROAArg;
   DenseMap<Value *, int>::iterator CostIt;
   bool SROACandidate =
       lookupSROAArgAndCost(I.getPointerOperand(), SROAArg, CostIt);
-
-  // Try to fold GEPs of constant-offset call site argument pointers. This
-  // requires target data and inbounds GEPs.
-  if (I.isInBounds()) {
-    // Check if we have a base + offset for the pointer.
-    Value *Ptr = I.getPointerOperand();
-    std::pair<Value *, APInt> BaseAndOffset = ConstantOffsetPtrs.lookup(Ptr);
-    if (BaseAndOffset.first) {
-      // Check if the offset of this GEP is constant, and if so accumulate it
-      // into Offset.
-      if (!accumulateGEPOffset(cast<GEPOperator>(I), BaseAndOffset.second)) {
-        // Non-constant GEPs aren't folded, and disable SROA.
-        if (SROACandidate)
-          disableSROA(CostIt);
-        return isGEPFree(I);
-      }
-
-      // Add the result as a new mapping to Base + Offset.
-      ConstantOffsetPtrs[&I] = BaseAndOffset;
-
-      // Also handle SROA candidates here, we already know that the GEP is
-      // all-constant indexed.
-      if (SROACandidate)
-        SROAArgValues[&I] = SROAArg;
-
-      return true;
-    }
-  }
 
   // Lambda to check whether a GEP's indices are all constant.
   auto IsGEPOffsetConstant = [&](GetElementPtrInst &GEP) {
@@ -469,7 +468,7 @@ bool CallAnalyzer::visitGetElementPtr(GetElementPtrInst &I) {
     return true;
   };
 
-  if (IsGEPOffsetConstant(I)) {
+  if ((I.isInBounds() && canFoldInboundsGEP(I)) || IsGEPOffsetConstant(I)) {
     if (SROACandidate)
       SROAArgValues[&I] = SROAArg;
 
@@ -1174,6 +1173,87 @@ bool CallAnalyzer::visitBranchInst(BranchInst &BI) {
              SimplifiedValues.lookup(BI.getCondition()));
 }
 
+bool CallAnalyzer::visitSelectInst(SelectInst &SI) {
+  bool CheckSROA = SI.getType()->isPointerTy();
+  Value *TrueVal = SI.getTrueValue();
+  Value *FalseVal = SI.getFalseValue();
+
+  Constant *TrueC = dyn_cast<Constant>(TrueVal);
+  if (!TrueC)
+    TrueC = SimplifiedValues.lookup(TrueVal);
+  Constant *FalseC = dyn_cast<Constant>(FalseVal);
+  if (!FalseC)
+    FalseC = SimplifiedValues.lookup(FalseVal);
+  Constant *CondC =
+      dyn_cast_or_null<Constant>(SimplifiedValues.lookup(SI.getCondition()));
+
+  if (!CondC) {
+    // Select C, X, X => X
+    if (TrueC == FalseC && TrueC) {
+      SimplifiedValues[&SI] = TrueC;
+      return true;
+    }
+
+    if (!CheckSROA)
+      return Base::visitSelectInst(SI);
+
+    std::pair<Value *, APInt> TrueBaseAndOffset =
+        ConstantOffsetPtrs.lookup(TrueVal);
+    std::pair<Value *, APInt> FalseBaseAndOffset =
+        ConstantOffsetPtrs.lookup(FalseVal);
+    if (TrueBaseAndOffset == FalseBaseAndOffset && TrueBaseAndOffset.first) {
+      ConstantOffsetPtrs[&SI] = TrueBaseAndOffset;
+
+      Value *SROAArg;
+      DenseMap<Value *, int>::iterator CostIt;
+      if (lookupSROAArgAndCost(TrueVal, SROAArg, CostIt))
+        SROAArgValues[&SI] = SROAArg;
+      return true;
+    }
+
+    return Base::visitSelectInst(SI);
+  }
+
+  // Select condition is a constant.
+  Value *SelectedV = CondC->isAllOnesValue()
+                         ? TrueVal
+                         : (CondC->isNullValue()) ? FalseVal : nullptr;
+  if (!SelectedV) {
+    // Condition is a vector constant that is not all 1s or all 0s.  If all
+    // operands are constants, ConstantExpr::getSelect() can handle the cases
+    // such as select vectors.
+    if (TrueC && FalseC) {
+      if (auto *C = ConstantExpr::getSelect(CondC, TrueC, FalseC)) {
+        SimplifiedValues[&SI] = C;
+        return true;
+      }
+    }
+    return Base::visitSelectInst(SI);
+  }
+
+  // Condition is either all 1s or all 0s. SI can be simplified.
+  if (Constant *SelectedC = dyn_cast<Constant>(SelectedV)) {
+    SimplifiedValues[&SI] = SelectedC;
+    return true;
+  }
+
+  if (!CheckSROA)
+    return true;
+
+  std::pair<Value *, APInt> BaseAndOffset =
+      ConstantOffsetPtrs.lookup(SelectedV);
+  if (BaseAndOffset.first) {
+    ConstantOffsetPtrs[&SI] = BaseAndOffset;
+
+    Value *SROAArg;
+    DenseMap<Value *, int>::iterator CostIt;
+    if (lookupSROAArgAndCost(SelectedV, SROAArg, CostIt))
+      SROAArgValues[&SI] = SROAArg;
+  }
+
+  return true;
+}
+
 bool CallAnalyzer::visitSwitchInst(SwitchInst &SI) {
   // We model unconditional switches as free, see the comments on handling
   // branches.
@@ -1721,9 +1801,6 @@ InlineCost llvm::getInlineCost(
   if (Callee->isInterposable() || Callee->hasFnAttribute(Attribute::NoInline) ||
       CS.isNoInline())
     return llvm::InlineCost::getNever();
-
-  if (ORE)
-    ComputeFullInlineCost = true;
 
   DEBUG(llvm::dbgs() << "      Analyzing call of " << Callee->getName()
                      << "... (caller:" << Caller->getName() << ")\n");

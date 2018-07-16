@@ -183,6 +183,9 @@ static Expected<MachOObjectFile::LoadCommandInfo>
 getLoadCommandInfo(const MachOObjectFile &Obj, const char *Ptr,
                    uint32_t LoadCommandIndex) {
   if (auto CmdOrErr = getStructOrErr<MachO::load_command>(Obj, Ptr)) {
+    if (CmdOrErr->cmdsize + Ptr > Obj.getData().end())
+      return malformedError("load command " + Twine(LoadCommandIndex) +
+                            " extends past end of file");
     if (CmdOrErr->cmdsize < 8)
       return malformedError("load command " + Twine(LoadCommandIndex) +
                             " with size less than 8 bytes");
@@ -800,7 +803,7 @@ static Error checkNoteCommand(const MachOObjectFile &Obj,
                               uint32_t LoadCommandIndex,
                               std::list<MachOElement> &Elements) {
   if (Load.C.cmdsize != sizeof(MachO::note_command))
-    return malformedError("load command " + Twine(LoadCommandIndex) + 
+    return malformedError("load command " + Twine(LoadCommandIndex) +
                           " LC_NOTE has incorrect cmdsize");
   MachO::note_command Nt = getStruct<MachO::note_command>(Obj, Load.Ptr);
   uint64_t FileSize = Obj.getData().size();
@@ -1923,6 +1926,12 @@ bool MachOObjectFile::isSectionBitcode(DataRefImpl Sec) const {
   if (!getSectionName(Sec, SectName))
     return (SegmentName == "__LLVM" && SectName == "__bitcode");
   return false;
+}
+
+bool MachOObjectFile::isSectionStripped(DataRefImpl Sec) const {
+  if (is64Bit())
+    return getSection64(Sec).offset == 0;
+  return getSection(Sec).offset == 0;
 }
 
 relocation_iterator MachOObjectFile::section_rel_begin(DataRefImpl Sec) const {

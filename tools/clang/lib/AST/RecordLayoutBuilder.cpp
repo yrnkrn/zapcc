@@ -2931,8 +2931,7 @@ ASTContext::getASTRecordLayout(const RecordDecl *D) const {
     
   D = D->getDefinition();
   assert(D && "Cannot get layout of forward declarations!");
-  // FIXME: enable assert after http://llvm.org/pr26708 is fixed.
-  //assert(!D->isInvalidDecl() && "Cannot get layout of invalid decl!");
+  assert(!D->isInvalidDecl() && "Cannot get layout of invalid decl!");
   assert(D->isCompleteDefinition() && "Cannot layout type before complete!");
 
   // Look up this layout, if already laid out, return what we have.

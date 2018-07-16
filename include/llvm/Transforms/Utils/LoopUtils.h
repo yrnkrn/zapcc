@@ -16,6 +16,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -438,20 +439,40 @@ bool hoistRegion(DomTreeNode *, AliasAnalysis *, LoopInfo *, DominatorTree *,
                  TargetLibraryInfo *, Loop *, AliasSetTracker *,
                  LoopSafetyInfo *, OptimizationRemarkEmitter *ORE);
 
+/// This function deletes dead loops. The caller of this function needs to
+/// guarantee that the loop is infact dead.
+/// The function requires a bunch or prerequisites to be present:
+///   - The loop needs to be in LCSSA form
+///   - The loop needs to have a Preheader
+///   - A unique dedicated exit block must exist
+///
+/// This also updates the relevant analysis information in \p DT, \p SE, and \p
+/// LI if pointers to those are provided.
+/// It also updates the loop PM if an updater struct is provided.
+
+void deleteDeadLoop(Loop *L, DominatorTree *DT, ScalarEvolution *SE,
+                    LoopInfo *LI);
+
 /// \brief Try to promote memory values to scalars by sinking stores out of
 /// the loop and moving loads to before the loop.  We do this by looping over
 /// the stores in the loop, looking for stores to Must pointers which are
-/// loop invariant. It takes AliasSet, Loop exit blocks vector, loop exit blocks
-/// insertion point vector, PredIteratorCache, LoopInfo, DominatorTree, Loop,
-/// AliasSet information for all instructions of the loop and loop safety
-/// information as arguments. Diagnostics is emitted via \p ORE. It returns
-/// changed status.
-bool promoteLoopAccessesToScalars(AliasSet &, SmallVectorImpl<BasicBlock *> &,
+/// loop invariant. It takes a set of must-alias values, Loop exit blocks
+/// vector, loop exit blocks insertion point vector, PredIteratorCache,
+/// LoopInfo, DominatorTree, Loop, AliasSet information for all instructions
+/// of the loop and loop safety information as arguments.
+/// Diagnostics is emitted via \p ORE. It returns changed status.
+bool promoteLoopAccessesToScalars(const SmallSetVector<Value *, 8> &,
+                                  SmallVectorImpl<BasicBlock *> &,
                                   SmallVectorImpl<Instruction *> &,
                                   PredIteratorCache &, LoopInfo *,
                                   DominatorTree *, const TargetLibraryInfo *,
                                   Loop *, AliasSetTracker *, LoopSafetyInfo *,
                                   OptimizationRemarkEmitter *);
+
+/// Does a BFS from a given node to all of its children inside a given loop.
+/// The returned vector of nodes includes the starting point.
+SmallVector<DomTreeNode *, 16> collectChildrenInLoop(DomTreeNode *N,
+                                                     const Loop *CurLoop);
 
 /// \brief Computes safety information for a loop
 /// checks loop body & header for the possibility of may throw

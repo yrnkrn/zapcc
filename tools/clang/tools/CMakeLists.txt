@@ -12,6 +12,7 @@ add_clang_subdirectory(clang-offload-bundler)
 add_clang_subdirectory(c-index-test)
 
 add_clang_subdirectory(clang-rename)
+add_clang_subdirectory(clang-refactor)
 
 if(CLANG_ENABLE_ARCMT)
   add_clang_subdirectory(arcmt-test)
@@ -20,6 +21,7 @@ endif()
 
 if(CLANG_ENABLE_STATIC_ANALYZER)
   add_clang_subdirectory(clang-check)
+  add_clang_subdirectory(clang-func-mapping)
   add_clang_subdirectory(scan-build)
   add_clang_subdirectory(scan-view)
 endif()

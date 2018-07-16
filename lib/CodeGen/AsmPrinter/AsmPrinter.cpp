@@ -1390,6 +1390,16 @@ bool AsmPrinter::doFinalization(Module &M) {
                                  PtrSize);
   }
 
+  // Emit .note.GNU-split-stack and .note.GNU-no-split-stack sections if
+  // split-stack is used.
+  if (TM.getTargetTriple().isOSBinFormatELF() && MMI->hasSplitStack()) {
+    OutStreamer->SwitchSection(
+        OutContext.getELFSection(".note.GNU-split-stack", ELF::SHT_PROGBITS, 0));
+    if (MMI->hasNosplitStack())
+      OutStreamer->SwitchSection(
+          OutContext.getELFSection(".note.GNU-no-split-stack", ELF::SHT_PROGBITS, 0));
+  }
+
   // If we don't have any trampolines, then we don't require stack memory
   // to be executable. Some targets have a directive to declare this.
   Function *InitTrampolineIntrinsic = M.getFunction("llvm.init.trampoline");
@@ -2793,7 +2803,7 @@ void AsmPrinter::emitXRayTable() {
   MCSection *InstMap = nullptr;
   MCSection *FnSledIndex = nullptr;
   if (MF->getSubtarget().getTargetTriple().isOSBinFormatELF()) {
-    auto Associated = dyn_cast<MCSymbolELF>(PrevSection->getBeginSymbol());
+    auto Associated = dyn_cast<MCSymbolELF>(CurrentFnSym);
     assert(Associated != nullptr);
     auto Flags = ELF::SHF_WRITE | ELF::SHF_ALLOC | ELF::SHF_LINK_ORDER;
     std::string GroupName;

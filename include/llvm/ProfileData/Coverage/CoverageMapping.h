@@ -213,7 +213,11 @@ struct CounterMappingRegion {
 
     /// A SkippedRegion represents a source range with code that was skipped
     /// by a preprocessor or similar means.
-    SkippedRegion
+    SkippedRegion,
+
+    /// A GapRegion is like a CodeRegion, but its count is only set as the
+    /// line execution count when its the only region in the line.
+    GapRegion
   };
 
   Counter Count;
@@ -248,6 +252,13 @@ struct CounterMappingRegion {
               unsigned LineEnd, unsigned ColumnEnd) {
     return CounterMappingRegion(Counter(), FileID, 0, LineStart, ColumnStart,
                                 LineEnd, ColumnEnd, SkippedRegion);
+  }
+
+  static CounterMappingRegion
+  makeGapRegion(Counter Count, unsigned FileID, unsigned LineStart,
+                unsigned ColumnStart, unsigned LineEnd, unsigned ColumnEnd) {
+    return CounterMappingRegion(Count, FileID, 0, LineStart, ColumnStart,
+                                LineEnd, (1U << 31) | ColumnEnd, GapRegion);
   }
 
   inline LineColPair startLoc() const {
@@ -377,19 +388,23 @@ struct CoverageSegment {
   bool HasCount;
   /// Whether this enters a new region or returns to a previous count.
   bool IsRegionEntry;
+  /// Whether this enters a gap region.
+  bool IsGapRegion;
 
   CoverageSegment(unsigned Line, unsigned Col, bool IsRegionEntry)
       : Line(Line), Col(Col), Count(0), HasCount(false),
-        IsRegionEntry(IsRegionEntry) {}
+        IsRegionEntry(IsRegionEntry), IsGapRegion(false) {}
 
   CoverageSegment(unsigned Line, unsigned Col, uint64_t Count,
-                  bool IsRegionEntry)
+                  bool IsRegionEntry, bool IsGapRegion = false)
       : Line(Line), Col(Col), Count(Count), HasCount(true),
-        IsRegionEntry(IsRegionEntry) {}
+        IsRegionEntry(IsRegionEntry), IsGapRegion(IsGapRegion) {}
 
   friend bool operator==(const CoverageSegment &L, const CoverageSegment &R) {
-    return std::tie(L.Line, L.Col, L.Count, L.HasCount, L.IsRegionEntry) ==
-           std::tie(R.Line, R.Col, R.Count, R.HasCount, R.IsRegionEntry);
+    return std::tie(L.Line, L.Col, L.Count, L.HasCount, L.IsRegionEntry,
+                    L.IsGapRegion) == std::tie(R.Line, R.Col, R.Count,
+                                               R.HasCount, R.IsRegionEntry,
+                                               R.IsGapRegion);
   }
 };
 
@@ -493,7 +508,8 @@ public:
 class CoverageMapping {
   StringSet<> FunctionNames;
   std::vector<FunctionRecord> Functions;
-  unsigned MismatchedFunctionCount = 0;
+  std::vector<std::pair<std::string, uint64_t>> FuncHashMismatches;
+  std::vector<std::pair<std::string, uint64_t>> FuncCounterMismatches;
 
   CoverageMapping() = default;
 
@@ -520,7 +536,25 @@ public:
   ///
   /// This is a count of functions whose profile is out of date or otherwise
   /// can't be associated with any coverage information.
-  unsigned getMismatchedCount() { return MismatchedFunctionCount; }
+  unsigned getMismatchedCount() const {
+    return FuncHashMismatches.size() + FuncCounterMismatches.size();
+  }
+
+  /// A hash mismatch occurs when a profile record for a symbol does not have
+  /// the same hash as a coverage mapping record for the same symbol. This
+  /// returns a list of hash mismatches, where each mismatch is a pair of the
+  /// symbol name and its coverage mapping hash.
+  ArrayRef<std::pair<std::string, uint64_t>> getHashMismatches() const {
+    return FuncHashMismatches;
+  }
+
+  /// A counter mismatch occurs when there is an error when evaluating the
+  /// counter expressions in a coverage mapping record. This returns a list of
+  /// counter mismatches, where each mismatch is a pair of the symbol name and
+  /// the number of valid evaluated counter expressions.
+  ArrayRef<std::pair<std::string, uint64_t>> getCounterMismatches() const {
+    return FuncCounterMismatches;
+  }
 
   /// Returns a lexicographically sorted, unique list of files that are
   /// covered.
@@ -660,7 +694,10 @@ enum CovMapVersion {
   // name string pointer to MD5 to support name section compression. Name
   // section is also compressed.
   Version2 = 1,
-  // The current version is Version2
+  // A new interpretation of the columnEnd field is added in order to mark
+  // regions as gap areas.
+  Version3 = 2,
+  // The current version is Version3
   CurrentVersion = INSTR_PROF_COVMAP_VERSION
 };
 

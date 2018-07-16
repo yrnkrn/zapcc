@@ -271,8 +271,6 @@ def X86lock_and  : SDNode<"X86ISD::LAND",  SDTLockBinaryArithWithFlags,
                           [SDNPHasChain, SDNPMayStore, SDNPMayLoad,
                            SDNPMemOperand]>;
 
-def X86bextr  : SDNode<"X86ISD::BEXTR",  SDTIntBinOp>;
-
 def X86mul_imm : SDNode<"X86ISD::MUL_IMM", SDTIntBinOp>;
 
 def X86WinAlloca : SDNode<"X86ISD::WIN_ALLOCA", SDT_X86WIN_ALLOCA,
@@ -592,18 +590,10 @@ def SSECC : Operand<i8> {
   let OperandType = "OPERAND_IMMEDIATE";
 }
 
-def i8immZExt3 : ImmLeaf<i8, [{
-  return Imm >= 0 && Imm < 8;
-}]>;
-
 def AVXCC : Operand<i8> {
   let PrintMethod = "printSSEAVXCC";
   let OperandType = "OPERAND_IMMEDIATE";
 }
-
-def i8immZExt5 : ImmLeaf<i8, [{
-  return Imm >= 0 && Imm < 32;
-}]>;
 
 def AVX512ICC : Operand<i8> {
   let PrintMethod = "printSSEAVXCC";
@@ -803,6 +793,7 @@ def UseSSE41     : Predicate<"Subtarget->hasSSE41() && !Subtarget->hasAVX()">;
 def HasSSE42     : Predicate<"Subtarget->hasSSE42()">;
 def UseSSE42     : Predicate<"Subtarget->hasSSE42() && !Subtarget->hasAVX()">;
 def HasSSE4A     : Predicate<"Subtarget->hasSSE4A()">;
+def NoAVX        : Predicate<"!Subtarget->hasAVX()">;
 def HasAVX       : Predicate<"Subtarget->hasAVX()">;
 def HasAVX2      : Predicate<"Subtarget->hasAVX2()">;
 def HasAVX1Only  : Predicate<"Subtarget->hasAVX() && !Subtarget->hasAVX2()">;
@@ -2439,17 +2430,6 @@ let Predicates = [HasBMI2] in {
               (INSERT_SUBREG (i64 (IMPLICIT_DEF)), GR32:$lz, sub_32bit))>;
 } // HasBMI2
 
-let Predicates = [HasBMI] in {
-  def : Pat<(X86bextr GR32:$src1, GR32:$src2),
-            (BEXTR32rr GR32:$src1, GR32:$src2)>;
-  def : Pat<(X86bextr (loadi32 addr:$src1), GR32:$src2),
-            (BEXTR32rm addr:$src1, GR32:$src2)>;
-  def : Pat<(X86bextr GR64:$src1, GR64:$src2),
-            (BEXTR64rr GR64:$src1, GR64:$src2)>;
-  def : Pat<(X86bextr (loadi64 addr:$src1), GR64:$src2),
-            (BEXTR64rm addr:$src1, GR64:$src2)>;
-} // HasBMI
-
 multiclass bmi_pdep_pext<string mnemonic, RegisterClass RC,
                          X86MemOperand x86memop, Intrinsic Int,
                          PatFrag ld_frag> {
@@ -2651,15 +2631,6 @@ def : InstAlias<"clzero\t{%rax|rax}", (CLZEROr)>, Requires<[In64BitMode]>;
 //===----------------------------------------------------------------------===//
 
 let Predicates = [HasTBM] in {
-  def : Pat<(X86bextr GR32:$src1, (i32 imm:$src2)),
-            (BEXTRI32ri GR32:$src1, imm:$src2)>;
-  def : Pat<(X86bextr (loadi32 addr:$src1), (i32 imm:$src2)),
-            (BEXTRI32mi addr:$src1, imm:$src2)>;
-  def : Pat<(X86bextr GR64:$src1, i64immSExt32:$src2),
-            (BEXTRI64ri GR64:$src1, i64immSExt32:$src2)>;
-  def : Pat<(X86bextr (loadi64 addr:$src1), i64immSExt32:$src2),
-            (BEXTRI64mi addr:$src1, i64immSExt32:$src2)>;
-
   // FIXME: patterns for the load versions are not implemented
   def : Pat<(and GR32:$src, (add GR32:$src, 1)),
             (BLCFILL32rr GR32:$src)>;
@@ -2801,6 +2772,7 @@ def : MnemonicAlias<"pop",   "popq",  "att">, Requires<[In64BitMode]>;
 def : MnemonicAlias<"popf",  "popfw", "att">, Requires<[In16BitMode]>;
 def : MnemonicAlias<"popf",  "popfl", "att">, Requires<[In32BitMode]>;
 def : MnemonicAlias<"popf",  "popfq", "att">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"popf",  "popfq", "intel">, Requires<[In64BitMode]>;
 def : MnemonicAlias<"popfd", "popfl", "att">;
 
 // FIXME: This is wrong for "push reg".  "push %bx" should turn into pushw in
@@ -2812,6 +2784,7 @@ def : MnemonicAlias<"push",   "pushq",  "att">, Requires<[In64BitMode]>;
 def : MnemonicAlias<"pushf",  "pushfw", "att">, Requires<[In16BitMode]>;
 def : MnemonicAlias<"pushf",  "pushfl", "att">, Requires<[In32BitMode]>;
 def : MnemonicAlias<"pushf",  "pushfq", "att">, Requires<[In64BitMode]>;
+def : MnemonicAlias<"pushf",  "pushfq", "intel">, Requires<[In64BitMode]>;
 def : MnemonicAlias<"pushfd", "pushfl", "att">;
 
 def : MnemonicAlias<"popad",  "popal",  "intel">, Requires<[Not64BitMode]>;
@@ -3263,14 +3236,14 @@ defm : ShiftRotateByOneAlias<"ror", "ROR">;
 FIXME */
 
 // test: We accept "testX <reg>, <mem>" and "testX <mem>, <reg>" as synonyms.
-def : InstAlias<"test{b}\t{$val, $mem|$mem, $val}",
-                (TEST8rm  GR8 :$val, i8mem :$mem), 0>;
-def : InstAlias<"test{w}\t{$val, $mem|$mem, $val}",
-                (TEST16rm GR16:$val, i16mem:$mem), 0>;
-def : InstAlias<"test{l}\t{$val, $mem|$mem, $val}",
-                (TEST32rm GR32:$val, i32mem:$mem), 0>;
-def : InstAlias<"test{q}\t{$val, $mem|$mem, $val}",
-                (TEST64rm GR64:$val, i64mem:$mem), 0>;
+def : InstAlias<"test{b}\t{$mem, $val|$val, $mem}",
+                (TEST8mr  i8mem :$mem, GR8 :$val), 0>;
+def : InstAlias<"test{w}\t{$mem, $val|$val, $mem}",
+                (TEST16mr i16mem:$mem, GR16:$val), 0>;
+def : InstAlias<"test{l}\t{$mem, $val|$val, $mem}",
+                (TEST32mr i32mem:$mem, GR32:$val), 0>;
+def : InstAlias<"test{q}\t{$mem, $val|$val, $mem}",
+                (TEST64mr i64mem:$mem, GR64:$val), 0>;
 
 // xchg: We accept "xchgX <reg>, <mem>" and "xchgX <mem>, <reg>" as synonyms.
 def : InstAlias<"xchg{b}\t{$mem, $val|$val, $mem}",

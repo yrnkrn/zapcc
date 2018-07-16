@@ -17,6 +17,7 @@
 #include "HexagonFrameLowering.h"
 #include "HexagonInstrInfo.h"
 #include "HexagonISelLowering.h"
+#include "HexagonRegisterInfo.h"
 #include "HexagonSelectionDAGInfo.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
@@ -75,12 +76,11 @@ public:
 private:
   std::string CPUString;
   HexagonInstrInfo InstrInfo;
+  HexagonRegisterInfo RegInfo;
   HexagonTargetLowering TLInfo;
   HexagonSelectionDAGInfo TSInfo;
   HexagonFrameLowering FrameLowering;
   InstrItineraryData InstrItins;
-
-  void initializeEnvironment();
 
 public:
   HexagonSubtarget(const Triple &TT, StringRef CPU, StringRef FS,
@@ -93,7 +93,7 @@ public:
   }
   const HexagonInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const HexagonRegisterInfo *getRegisterInfo() const override {
-    return &InstrInfo.getRegisterInfo();
+    return &RegInfo;
   }
   const HexagonTargetLowering *getTargetLowering() const override {
     return &TLInfo;

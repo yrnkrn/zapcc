@@ -666,6 +666,12 @@ void DependencyMap::findInType(Type *T) {
     findInQualType(PT->getElementType());
     break;
   }
+  case Type::TypeClass::DependentAddressSpace: {
+    DependentAddressSpaceType *DAST = cast<DependentAddressSpaceType>(T);
+    findInExpr(DAST->getAddrSpaceExpr());
+    findInQualType(DAST->getPointeeType());
+    break;
+  }
   } // switch
   CurrentDependent = LastDependent;
 }

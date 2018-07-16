@@ -28,9 +28,11 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationDiagnosticInfo.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -146,14 +148,18 @@ private:
 /// profile information found in that file.
 class SampleProfileLoader {
 public:
-  SampleProfileLoader(StringRef Name = SampleProfileFile)
-      : DT(nullptr), PDT(nullptr), LI(nullptr), ACT(nullptr), Reader(),
-        Samples(nullptr), Filename(Name), ProfileIsValid(false),
+  SampleProfileLoader(
+      StringRef Name, bool IsThinLTOPreLink,
+      std::function<AssumptionCache &(Function &)> GetAssumptionCache,
+      std::function<TargetTransformInfo &(Function &)> GetTargetTransformInfo)
+      : DT(nullptr), PDT(nullptr), LI(nullptr), GetAC(GetAssumptionCache),
+        GetTTI(GetTargetTransformInfo), Reader(), Samples(nullptr),
+        Filename(Name), ProfileIsValid(false),
+        IsThinLTOPreLink(IsThinLTOPreLink),
         TotalCollectedSamples(0), ORE(nullptr) {}
 
   bool doInitialization(Module &M);
   bool runOnModule(Module &M, ModuleAnalysisManager *AM);
-  void setACT(AssumptionCacheTracker *A) { ACT = A; }
 
   void dump() { Reader->dump(); }
 
@@ -167,6 +173,7 @@ protected:
   std::vector<const FunctionSamples *>
   findIndirectCallFunctionSamples(const Instruction &I) const;
   const FunctionSamples *findFunctionSamples(const Instruction &I) const;
+  bool inlineCallInstruction(Instruction *I);
   bool inlineHotFunctions(Function &F,
                           DenseSet<GlobalValue::GUID> &ImportGUIDs);
   void printEdgeWeight(raw_ostream &OS, Edge E);
@@ -223,7 +230,8 @@ protected:
   std::unique_ptr<PostDomTreeBase<BasicBlock>> PDT;
   std::unique_ptr<LoopInfo> LI;
 
-  AssumptionCacheTracker *ACT;
+  std::function<AssumptionCache &(Function &)> GetAC;
+  std::function<TargetTransformInfo &(Function &)> GetTTI;
 
   /// \brief Predecessors for each basic block in the CFG.
   BlockEdgeMap Predecessors;
@@ -245,6 +253,12 @@ protected:
   /// \brief Flag indicating whether the profile input loaded successfully.
   bool ProfileIsValid;
 
+  /// \brief Flag indicating if the pass is invoked in ThinLTO compile phase.
+  ///
+  /// In this phase, in annotation, we should not promote indirect calls.
+  /// Instead, we will mark GUIDs that needs to be annotated to the function.
+  bool IsThinLTOPreLink;
+
   /// \brief Total number of samples collected in this profile.
   ///
   /// This is the sum of all the samples collected in all the functions executed
@@ -260,8 +274,16 @@ public:
   // Class identification, replacement for typeinfo
   static char ID;
 
-  SampleProfileLoaderLegacyPass(StringRef Name = SampleProfileFile)
-      : ModulePass(ID), SampleLoader(Name) {
+  SampleProfileLoaderLegacyPass(StringRef Name = SampleProfileFile,
+                                bool IsThinLTOPreLink = false)
+      : ModulePass(ID), SampleLoader(Name, IsThinLTOPreLink,
+                                     [&](Function &F) -> AssumptionCache & {
+                                       return ACT->getAssumptionCache(F);
+                                     },
+                                     [&](Function &F) -> TargetTransformInfo & {
+                                       return TTIWP->getTTI(F);
+                                     }),
+        ACT(nullptr), TTIWP(nullptr) {
     initializeSampleProfileLoaderLegacyPassPass(
         *PassRegistry::getPassRegistry());
   }
@@ -276,10 +298,13 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<AssumptionCacheTracker>();
+    AU.addRequired<TargetTransformInfoWrapperPass>();
   }
 
 private:
   SampleProfileLoader SampleLoader;
+  AssumptionCacheTracker *ACT;
+  TargetTransformInfoWrapperPass *TTIWP;
 };
 
 /// Return true if the given callsite is hot wrt to its caller.
@@ -486,10 +511,12 @@ ErrorOr<uint64_t> SampleProfileLoader::getInstWeight(const Instruction &Inst) {
   if (isa<BranchInst>(Inst) || isa<IntrinsicInst>(Inst))
     return std::error_code();
 
-  // If a call/invoke instruction is inlined in profile, but not inlined here,
+  // If a direct call/invoke instruction is inlined in profile
+  // (findCalleeFunctionSamples returns non-empty result), but not inlined here,
   // it means that the inlined callsite has no sample, thus the call
   // instruction should have 0 count.
   if ((isa<CallInst>(Inst) || isa<InvokeInst>(Inst)) &&
+      !ImmutableCallSite(&Inst).isIndirectCall() &&
       findCalleeFunctionSamples(Inst))
     return 0;
 
@@ -660,6 +687,39 @@ SampleProfileLoader::findFunctionSamples(const Instruction &Inst) const {
   return FS;
 }
 
+bool SampleProfileLoader::inlineCallInstruction(Instruction *I) {
+  assert(isa<CallInst>(I) || isa<InvokeInst>(I));
+  CallSite CS(I);
+  Function *CalledFunction = CS.getCalledFunction();
+  assert(CalledFunction);
+  DebugLoc DLoc = I->getDebugLoc();
+  BasicBlock *BB = I->getParent();
+  InlineParams Params = getInlineParams();
+  Params.ComputeFullInlineCost = true;
+  // Checks if there is anything in the reachable portion of the callee at
+  // this callsite that makes this inlining potentially illegal. Need to
+  // set ComputeFullInlineCost, otherwise getInlineCost may return early
+  // when cost exceeds threshold without checking all IRs in the callee.
+  // The acutal cost does not matter because we only checks isNever() to
+  // see if it is legal to inline the callsite.
+  InlineCost Cost = getInlineCost(CS, Params, GetTTI(*CalledFunction), GetAC,
+                                  None, nullptr, nullptr);
+  if (Cost.isNever()) {
+    ORE->emit(OptimizationRemark(DEBUG_TYPE, "Not inline", DLoc, BB)
+              << "incompatible inlining");
+    return false;
+  }
+  InlineFunctionInfo IFI(nullptr, &GetAC);
+  if (InlineFunction(CS, IFI)) {
+    // The call to InlineFunction erases I, so we can't pass it here.
+    ORE->emit(OptimizationRemark(DEBUG_TYPE, "HotInline", DLoc, BB)
+              << "inlined hot callee '" << ore::NV("Callee", CalledFunction)
+              << "' into '" << ore::NV("Caller", BB->getParent()) << "'");
+    return true;
+  }
+  return false;
+}
+
 /// \brief Iteratively inline hot callsites of a function.
 ///
 /// Iteratively traverse all callsites of the function \p F, and find if
@@ -677,8 +737,6 @@ bool SampleProfileLoader::inlineHotFunctions(
     Function &F, DenseSet<GlobalValue::GUID> &ImportGUIDs) {
   DenseSet<Instruction *> PromotedInsns;
   bool Changed = false;
-  std::function<AssumptionCache &(Function &)> GetAssumptionCache = [&](
-      Function &F) -> AssumptionCache & { return ACT->getAssumptionCache(F); };
   while (true) {
     bool LocalChanged = false;
     SmallVector<Instruction *, 10> CIS;
@@ -699,59 +757,61 @@ bool SampleProfileLoader::inlineHotFunctions(
       }
     }
     for (auto I : CIS) {
-      InlineFunctionInfo IFI(nullptr, ACT ? &GetAssumptionCache : nullptr);
       Function *CalledFunction = CallSite(I).getCalledFunction();
       // Do not inline recursive calls.
       if (CalledFunction == &F)
         continue;
-      Instruction *DI = I;
-      if (!CalledFunction && !PromotedInsns.count(I) &&
-          CallSite(I).isIndirectCall())
+      if (CallSite(I).isIndirectCall()) {
+        if (PromotedInsns.count(I))
+          continue;
         for (const auto *FS : findIndirectCallFunctionSamples(*I)) {
+          if (IsThinLTOPreLink) {
+            FS->findImportedFunctions(ImportGUIDs, F.getParent(),
+                                      Samples->getTotalSamples() *
+                                          SampleProfileHotThreshold / 100);
+            continue;
+          }
           auto CalleeFunctionName = FS->getName();
           // If it is a recursive call, we do not inline it as it could bloat
           // the code exponentially. There is way to better handle this, e.g.
           // clone the caller first, and inline the cloned caller if it is
-          // recursive. As llvm does not inline recursive calls, we will simply
-          // ignore it instead of handling it explicitly.
+          // recursive. As llvm does not inline recursive calls, we will
+          // simply ignore it instead of handling it explicitly.
           if (CalleeFunctionName == F.getName())
             continue;
+
           const char *Reason = "Callee function not available";
           auto R = SymbolMap.find(CalleeFunctionName);
-          if (R == SymbolMap.end())
-            continue;
-          CalledFunction = R->getValue();
-          if (CalledFunction && isLegalToPromote(I, CalledFunction, &Reason)) {
-            // The indirect target was promoted and inlined in the profile, as a
-            // result, we do not have profile info for the branch probability.
-            // We set the probability to 80% taken to indicate that the static
-            // call is likely taken.
-            DI = dyn_cast<Instruction>(
-                promoteIndirectCall(I, CalledFunction, 80, 100, false, ORE)
+          if (R != SymbolMap.end() && R->getValue() &&
+              !R->getValue()->isDeclaration() &&
+              R->getValue()->getSubprogram() &&
+              isLegalToPromote(I, R->getValue(), &Reason)) {
+            // The indirect target was promoted and inlined in the profile,
+            // as a result, we do not have profile info for the branch
+            // probability. We set the probability to 80% taken to indicate
+            // that the static call is likely taken.
+            Instruction *DI = dyn_cast<Instruction>(
+                promoteIndirectCall(I, R->getValue(), 80, 100, false, ORE)
                     ->stripPointerCasts());
             PromotedInsns.insert(I);
+            // If profile mismatches, we should not attempt to inline DI.
+            if ((isa<CallInst>(DI) || isa<InvokeInst>(DI)) &&
+                inlineCallInstruction(DI))
+              LocalChanged = true;
           } else {
-            DEBUG(dbgs() << "\nFailed to promote indirect call to "
-                         << CalleeFunctionName << " because " << Reason
-                         << "\n");
-            continue;
+            DEBUG(dbgs()
+                  << "\nFailed to promote indirect call to "
+                  << CalleeFunctionName << " because " << Reason << "\n");
           }
         }
-      if (!CalledFunction || !CalledFunction->getSubprogram()) {
+      } else if (CalledFunction && CalledFunction->getSubprogram() &&
+                 !CalledFunction->isDeclaration()) {
+        if (inlineCallInstruction(I))
+          LocalChanged = true;
+      } else if (IsThinLTOPreLink) {
         findCalleeFunctionSamples(*I)->findImportedFunctions(
             ImportGUIDs, F.getParent(),
             Samples->getTotalSamples() * SampleProfileHotThreshold / 100);
-        continue;
-      }
-      DebugLoc DLoc = I->getDebugLoc();
-      BasicBlock *BB = I->getParent();
-      if (InlineFunction(CallSite(DI), IFI)) {
-        LocalChanged = true;
-        // The call to InlineFunction erases DI, so we can't pass it here.
-        ORE->emit(OptimizationRemark(DEBUG_TYPE, "HotInline", DLoc, BB)
-                  << "inlined hot callee '"
-                  << ore::NV("Callee", CalledFunction) << "' into '"
-                  << ore::NV("Caller", &F) << "'");
       }
     }
     if (LocalChanged) {
@@ -1414,6 +1474,7 @@ char SampleProfileLoaderLegacyPass::ID = 0;
 INITIALIZE_PASS_BEGIN(SampleProfileLoaderLegacyPass, "sample-profile",
                       "Sample Profile loader", false, false)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
+INITIALIZE_PASS_DEPENDENCY(TargetTransformInfoWrapperPass)
 INITIALIZE_PASS_END(SampleProfileLoaderLegacyPass, "sample-profile",
                     "Sample Profile loader", false, false)
 
@@ -1478,8 +1539,8 @@ bool SampleProfileLoader::runOnModule(Module &M, ModuleAnalysisManager *AM) {
 }
 
 bool SampleProfileLoaderLegacyPass::runOnModule(Module &M) {
-  // FIXME: pass in AssumptionCache correctly for the new pass manager.
-  SampleLoader.setACT(&getAnalysis<AssumptionCacheTracker>());
+  ACT = &getAnalysis<AssumptionCacheTracker>();
+  TTIWP = &getAnalysis<TargetTransformInfoWrapperPass>();
   return SampleLoader.runOnModule(M, nullptr);
 }
 
@@ -1503,9 +1564,19 @@ bool SampleProfileLoader::runOnFunction(Function &F, ModuleAnalysisManager *AM) 
 
 PreservedAnalyses SampleProfileLoaderPass::run(Module &M,
                                                ModuleAnalysisManager &AM) {
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+
+  auto GetAssumptionCache = [&](Function &F) -> AssumptionCache & {
+    return FAM.getResult<AssumptionAnalysis>(F);
+  };
+  auto GetTTI = [&](Function &F) -> TargetTransformInfo & {
+    return FAM.getResult<TargetIRAnalysis>(F);
+  };
 
   SampleProfileLoader SampleLoader(
-      ProfileFileName.empty() ? SampleProfileFile : ProfileFileName);
+      ProfileFileName.empty() ? SampleProfileFile : ProfileFileName,
+      IsThinLTOPreLink, GetAssumptionCache, GetTTI);
 
   SampleLoader.doInitialization(M);
 

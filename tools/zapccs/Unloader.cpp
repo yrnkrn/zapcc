@@ -317,6 +317,9 @@ static void RemoveNode(ASTContext &C, Type *T) {
   case Type::TypeClass::Attributed:
     C.AttributedTypes.RemoveNode(cast<AttributedType>(T));
     break;
+  case Type::TypeClass::DependentAddressSpace:
+    C.DependentAddressSpaceTypes.RemoveNode(cast<DependentAddressSpaceType>(T));
+    break;
   }
 }
 

@@ -24,7 +24,7 @@ define void @test_inline(i64* (i32*)*, i32* %x) !dbg !6 {
 ; CHECK: if.true.direct_targ1:
 ; CHECK-NOT: call
 ; CHECK: if.false.orig_indirect2:
-; CHECK: call
+; CHECK: call {{.*}} !prof ![[VP:[0-9]+]]
   call i64* %3(i32* %x), !dbg !7
   ret void
 }
@@ -67,6 +67,19 @@ define void @test_noinline(void ()*) !dbg !12 {
 ; CHECK: call
   call void %3(), !dbg !13
   ret void
+}
+
+; CHECK-LABEL: @test_noinline_bitcast
+; If the indirect call has been promoted to a direct call with bitcast,
+; do not inline it.
+define float @test_noinline_bitcast(float ()*) !dbg !26 {
+  %2 = alloca float ()*
+  store float ()* %0, float ()** %2
+; CHECK: icmp
+; CHECK: call
+  %3 = load float ()*, float ()** %2
+  %4 = call float %3(), !dbg !27
+  ret float %4
 }
 
 ; CHECK-LABEL: @test_norecursive_inline
@@ -114,6 +127,10 @@ define void @foo_direct() !dbg !21 {
   ret void
 }
 
+define i32 @foo_direct_i32() !dbg !28 {
+  ret i32 0;
+}
+
 ; CHECK-LABEL: @test_direct
 ; We should not promote a direct call.
 define void @test_direct() !dbg !22 {
@@ -135,6 +152,7 @@ define void @test_direct() !dbg !22 {
 !4 = !DILocation(line: 4, scope: !3)
 !5 = !DILocation(line: 6, scope: !3)
 ; CHECK: ![[PROF]] = !{!"VP", i32 0, i64 3457, i64 9191153033785521275, i64 2059, i64 -1069303473483922844, i64 1398}
+; CHECK: ![[VP]] = !{!"VP", i32 0, i64 1000, i64 -6391416044382067764, i64 1000}
 !6 = distinct !DISubprogram(name: "test_inline", scope: !1, file: !1, line: 6, unit: !0)
 !7 = !DILocation(line: 7, scope: !6)
 !8 = distinct !DISubprogram(name: "test_inline_strip", scope: !1, file: !1, line: 8, unit: !0)
@@ -155,3 +173,6 @@ define void @test_direct() !dbg !22 {
 !23 = !DILocation(line: 23, scope: !22)
 !24 = distinct !DISubprogram(name: "test_norecursive_inline", scope: !1, file: !1, line: 12, unit: !0)
 !25 = !DILocation(line: 13, scope: !24)
+!26 = distinct !DISubprogram(name: "test_noinline_bitcast", scope: !1, file: !1, line: 12, unit: !0)
+!27 = !DILocation(line: 13, scope: !26)
+!28 = distinct !DISubprogram(name: "foo_direct_i32", scope: !1, file: !1, line: 11, unit: !0)

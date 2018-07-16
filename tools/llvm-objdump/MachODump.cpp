@@ -1279,7 +1279,6 @@ static void ProcessMachO(StringRef Name, MachOObjectFile *MachOOF,
     // Dump the complete DWARF structure.
     DIDumpOptions DumpOpts;
     DumpOpts.DumpType = DwarfDumpType;
-    DumpOpts.DumpEH = true;
     DICtx->dump(outs(), DumpOpts);
   }
 }
@@ -5833,7 +5832,7 @@ static void PrintXarFilesSummary(const char *XarFilename, xar_t xar) {
     mtime = nullptr;
     name = nullptr;
     for(key = xar_prop_first(xf, xp); key; key = xar_prop_next(xp)){
-      const char *val = nullptr; 
+      const char *val = nullptr;
       xar_prop_get(xf, key, &val);
 #if 0 // Useful for debugging.
       outs() << "key: " << key << " value: " << val << "\n";
@@ -5881,7 +5880,9 @@ static void PrintXarFilesSummary(const char *XarFilename, xar_t xar) {
     if(name != nullptr)
       outs() << name;
     outs() << "\n";
+    xar_iter_free(xp);
   }
+  xar_iter_free(xi);
 }
 
 static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
@@ -5949,7 +5950,7 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
     errs() << XarEC.message() << "\n";
     return;
   }
-  tool_output_file XarFile(XarFilename, FD);
+  ToolOutputFile XarFile(XarFilename, FD);
   raw_fd_ostream &XarOut = XarFile.os();
   StringRef XarContents(sect, size);
   XarOut << XarContents;
@@ -6021,7 +6022,7 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
     member_type = NULL;
     member_size_string = NULL;
     for(key = xar_prop_first(xf, xp); key; key = xar_prop_next(xp)){
-      const char *val = nullptr; 
+      const char *val = nullptr;
       xar_prop_get(xf, key, &val);
 #if 0 // Useful for debugging.
       outs() << "key: " << key << " value: " << val << "\n";
@@ -6044,7 +6045,7 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
       char *endptr;
       member_size = strtoul(member_size_string, &endptr, 10);
       if (*endptr == '\0' && member_size != 0) {
-        char *buffer = (char *)::operator new(member_size);
+        char *buffer;
         if (xar_extract_tobuffersz(xar, xf, &buffer, &member_size) == 0) {
 #if 0 // Useful for debugging.
 	  outs() << "xar member: " << member_name << " extracted\n";
@@ -6075,12 +6076,13 @@ static void DumpBitcodeSection(MachOObjectFile *O, const char *sect,
                                  XarMemberName);
           }
           XarMemberName = OldXarMemberName;
+          delete buffer;
         }
-        delete buffer;
       }
     }
     xar_iter_free(xp);
   }
+  xar_iter_free(xi);
   xar_close(xar);
 }
 #endif // defined(HAVE_LIBXAR)
@@ -6437,8 +6439,11 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
     // GetTarget prints out stuff.
     return;
   }
+  std::string MachOMCPU;
   if (MCPU.empty() && McpuDefault)
-    MCPU = McpuDefault;
+    MachOMCPU = McpuDefault;
+  else
+    MachOMCPU = MCPU;
 
   std::unique_ptr<const MCInstrInfo> InstrInfo(TheTarget->createMCInstrInfo());
   std::unique_ptr<const MCInstrInfo> ThumbInstrInfo;
@@ -6460,7 +6465,7 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
   std::unique_ptr<const MCAsmInfo> AsmInfo(
       TheTarget->createMCAsmInfo(*MRI, TripleName));
   std::unique_ptr<const MCSubtargetInfo> STI(
-      TheTarget->createMCSubtargetInfo(TripleName, MCPU, FeaturesStr));
+      TheTarget->createMCSubtargetInfo(TripleName, MachOMCPU, FeaturesStr));
   MCContext Ctx(AsmInfo.get(), MRI.get(), nullptr);
   std::unique_ptr<MCDisassembler> DisAsm(
       TheTarget->createMCDisassembler(*STI, Ctx));
@@ -6510,7 +6515,8 @@ static void DisassembleMachO(StringRef Filename, MachOObjectFile *MachOOF,
     ThumbAsmInfo.reset(
         ThumbTarget->createMCAsmInfo(*ThumbMRI, ThumbTripleName));
     ThumbSTI.reset(
-        ThumbTarget->createMCSubtargetInfo(ThumbTripleName, MCPU, FeaturesStr));
+        ThumbTarget->createMCSubtargetInfo(ThumbTripleName, MachOMCPU,
+                                           FeaturesStr));
     ThumbCtx.reset(new MCContext(ThumbAsmInfo.get(), ThumbMRI.get(), nullptr));
     ThumbDisAsm.reset(ThumbTarget->createMCDisassembler(*ThumbSTI, *ThumbCtx));
     MCContext *PtrThumbCtx = ThumbCtx.get();

@@ -28,6 +28,8 @@ using namespace llvm;
 
 SIMachineFunctionInfo::SIMachineFunctionInfo(const MachineFunction &MF)
   : AMDGPUMachineFunction(MF),
+    BufferPSV(*(MF.getSubtarget().getInstrInfo())),
+    ImagePSV(*(MF.getSubtarget().getInstrInfo())),
     PrivateSegmentBuffer(false),
     DispatchPtr(false),
     QueuePtr(false),
@@ -46,7 +48,8 @@ SIMachineFunctionInfo::SIMachineFunctionInfo(const MachineFunction &MF)
     WorkItemIDY(false),
     WorkItemIDZ(false),
     ImplicitBufferPtr(false),
-    ImplicitArgPtr(false) {
+    ImplicitArgPtr(false),
+    GITPtrHigh(0xffffffff) {
   const SISubtarget &ST = MF.getSubtarget<SISubtarget>();
   const Function *F = MF.getFunction();
   FlatWorkGroupSizes = ST.getFlatWorkGroupSizes(*F);
@@ -158,6 +161,11 @@ SIMachineFunctionInfo::SIMachineFunctionInfo(const MachineFunction &MF)
     if (HasStackObjects || F->hasFnAttribute("amdgpu-flat-scratch"))
       FlatScratchInit = true;
   }
+
+  Attribute A = F->getFnAttribute("amdgpu-git-ptr-high");
+  StringRef S = A.getValueAsString();
+  if (!S.empty())
+    S.consumeInteger(0, GITPtrHigh);
 }
 
 unsigned SIMachineFunctionInfo::addPrivateSegmentBuffer(

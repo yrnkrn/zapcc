@@ -846,7 +846,10 @@ public:
 
   /// \brief \c true if a defaulted destructor for this class would be deleted.
   bool defaultedDestructorIsDeleted() const {
-    return !data().DefaultedDestructorIsDeleted;
+    assert((!needsOverloadResolutionForDestructor() ||
+            (data().DeclaredSpecialMembers & SMF_Destructor)) &&
+           "this property has not yet been computed by Sema");
+    return data().DefaultedDestructorIsDeleted;
   }
 
   /// \brief \c true if we know for sure that this class has a single,
@@ -991,6 +994,15 @@ public:
             needsOverloadResolutionForMoveConstructor()) &&
            "move constructor should not be deleted");
     data().DefaultedMoveConstructorIsDeleted = true;
+  }
+
+  /// \brief Set that we attempted to declare an implicit destructor,
+  /// but overload resolution failed so we deleted it.
+  void setImplicitDestructorIsDeleted() {
+    assert((data().DefaultedDestructorIsDeleted ||
+            needsOverloadResolutionForDestructor()) &&
+           "destructor should not be deleted");
+    data().DefaultedDestructorIsDeleted = true;
   }
 
   /// \brief Determine whether this class should get an implicit move
@@ -1838,6 +1850,10 @@ public:
   TypeSourceInfo *getLambdaTypeInfo() const {
     return getLambdaData().MethodTyInfo;
   }
+
+  // \brief Determine whether this type is an Interface Like type for
+  // __interface inheritence purposes.
+  bool isInterfaceLike() const;
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) {

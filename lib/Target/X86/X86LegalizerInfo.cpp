@@ -57,9 +57,12 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
 
   setAction({G_PHI, s1}, WidenScalar);
 
-  for (unsigned BinOp : {G_ADD, G_SUB, G_MUL, G_AND, G_OR, G_XOR})
+  for (unsigned BinOp : {G_ADD, G_SUB, G_MUL, G_AND, G_OR, G_XOR}) {
     for (auto Ty : {s8, s16, s32})
       setAction({BinOp, Ty}, Legal);
+
+    setAction({BinOp, s1}, WidenScalar);
+  }
 
   for (unsigned Op : {G_UADDE}) {
     setAction({Op, s32}, Legal);
@@ -164,12 +167,16 @@ void X86LegalizerInfo::setLegalizerInfoSSE1() {
   for (unsigned MemOp : {G_LOAD, G_STORE})
     for (auto Ty : {v4s32, v2s64})
       setAction({MemOp, Ty}, Legal);
+
+  // Constants
+  setAction({TargetOpcode::G_FCONSTANT, s32}, Legal);
 }
 
 void X86LegalizerInfo::setLegalizerInfoSSE2() {
   if (!Subtarget.hasSSE2())
     return;
 
+  const LLT s32 = LLT::scalar(32);
   const LLT s64 = LLT::scalar(64);
   const LLT v16s8 = LLT::vector(16, 8);
   const LLT v8s16 = LLT::vector(8, 16);
@@ -185,6 +192,12 @@ void X86LegalizerInfo::setLegalizerInfoSSE2() {
       setAction({BinOp, Ty}, Legal);
 
   setAction({G_MUL, v8s16}, Legal);
+
+  setAction({G_FPEXT, s64}, Legal);
+  setAction({G_FPEXT, 1, s32}, Legal);
+
+  // Constants
+  setAction({TargetOpcode::G_FCONSTANT, s64}, Legal);
 }
 
 void X86LegalizerInfo::setLegalizerInfoSSE41() {

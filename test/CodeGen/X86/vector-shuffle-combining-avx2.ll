@@ -128,14 +128,14 @@ define <4 x i64> @combine_permq_pshufb_as_vperm2i128(<4 x i64> %a0) {
 define <8 x i32> @combine_as_vpermd(<8 x i32> %a0) {
 ; X32-LABEL: combine_as_vpermd:
 ; X32:       # BB#0:
-; X32-NEXT:    vmovdqa {{.*#+}} ymm1 = [4,5,4,5,6,7,0,7]
-; X32-NEXT:    vpermd %ymm0, %ymm1, %ymm0
+; X32-NEXT:    vmovaps {{.*#+}} ymm1 = [4,5,4,5,6,7,0,7]
+; X32-NEXT:    vpermps %ymm0, %ymm1, %ymm0
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: combine_as_vpermd:
 ; X64:       # BB#0:
-; X64-NEXT:    vmovdqa {{.*#+}} ymm1 = [4,5,4,5,6,7,0,7]
-; X64-NEXT:    vpermd %ymm0, %ymm1, %ymm0
+; X64-NEXT:    vmovaps {{.*#+}} ymm1 = [4,5,4,5,6,7,0,7]
+; X64-NEXT:    vpermps %ymm0, %ymm1, %ymm0
 ; X64-NEXT:    retq
   %1 = shufflevector <8 x i32> %a0, <8 x i32> undef, <8 x i32> <i32 4, i32 5, i32 6, i32 7, i32 0, i32 1, i32 2, i32 3>
   %2 = tail call <8 x i32> @llvm.x86.avx2.permd(<8 x i32> %a0, <8 x i32> <i32 5, i32 4, i32 3, i32 2, i32 1, i32 0, i32 7, i32 6>)
@@ -458,12 +458,12 @@ define <4 x double> @combine_vpbroadcast_permd_as_vpbroadcastsd256(<2 x double> 
 define <8 x i32> @combine_permd_as_permq(<8 x i32> %a) {
 ; X32-LABEL: combine_permd_as_permq:
 ; X32:       # BB#0:
-; X32-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,2,1]
+; X32-NEXT:    vpermpd {{.*#+}} ymm0 = ymm0[0,2,2,1]
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: combine_permd_as_permq:
 ; X64:       # BB#0:
-; X64-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,2,2,1]
+; X64-NEXT:    vpermpd {{.*#+}} ymm0 = ymm0[0,2,2,1]
 ; X64-NEXT:    retq
   %1 = call <8 x i32> @llvm.x86.avx2.permd(<8 x i32> %a, <8 x i32> <i32 0, i32 1, i32 4, i32 5, i32 4, i32 5, i32 2, i32 3>)
   ret <8 x i32> %1
@@ -503,14 +503,14 @@ define <4 x i64> @combine_pshufb_as_zext128(<32 x i8> %a0) {
 ; X32-LABEL: combine_pshufb_as_zext128:
 ; X32:       # BB#0:
 ; X32-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0]
-; X32-NEXT:    vperm2i128 {{.*#+}} ymm0 = ymm0[0,1,0,1]
+; X32-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,1,0,1]
 ; X32-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[15,14],zero,zero,zero,zero,zero,zero,ymm0[13,12],zero,zero,zero,zero,zero,zero,ymm0[31,30],zero,zero,zero,zero,zero,zero,ymm0[29,28],zero,zero,zero,zero,zero,zero
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: combine_pshufb_as_zext128:
 ; X64:       # BB#0:
 ; X64-NEXT:    vpshufb {{.*#+}} xmm0 = xmm0[15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0]
-; X64-NEXT:    vperm2i128 {{.*#+}} ymm0 = ymm0[0,1,0,1]
+; X64-NEXT:    vpermq {{.*#+}} ymm0 = ymm0[0,1,0,1]
 ; X64-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[15,14],zero,zero,zero,zero,zero,zero,ymm0[13,12],zero,zero,zero,zero,zero,zero,ymm0[31,30],zero,zero,zero,zero,zero,zero,ymm0[29,28],zero,zero,zero,zero,zero,zero
 ; X64-NEXT:    retq
   %1 = shufflevector <32 x i8> %a0, <32 x i8> undef, <32 x i32> <i32 15, i32 14, i32 13, i32 12, i32 11, i32 10, i32 9, i32 8, i32 7, i32 6, i32 5, i32 4, i32 3, i32 2, i32 1, i32 0, i32 15, i32 14, i32 13, i32 12, i32 11, i32 10, i32 9, i32 8, i32 7, i32 6, i32 5, i32 4, i32 3, i32 2, i32 1, i32 0>
@@ -804,6 +804,80 @@ define <32 x i8> @combine_unpack_unpack_pshufb(<32 x i8> %a0) {
   ret <32 x i8> %6
 }
 
+define <16 x i16> @shuffle_combine_packssdw_pshufb(<8 x i32> %a0) {
+; X32-LABEL: shuffle_combine_packssdw_pshufb:
+; X32:       # BB#0:
+; X32-NEXT:    vpsrad $31, %ymm0, %ymm0
+; X32-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[12,13,8,9,4,5,0,1,12,13,8,9,4,5,0,1,16,17,20,21,24,25,28,29,28,29,24,25,20,21,16,17]
+; X32-NEXT:    retl
+;
+; X64-LABEL: shuffle_combine_packssdw_pshufb:
+; X64:       # BB#0:
+; X64-NEXT:    vpsrad $31, %ymm0, %ymm0
+; X64-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[12,13,8,9,4,5,0,1,12,13,8,9,4,5,0,1,16,17,20,21,24,25,28,29,28,29,24,25,20,21,16,17]
+; X64-NEXT:    retq
+  %1 = ashr <8 x i32> %a0, <i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31, i32 31>
+  %2 = tail call <16 x i16> @llvm.x86.avx2.packssdw(<8 x i32> %1, <8 x i32> %1)
+  %3 = shufflevector <16 x i16> %2, <16 x i16> undef, <16 x i32> <i32 3, i32 2, i32 1, i32 0, i32 3, i32 2, i32 1, i32 0, i32 8, i32 9, i32 10, i32 11, i32 11, i32 10, i32 9, i32 8>
+  ret <16 x i16> %3
+}
+declare <16 x i16> @llvm.x86.avx2.packssdw(<8 x i32>, <8 x i32>) nounwind readnone
+
+define <32 x i8> @shuffle_combine_packsswb_pshufb(<16 x i16> %a0, <16 x i16> %a1) {
+; X32-LABEL: shuffle_combine_packsswb_pshufb:
+; X32:       # BB#0:
+; X32-NEXT:    vpsraw $15, %ymm0, %ymm0
+; X32-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[14,12,10,8,6,4,2,0,14,12,10,8,6,4,2,0,30,28,26,24,22,20,18,16,30,28,26,24,22,20,18,16]
+; X32-NEXT:    retl
+;
+; X64-LABEL: shuffle_combine_packsswb_pshufb:
+; X64:       # BB#0:
+; X64-NEXT:    vpsraw $15, %ymm0, %ymm0
+; X64-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[14,12,10,8,6,4,2,0,14,12,10,8,6,4,2,0,30,28,26,24,22,20,18,16,30,28,26,24,22,20,18,16]
+; X64-NEXT:    retq
+  %1 = ashr <16 x i16> %a0, <i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15>
+  %2 = ashr <16 x i16> %a1, <i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15, i16 15>
+  %3 = tail call <32 x i8> @llvm.x86.avx2.packsswb(<16 x i16> %1, <16 x i16> %2)
+  %4 = tail call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> %3, <32 x i8> <i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>)
+  ret <32 x i8> %4
+}
+declare <32 x i8> @llvm.x86.avx2.packsswb(<16 x i16>, <16 x i16>) nounwind readnone
+
+define <16 x i16> @shuffle_combine_packusdw_pshufb(<8 x i32> %a0, <8 x i32> %a1) {
+; X32-LABEL: shuffle_combine_packusdw_pshufb:
+; X32:       # BB#0:
+; X32-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[14,15,10,11,6,7,2,3,14,15,10,11,6,7,2,3,18,19,22,23,26,27,30,31,30,31,26,27,22,23,18,19]
+; X32-NEXT:    retl
+;
+; X64-LABEL: shuffle_combine_packusdw_pshufb:
+; X64:       # BB#0:
+; X64-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[14,15,10,11,6,7,2,3,14,15,10,11,6,7,2,3,18,19,22,23,26,27,30,31,30,31,26,27,22,23,18,19]
+; X64-NEXT:    retq
+  %1 = lshr <8 x i32> %a0, <i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16, i32 16>
+  %2 = tail call <16 x i16> @llvm.x86.avx2.packusdw(<8 x i32> %1, <8 x i32> %1)
+  %3 = shufflevector <16 x i16> %2, <16 x i16> undef, <16 x i32> <i32 3, i32 2, i32 1, i32 0, i32 3, i32 2, i32 1, i32 0, i32 8, i32 9, i32 10, i32 11, i32 11, i32 10, i32 9, i32 8>
+  ret <16 x i16> %3
+}
+declare <16 x i16> @llvm.x86.avx2.packusdw(<8 x i32>, <8 x i32>) nounwind readnone
+
+define <32 x i8> @shuffle_combine_packuswb_pshufb(<16 x i16> %a0, <16 x i16> %a1) {
+; X32-LABEL: shuffle_combine_packuswb_pshufb:
+; X32:       # BB#0:
+; X32-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[15,13,11,9,7,5,3,1,15,13,11,9,7,5,3,1,31,29,27,25,23,21,19,17,31,29,27,25,23,21,19,17]
+; X32-NEXT:    retl
+;
+; X64-LABEL: shuffle_combine_packuswb_pshufb:
+; X64:       # BB#0:
+; X64-NEXT:    vpshufb {{.*#+}} ymm0 = ymm0[15,13,11,9,7,5,3,1,15,13,11,9,7,5,3,1,31,29,27,25,23,21,19,17,31,29,27,25,23,21,19,17]
+; X64-NEXT:    retq
+  %1 = lshr <16 x i16> %a0, <i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8>
+  %2 = lshr <16 x i16> %a1, <i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8, i16 8>
+  %3 = tail call <32 x i8> @llvm.x86.avx2.packuswb(<16 x i16> %1, <16 x i16> %2)
+  %4 = tail call <32 x i8> @llvm.x86.avx2.pshuf.b(<32 x i8> %3, <32 x i8> <i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0, i8 7, i8 6, i8 5, i8 4, i8 3, i8 2, i8 1, i8 0>)
+  ret <32 x i8> %4
+}
+declare <32 x i8> @llvm.x86.avx2.packuswb(<16 x i16>, <16 x i16>) nounwind readnone
+
 define <16 x i8> @combine_pshufb_insertion_as_broadcast_v2i64(i64 %a0) {
 ; X32-LABEL: combine_pshufb_insertion_as_broadcast_v2i64:
 ; X32:       # BB#0:
@@ -896,4 +970,66 @@ define <32 x i8> @PR27320(<8 x i32> %a0) {
   %2 = bitcast <8 x i32> %1 to <32 x i8>
   %3 = shufflevector <32 x i8> %2, <32 x i8> undef, <32 x i32> <i32 0, i32 1, i32 1, i32 2, i32 3, i32 4, i32 4, i32 5, i32 6, i32 7, i32 7, i32 8, i32 9, i32 10, i32 10, i32 11, i32 16, i32 17, i32 17, i32 18, i32 19, i32 20, i32 20, i32 21, i32 22, i32 23, i32 23, i32 24, i32 25, i32 26, i32 26, i32 27>
   ret <32 x i8> %3
+}
+
+define internal fastcc <8 x float> @PR34577(<8 x float> %inp0, <8 x float> %inp1, <8 x float> %inp2) {
+; X32-AVX2-LABEL: PR34577:
+; X32-AVX2:       # BB#0: # %entry
+; X32-AVX2-NEXT:    vpxor %xmm2, %xmm2, %xmm2
+; X32-AVX2-NEXT:    vpmovzxdq {{.*#+}} ymm0 = xmm0[0],zero,xmm0[1],zero,xmm0[2],zero,xmm0[3],zero
+; X32-AVX2-NEXT:    vpblendd {{.*#+}} ymm0 = ymm2[0,1,2,3],ymm0[4,5,6,7]
+; X32-AVX2-NEXT:    vmovapd {{.*#+}} ymm2 = <u,u,7,2,u,u,3,2>
+; X32-AVX2-NEXT:    vpermps %ymm1, %ymm2, %ymm1
+; X32-AVX2-NEXT:    vblendpd {{.*#+}} ymm0 = ymm0[0],ymm1[1],ymm0[2],ymm1[3]
+; X32-AVX2-NEXT:    retl
+;
+; X32-AVX512-LABEL: PR34577:
+; X32-AVX512:       # BB#0: # %entry
+; X32-AVX512-NEXT:    vmovaps {{.*#+}} ymm3 = <1,u,u,u,2,u,5,0>
+; X32-AVX512-NEXT:    vpermps %ymm0, %ymm3, %ymm0
+; X32-AVX512-NEXT:    vmovaps {{.*#+}} ymm3 = <u,2,3,5,u,5,u,u>
+; X32-AVX512-NEXT:    vpermps %ymm2, %ymm3, %ymm2
+; X32-AVX512-NEXT:    vblendps {{.*#+}} ymm0 = ymm0[0],ymm2[1,2,3],ymm0[4],ymm2[5],ymm0[6,7]
+; X32-AVX512-NEXT:    vxorps %xmm2, %xmm2, %xmm2
+; X32-AVX512-NEXT:    movb $86, %al
+; X32-AVX512-NEXT:    kmovw %eax, %k1
+; X32-AVX512-NEXT:    vblendmps %zmm0, %zmm2, %zmm0 {%k1}
+; X32-AVX512-NEXT:    vblendpd {{.*#+}} ymm0 = ymm2[0,1],ymm0[2,3]
+; X32-AVX512-NEXT:    vmovapd {{.*#+}} ymm2 = <u,u,7,2,u,u,3,2>
+; X32-AVX512-NEXT:    vpermps %ymm1, %ymm2, %ymm1
+; X32-AVX512-NEXT:    vblendpd {{.*#+}} ymm0 = ymm0[0],ymm1[1],ymm0[2],ymm1[3]
+; X32-AVX512-NEXT:    retl
+;
+; X64-AVX2-LABEL: PR34577:
+; X64-AVX2:       # BB#0: # %entry
+; X64-AVX2-NEXT:    vpxor %xmm2, %xmm2, %xmm2
+; X64-AVX2-NEXT:    vpmovzxdq {{.*#+}} ymm0 = xmm0[0],zero,xmm0[1],zero,xmm0[2],zero,xmm0[3],zero
+; X64-AVX2-NEXT:    vpblendd {{.*#+}} ymm0 = ymm2[0,1,2,3],ymm0[4,5,6,7]
+; X64-AVX2-NEXT:    vmovapd {{.*#+}} ymm2 = <u,u,7,2,u,u,3,2>
+; X64-AVX2-NEXT:    vpermps %ymm1, %ymm2, %ymm1
+; X64-AVX2-NEXT:    vblendpd {{.*#+}} ymm0 = ymm0[0],ymm1[1],ymm0[2],ymm1[3]
+; X64-AVX2-NEXT:    retq
+;
+; X64-AVX512-LABEL: PR34577:
+; X64-AVX512:       # BB#0: # %entry
+; X64-AVX512-NEXT:    vmovaps {{.*#+}} ymm3 = <1,u,u,u,2,u,5,0>
+; X64-AVX512-NEXT:    vpermps %ymm0, %ymm3, %ymm0
+; X64-AVX512-NEXT:    vmovaps {{.*#+}} ymm3 = <u,2,3,5,u,5,u,u>
+; X64-AVX512-NEXT:    vpermps %ymm2, %ymm3, %ymm2
+; X64-AVX512-NEXT:    vblendps {{.*#+}} ymm0 = ymm0[0],ymm2[1,2,3],ymm0[4],ymm2[5],ymm0[6,7]
+; X64-AVX512-NEXT:    vxorps %xmm2, %xmm2, %xmm2
+; X64-AVX512-NEXT:    movb $86, %al
+; X64-AVX512-NEXT:    kmovw %eax, %k1
+; X64-AVX512-NEXT:    vblendmps %zmm0, %zmm2, %zmm0 {%k1}
+; X64-AVX512-NEXT:    vblendpd {{.*#+}} ymm0 = ymm2[0,1],ymm0[2,3]
+; X64-AVX512-NEXT:    vmovapd {{.*#+}} ymm2 = <u,u,7,2,u,u,3,2>
+; X64-AVX512-NEXT:    vpermps %ymm1, %ymm2, %ymm1
+; X64-AVX512-NEXT:    vblendpd {{.*#+}} ymm0 = ymm0[0],ymm1[1],ymm0[2],ymm1[3]
+; X64-AVX512-NEXT:    retq
+entry:
+  %shuf0 = shufflevector <8 x float> %inp0, <8 x float> %inp2, <8 x i32> <i32 1, i32 10, i32 11, i32 13, i32 2, i32 13, i32 5, i32 0>
+  %sel = select <8 x i1> <i1 false, i1 true, i1 true, i1 false, i1 true, i1 false, i1 true, i1 false>, <8 x float> %shuf0, <8 x float> zeroinitializer
+  %shuf1 = shufflevector <8 x float> zeroinitializer, <8 x float> %sel, <8 x i32> <i32 6, i32 11, i32 6, i32 15, i32 12, i32 11, i32 1, i32 3>
+  %shuf2 = shufflevector <8 x float> %inp1, <8 x float> %shuf1, <8 x i32> <i32 15, i32 10, i32 7, i32 2, i32 12, i32 undef, i32 3, i32 2>
+  ret <8 x float> %shuf2
 }

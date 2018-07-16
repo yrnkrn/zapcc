@@ -309,13 +309,17 @@ CompilerInstance::createDiagnostics(DiagnosticOptions *Opts,
 
 // File Manager
 
-void CompilerInstance::createFileManager() {
+FileManager *CompilerInstance::createFileManager() {
   assert(!FileMgr);
   if (!hasVirtualFileSystem()) {
-    // TODO: choose the virtual file system based on the CompilerInvocation.
-    setVirtualFileSystem(vfs::getRealFileSystem());
+    if (IntrusiveRefCntPtr<vfs::FileSystem> VFS =
+            createVFSFromCompilerInvocation(getInvocation(), getDiagnostics()))
+      setVirtualFileSystem(VFS);
+    else
+      return nullptr;
   }
   FileMgr = new FileManager(getFileSystemOpts(), VirtualFileSystem);
+  return FileMgr.get();
 }
 
 // Source Manager

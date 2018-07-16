@@ -103,9 +103,10 @@ ErrorOr<std::string> sys::findProgramByName(StringRef Name,
   return std::string(U8Result.begin(), U8Result.end());
 }
 
-static HANDLE RedirectIO(const StringRef *Path, int fd, std::string* ErrMsg) {
+static HANDLE RedirectIO(Optional<StringRef> Path, int fd,
+                         std::string *ErrMsg) {
   HANDLE h;
-  if (Path == 0) {
+  if (!Path) {
     if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
                          GetCurrentProcess(), &h,
                          0, TRUE, DUPLICATE_SAME_ACCESS))
@@ -249,7 +250,7 @@ static std::unique_ptr<char[]> flattenArgs(const char **Args) {
 }
 
 static bool Execute(ProcessInfo &PI, StringRef Program, const char **Args,
-                    const char **Envp, const StringRef **Redirects,
+                    const char **Envp, ArrayRef<Optional<StringRef>> Redirects,
                     unsigned MemoryLimit, std::string *ErrMsg) {
   if (!sys::fs::can_execute(Program)) {
     if (ErrMsg)
@@ -299,7 +300,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **Args,
   si.hStdOutput = INVALID_HANDLE_VALUE;
   si.hStdError = INVALID_HANDLE_VALUE;
 
-  if (Redirects) {
+  if (!Redirects.empty()) {
     si.dwFlags = STARTF_USESTDHANDLES;
 
     si.hStdInput = RedirectIO(Redirects[0], 0, ErrMsg);
@@ -359,7 +360,7 @@ static bool Execute(ProcessInfo &PI, StringRef Program, const char **Args,
   }
 
   BOOL rc = CreateProcessW(ProgramUtf16.data(), CommandUtf16.data(), 0, 0,
-                           Redirects != nullptr, CREATE_UNICODE_ENVIRONMENT,
+                           Redirects.size(), CREATE_UNICODE_ENVIRONMENT,
                            EnvBlock.empty() ? 0 : EnvBlock.data(), 0, &si,
                            &pi);
   DWORD err = GetLastError();

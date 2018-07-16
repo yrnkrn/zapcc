@@ -18,6 +18,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
@@ -501,6 +502,7 @@ private:
     DK_CV_DEF_RANGE,
     DK_CV_STRINGTABLE,
     DK_CV_FILECHECKSUMS,
+    DK_CV_FILECHECKSUM_OFFSET,
     DK_CFI_SECTIONS,
     DK_CFI_STARTPROC,
     DK_CFI_ENDPROC,
@@ -536,6 +538,7 @@ private:
     DK_ERR,
     DK_ERROR,
     DK_WARNING,
+    DK_PRINT,
     DK_END
   };
 
@@ -576,6 +579,7 @@ private:
   bool parseDirectiveCVDefRange();
   bool parseDirectiveCVStringTable();
   bool parseDirectiveCVFileChecksums();
+  bool parseDirectiveCVFileChecksumOffset();
 
   // .cfi directives
   bool parseDirectiveCFIRegister(SMLoc DirectiveLoc);
@@ -678,6 +682,9 @@ private:
 
   // ".warning"
   bool parseDirectiveWarning(SMLoc DirectiveLoc);
+
+  // .print <double-quotes-string>
+  bool parseDirectivePrint(SMLoc DirectiveLoc);
 
   void initializeDirectiveKindMap();
 };
@@ -1687,6 +1694,11 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
     // Treat '}' as a valid identifier in this context.
     Lex();
     IDVal = "}";
+  } else if (Lexer.is(AsmToken::Star) &&
+             getTargetParser().starIsStartOfStatement()) {
+    // Accept '*' as a valid start of statement.
+    Lex();
+    IDVal = "*";
   } else if (parseIdentifier(IDVal)) {
     if (!TheCondState.Ignore) {
       Lex(); // always eat a token
@@ -2025,6 +2037,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
       return parseDirectiveCVStringTable();
     case DK_CV_FILECHECKSUMS:
       return parseDirectiveCVFileChecksums();
+    case DK_CV_FILECHECKSUM_OFFSET:
+      return parseDirectiveCVFileChecksumOffset();
     case DK_CFI_SECTIONS:
       return parseDirectiveCFISections();
     case DK_CFI_STARTPROC:
@@ -2120,6 +2134,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info,
     case DK_DS_P:
     case DK_DS_X:
       return parseDirectiveDS(IDVal, 12);
+    case DK_PRINT:
+      return parseDirectivePrint(IDLoc);
     }
 
     return Error(IDLoc, "unknown directive");
@@ -3452,25 +3468,40 @@ bool AsmParser::parseDirectiveStabs() {
 }
 
 /// parseDirectiveCVFile
-/// ::= .cv_file number filename
+/// ::= .cv_file number filename [checksum] [checksumkind]
 bool AsmParser::parseDirectiveCVFile() {
   SMLoc FileNumberLoc = getTok().getLoc();
   int64_t FileNumber;
   std::string Filename;
+  std::string Checksum;
+  int64_t ChecksumKind = 0;
 
   if (parseIntToken(FileNumber,
                     "expected file number in '.cv_file' directive") ||
       check(FileNumber < 1, FileNumberLoc, "file number less than one") ||
       check(getTok().isNot(AsmToken::String),
             "unexpected token in '.cv_file' directive") ||
-      // Usually directory and filename are together, otherwise just
-      // directory. Allow the strings to have escaped octal character sequence.
-      parseEscapedString(Filename) ||
-      parseToken(AsmToken::EndOfStatement,
-                 "unexpected token in '.cv_file' directive"))
+      parseEscapedString(Filename))
     return true;
+  if (!parseOptionalToken(AsmToken::EndOfStatement)) {
+    if (check(getTok().isNot(AsmToken::String),
+              "unexpected token in '.cv_file' directive") ||
+        parseEscapedString(Checksum) ||
+        parseIntToken(ChecksumKind,
+                      "expected checksum kind in '.cv_file' directive") ||
+        parseToken(AsmToken::EndOfStatement,
+                   "unexpected token in '.cv_file' directive"))
+      return true;
+  }
 
-  if (!getStreamer().EmitCVFileDirective(FileNumber, Filename))
+  Checksum = fromHex(Checksum);
+  void *CKMem = Ctx.allocate(Checksum.size(), 1);
+  memcpy(CKMem, Checksum.data(), Checksum.size());
+  ArrayRef<uint8_t> ChecksumAsBytes(reinterpret_cast<const uint8_t *>(CKMem),
+                                    Checksum.size());
+
+  if (!getStreamer().EmitCVFileDirective(FileNumber, Filename, ChecksumAsBytes,
+                                         static_cast<uint8_t>(ChecksumKind)))
     return Error(FileNumberLoc, "file number already allocated");
 
   return false;
@@ -3746,6 +3777,18 @@ bool AsmParser::parseDirectiveCVStringTable() {
 /// ::= .cv_filechecksums
 bool AsmParser::parseDirectiveCVFileChecksums() {
   getStreamer().EmitCVFileChecksumsDirective();
+  return false;
+}
+
+/// parseDirectiveCVFileChecksumOffset
+/// ::= .cv_filechecksumoffset fileno
+bool AsmParser::parseDirectiveCVFileChecksumOffset() {
+  int64_t FileNo;
+  if (parseIntToken(FileNo, "expected identifier in directive"))
+    return true;
+  if (parseToken(AsmToken::EndOfStatement, "Expected End of Statement"))
+    return true;
+  getStreamer().EmitCVFileChecksumOffsetDirective(FileNo);
   return false;
 }
 
@@ -5131,6 +5174,7 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".cv_def_range"] = DK_CV_DEF_RANGE;
   DirectiveKindMap[".cv_stringtable"] = DK_CV_STRINGTABLE;
   DirectiveKindMap[".cv_filechecksums"] = DK_CV_FILECHECKSUMS;
+  DirectiveKindMap[".cv_filechecksumoffset"] = DK_CV_FILECHECKSUM_OFFSET;
   DirectiveKindMap[".sleb128"] = DK_SLEB128;
   DirectiveKindMap[".uleb128"] = DK_ULEB128;
   DirectiveKindMap[".cfi_sections"] = DK_CFI_SECTIONS;
@@ -5190,6 +5234,7 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".ds.s"] = DK_DS_S;
   DirectiveKindMap[".ds.w"] = DK_DS_W;
   DirectiveKindMap[".ds.x"] = DK_DS_X;
+  DirectiveKindMap[".print"] = DK_PRINT;
 }
 
 MCAsmMacro *AsmParser::parseMacroLikeBody(SMLoc DirectiveLoc) {
@@ -5415,6 +5460,17 @@ bool AsmParser::parseDirectiveMSAlign(SMLoc IDLoc, ParseStatementInfo &Info) {
     return Error(ExprLoc, "literal value not a power of two greater then zero");
 
   Info.AsmRewrites->emplace_back(AOK_Align, IDLoc, 5, Log2_64(IntValue));
+  return false;
+}
+
+bool AsmParser::parseDirectivePrint(SMLoc DirectiveLoc) {
+  const AsmToken StrTok = getTok();
+  Lex();
+  if (StrTok.isNot(AsmToken::String) || StrTok.getString().front() != '"')
+    return Error(DirectiveLoc, "expected double quoted string after .print");
+  if (parseToken(AsmToken::EndOfStatement, "expected end of statement"))
+    return true;
+  llvm::outs() << StrTok.getStringContents() << '\n';
   return false;
 }
 

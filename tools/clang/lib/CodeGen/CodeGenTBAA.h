@@ -30,15 +30,43 @@ namespace clang {
   class Type;
 
 namespace CodeGen {
-  class CGRecordLayout;
+class CGRecordLayout;
 
-  struct TBAAPathTag {
-    TBAAPathTag(const Type *B, const llvm::MDNode *A, uint64_t O)
-      : BaseT(B), AccessN(A), Offset(O) {}
-    const Type *BaseT;
-    const llvm::MDNode *AccessN;
-    uint64_t Offset;
-  };
+struct TBAAPathTag {
+  TBAAPathTag(const Type *B, const llvm::MDNode *A, uint64_t O)
+    : BaseT(B), AccessN(A), Offset(O) {}
+  const Type *BaseT;
+  const llvm::MDNode *AccessN;
+  uint64_t Offset;
+};
+
+// TBAAAccessInfo - Describes a memory access in terms of TBAA.
+struct TBAAAccessInfo {
+  TBAAAccessInfo(QualType BaseType, llvm::MDNode *AccessType, uint64_t Offset)
+    : BaseType(BaseType), AccessType(AccessType), Offset(Offset)
+  {}
+
+  explicit TBAAAccessInfo(llvm::MDNode *AccessType)
+    : TBAAAccessInfo(/* BaseType= */ QualType(), AccessType, /* Offset= */ 0)
+  {}
+
+  TBAAAccessInfo()
+    : TBAAAccessInfo(/* AccessType= */ nullptr)
+  {}
+
+  /// BaseType - The base/leading access type. May be null if this access
+  /// descriptor represents an access that is not considered to be an access
+  /// to an aggregate or union member.
+  QualType BaseType;
+
+  /// AccessType - The final access type. May be null if there is no TBAA
+  /// information available about this access.
+  llvm::MDNode *AccessType;
+
+  /// Offset - The byte offset of the final access within the base one. Must be
+  /// zero if the base access type is not specified.
+  uint64_t Offset;
+};
 
 /// CodeGenTBAA - This class organizes the cross-module state that is used
 /// while lowering AST types to LLVM types.
@@ -59,8 +87,6 @@ public:
   llvm::DenseMap<const Type *, llvm::MDNode *> StructTypeMetadataCache;
   /// This maps TBAAPathTags to a tag node.
   llvm::DenseMap<TBAAPathTag, llvm::MDNode *> StructTagMetadataCache;
-  /// This maps a scalar type to a scalar tag node.
-  llvm::DenseMap<const llvm::MDNode *, llvm::MDNode *> ScalarTagMetadataCache;
 
   /// StructMetadataCache - This maps clang::Types to llvm::MDNodes describing
   /// them for struct assignments.
@@ -96,27 +122,27 @@ public:
               MangleContext &MContext);
   ~CodeGenTBAA();
 
-  /// getTBAAInfo - Get the TBAA MDNode to be used for a dereference
-  /// of the given type.
-  llvm::MDNode *getTBAAInfo(QualType QTy);
+  /// getTypeInfo - Get metadata used to describe accesses to objects of the
+  /// given type.
+  llvm::MDNode *getTypeInfo(QualType QTy);
 
-  /// getTBAAInfoForVTablePtr - Get the TBAA MDNode to be used for a
-  /// dereference of a vtable pointer.
-  llvm::MDNode *getTBAAInfoForVTablePtr();
+  /// getVTablePtrAccessInfo - Get the TBAA information that describes an
+  /// access to a virtual table pointer.
+  TBAAAccessInfo getVTablePtrAccessInfo();
 
   /// getTBAAStructInfo - Get the TBAAStruct MDNode to be used for a memcpy of
   /// the given type.
   llvm::MDNode *getTBAAStructInfo(QualType QTy);
 
-  /// Get the MDNode in the type DAG for given struct type QType.
-  llvm::MDNode *getTBAAStructTypeInfo(QualType QType);
-  /// Get the tag MDNode for a given base type, the actual scalar access MDNode
-  /// and offset into the base type.
-  llvm::MDNode *getTBAAStructTagInfo(QualType BaseQType,
-                                     llvm::MDNode *AccessNode, uint64_t Offset);
+  /// getBaseTypeInfo - Get metadata node for a given base access type.
+  llvm::MDNode *getBaseTypeInfo(QualType QType);
 
-  /// Get the scalar tag MDNode for a given scalar type.
-  llvm::MDNode *getTBAAScalarTagInfo(llvm::MDNode *AccessNode);
+  /// getAccessTagInfo - Get TBAA tag for a given memory access.
+  llvm::MDNode *getAccessTagInfo(TBAAAccessInfo Info);
+
+  /// getMayAliasAccessInfo - Get TBAA information that represents may-alias
+  /// accesses.
+  TBAAAccessInfo getMayAliasAccessInfo();
 };
 
 }  // end namespace CodeGen

@@ -571,7 +571,8 @@ void CGDebugInfo::CreateCompileUnit() {
       Producer, LO.Optimize || CGOpts.PrepareForLTO || CGOpts.EmitSummaryIndex,
       CGOpts.DwarfDebugFlags, RuntimeVers,
       CGOpts.EnableSplitDwarf ? "" : CGOpts.SplitDwarfFile, EmissionKind,
-      0 /* DWOid */, CGOpts.SplitDwarfInlining, CGOpts.DebugInfoForProfiling);
+      0 /* DWOid */, CGOpts.SplitDwarfInlining, CGOpts.DebugInfoForProfiling,
+      CGOpts.GnuPubnames);
   }
 }
 
@@ -842,6 +843,10 @@ CGDebugInfo::getOrCreateRecordFwdDecl(const RecordType *Ty,
   llvm::DICompositeType *RetTy = DBuilder.createReplaceableCompositeType(
       getTagForRecord(RD), RDName, Ctx, DefUnit, Line, 0, Size, Align,
       llvm::DINode::FlagFwdDecl, FullName);
+  if (CGM.getCodeGenOpts().DebugFwdTemplateParams)
+    if (auto *TSpecial = dyn_cast<ClassTemplateSpecializationDecl>(RD))
+      DBuilder.replaceArrays(RetTy, llvm::DINodeArray(),
+                             CollectCXXTemplateParams(TSpecial, DefUnit));
   ReplaceMap.emplace_back(
       std::piecewise_construct, std::make_tuple(Ty),
       std::make_tuple(static_cast<llvm::Metadata *>(RetTy)));
@@ -1417,6 +1422,8 @@ llvm::DISubprogram *CGDebugInfo::CreateCXXMemberFunction(
     ContainingType = RecordTy;
   }
 
+  if (Method->isStatic())
+    Flags |= llvm::DINode::FlagStaticMember;
   if (Method->isImplicit())
     Flags |= llvm::DINode::FlagArtificial;
   Flags |= getAccessFlag(Method->getAccess(), Method->getParent());

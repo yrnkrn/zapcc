@@ -330,50 +330,42 @@ define float @bar() {
 ; CHECK-NEXT:    [[TMP0:%.*]] = load <4 x float>, <4 x float>* bitcast ([20 x float]* @arr to <4 x float>*), align 16
 ; CHECK-NEXT:    [[TMP1:%.*]] = load <4 x float>, <4 x float>* bitcast ([20 x float]* @arr1 to <4 x float>*), align 16
 ; CHECK-NEXT:    [[TMP2:%.*]] = fmul fast <4 x float> [[TMP1]], [[TMP0]]
-; CHECK-NEXT:    [[TMP3:%.*]] = extractelement <4 x float> [[TMP2]], i32 0
-; CHECK-NEXT:    [[TMP4:%.*]] = extractelement <4 x float> [[TMP2]], i32 1
-; CHECK-NEXT:    [[CMP4:%.*]] = fcmp fast ogt float [[TMP3]], [[TMP4]]
+; CHECK-NEXT:    [[CMP4:%.*]] = fcmp fast ogt float undef, undef
 ; CHECK-NEXT:    [[MAX_0_MUL3:%.*]] = select i1 [[CMP4]], float undef, float undef
-; CHECK-NEXT:    [[TMP5:%.*]] = extractelement <4 x float> [[TMP2]], i32 2
-; CHECK-NEXT:    [[CMP4_1:%.*]] = fcmp fast ogt float [[MAX_0_MUL3]], [[TMP5]]
+; CHECK-NEXT:    [[CMP4_1:%.*]] = fcmp fast ogt float [[MAX_0_MUL3]], undef
 ; CHECK-NEXT:    [[MAX_0_MUL3_1:%.*]] = select i1 [[CMP4_1]], float [[MAX_0_MUL3]], float undef
-; CHECK-NEXT:    [[TMP6:%.*]] = extractelement <4 x float> [[TMP2]], i32 3
-; CHECK-NEXT:    [[CMP4_2:%.*]] = fcmp fast ogt float [[MAX_0_MUL3_1]], [[TMP6]]
+; CHECK-NEXT:    [[CMP4_2:%.*]] = fcmp fast ogt float [[MAX_0_MUL3_1]], undef
 ; CHECK-NEXT:    [[RDX_SHUF:%.*]] = shufflevector <4 x float> [[TMP2]], <4 x float> undef, <4 x i32> <i32 2, i32 3, i32 undef, i32 undef>
 ; CHECK-NEXT:    [[RDX_MINMAX_CMP:%.*]] = fcmp fast ogt <4 x float> [[TMP2]], [[RDX_SHUF]]
 ; CHECK-NEXT:    [[RDX_MINMAX_SELECT:%.*]] = select <4 x i1> [[RDX_MINMAX_CMP]], <4 x float> [[TMP2]], <4 x float> [[RDX_SHUF]]
 ; CHECK-NEXT:    [[RDX_SHUF1:%.*]] = shufflevector <4 x float> [[RDX_MINMAX_SELECT]], <4 x float> undef, <4 x i32> <i32 1, i32 undef, i32 undef, i32 undef>
 ; CHECK-NEXT:    [[RDX_MINMAX_CMP2:%.*]] = fcmp fast ogt <4 x float> [[RDX_MINMAX_SELECT]], [[RDX_SHUF1]]
 ; CHECK-NEXT:    [[RDX_MINMAX_SELECT3:%.*]] = select <4 x i1> [[RDX_MINMAX_CMP2]], <4 x float> [[RDX_MINMAX_SELECT]], <4 x float> [[RDX_SHUF1]]
-; CHECK-NEXT:    [[TMP7:%.*]] = extractelement <4 x float> [[RDX_MINMAX_SELECT3]], i32 0
+; CHECK-NEXT:    [[TMP3:%.*]] = extractelement <4 x float> [[RDX_MINMAX_SELECT3]], i32 0
 ; CHECK-NEXT:    [[MAX_0_MUL3_2:%.*]] = select i1 [[CMP4_2]], float [[MAX_0_MUL3_1]], float undef
-; CHECK-NEXT:    store float [[TMP7]], float* @res, align 4
-; CHECK-NEXT:    ret float [[TMP7]]
+; CHECK-NEXT:    store float [[TMP3]], float* @res, align 4
+; CHECK-NEXT:    ret float [[TMP3]]
 ;
 ; THRESHOLD-LABEL: @bar(
 ; THRESHOLD-NEXT:  entry:
 ; THRESHOLD-NEXT:    [[TMP0:%.*]] = load <4 x float>, <4 x float>* bitcast ([20 x float]* @arr to <4 x float>*), align 16
 ; THRESHOLD-NEXT:    [[TMP1:%.*]] = load <4 x float>, <4 x float>* bitcast ([20 x float]* @arr1 to <4 x float>*), align 16
 ; THRESHOLD-NEXT:    [[TMP2:%.*]] = fmul fast <4 x float> [[TMP1]], [[TMP0]]
-; THRESHOLD-NEXT:    [[TMP3:%.*]] = extractelement <4 x float> [[TMP2]], i32 0
-; THRESHOLD-NEXT:    [[TMP4:%.*]] = extractelement <4 x float> [[TMP2]], i32 1
-; THRESHOLD-NEXT:    [[CMP4:%.*]] = fcmp fast ogt float [[TMP3]], [[TMP4]]
+; THRESHOLD-NEXT:    [[CMP4:%.*]] = fcmp fast ogt float undef, undef
 ; THRESHOLD-NEXT:    [[MAX_0_MUL3:%.*]] = select i1 [[CMP4]], float undef, float undef
-; THRESHOLD-NEXT:    [[TMP5:%.*]] = extractelement <4 x float> [[TMP2]], i32 2
-; THRESHOLD-NEXT:    [[CMP4_1:%.*]] = fcmp fast ogt float [[MAX_0_MUL3]], [[TMP5]]
+; THRESHOLD-NEXT:    [[CMP4_1:%.*]] = fcmp fast ogt float [[MAX_0_MUL3]], undef
 ; THRESHOLD-NEXT:    [[MAX_0_MUL3_1:%.*]] = select i1 [[CMP4_1]], float [[MAX_0_MUL3]], float undef
-; THRESHOLD-NEXT:    [[TMP6:%.*]] = extractelement <4 x float> [[TMP2]], i32 3
-; THRESHOLD-NEXT:    [[CMP4_2:%.*]] = fcmp fast ogt float [[MAX_0_MUL3_1]], [[TMP6]]
+; THRESHOLD-NEXT:    [[CMP4_2:%.*]] = fcmp fast ogt float [[MAX_0_MUL3_1]], undef
 ; THRESHOLD-NEXT:    [[RDX_SHUF:%.*]] = shufflevector <4 x float> [[TMP2]], <4 x float> undef, <4 x i32> <i32 2, i32 3, i32 undef, i32 undef>
 ; THRESHOLD-NEXT:    [[RDX_MINMAX_CMP:%.*]] = fcmp fast ogt <4 x float> [[TMP2]], [[RDX_SHUF]]
 ; THRESHOLD-NEXT:    [[RDX_MINMAX_SELECT:%.*]] = select <4 x i1> [[RDX_MINMAX_CMP]], <4 x float> [[TMP2]], <4 x float> [[RDX_SHUF]]
 ; THRESHOLD-NEXT:    [[RDX_SHUF1:%.*]] = shufflevector <4 x float> [[RDX_MINMAX_SELECT]], <4 x float> undef, <4 x i32> <i32 1, i32 undef, i32 undef, i32 undef>
 ; THRESHOLD-NEXT:    [[RDX_MINMAX_CMP2:%.*]] = fcmp fast ogt <4 x float> [[RDX_MINMAX_SELECT]], [[RDX_SHUF1]]
 ; THRESHOLD-NEXT:    [[RDX_MINMAX_SELECT3:%.*]] = select <4 x i1> [[RDX_MINMAX_CMP2]], <4 x float> [[RDX_MINMAX_SELECT]], <4 x float> [[RDX_SHUF1]]
-; THRESHOLD-NEXT:    [[TMP7:%.*]] = extractelement <4 x float> [[RDX_MINMAX_SELECT3]], i32 0
+; THRESHOLD-NEXT:    [[TMP3:%.*]] = extractelement <4 x float> [[RDX_MINMAX_SELECT3]], i32 0
 ; THRESHOLD-NEXT:    [[MAX_0_MUL3_2:%.*]] = select i1 [[CMP4_2]], float [[MAX_0_MUL3_1]], float undef
-; THRESHOLD-NEXT:    store float [[TMP7]], float* @res, align 4
-; THRESHOLD-NEXT:    ret float [[TMP7]]
+; THRESHOLD-NEXT:    store float [[TMP3]], float* @res, align 4
+; THRESHOLD-NEXT:    ret float [[TMP3]]
 ;
 entry:
   %0 = load float, float* getelementptr inbounds ([20 x float], [20 x float]* @arr, i64 0, i64 0), align 16

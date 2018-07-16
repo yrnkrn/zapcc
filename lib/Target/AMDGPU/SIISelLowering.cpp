@@ -468,6 +468,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v2i16, Custom);
     setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v2f16, Custom);
 
+    setOperationAction(ISD::ANY_EXTEND, MVT::v2i32, Expand);
     setOperationAction(ISD::ZERO_EXTEND, MVT::v2i32, Expand);
     setOperationAction(ISD::SIGN_EXTEND, MVT::v2i32, Expand);
     setOperationAction(ISD::FP_EXTEND, MVT::v2f32, Expand);
@@ -502,6 +503,7 @@ SITargetLowering::SITargetLowering(const TargetMachine &TM,
   setTargetDAGCombine(ISD::SCALAR_TO_VECTOR);
   setTargetDAGCombine(ISD::ZERO_EXTEND);
   setTargetDAGCombine(ISD::EXTRACT_VECTOR_ELT);
+  setTargetDAGCombine(ISD::BUILD_VECTOR);
 
   // All memory operations. Some folding on the pointer operand is done to help
   // matching the constant offsets in the addressing modes.
@@ -2148,10 +2150,12 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
   MachineFrameInfo &MFI = MF.getFrameInfo();
   SmallVector<std::pair<unsigned, SDValue>, 8> RegsToPass;
 
+  SDValue CallerSavedFP;
+
   // Adjust the stack pointer for the new arguments...
   // These operations are automatically eliminated by the prolog/epilog pass
   if (!IsSibCall) {
-    Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
+    Chain = DAG.getCALLSEQ_START(Chain, 0, 0, DL);
 
     unsigned OffsetReg = Info->getScratchWaveOffsetReg();
 
@@ -2164,6 +2168,13 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
     SDValue ScratchWaveOffsetReg
       = DAG.getCopyFromReg(Chain, DL, OffsetReg, MVT::i32);
     RegsToPass.emplace_back(AMDGPU::SGPR4, ScratchWaveOffsetReg);
+
+    if (!Info->isEntryFunction()) {
+      // Avoid clobbering this function's FP value. In the current convention
+      // callee will overwrite this, so do save/restore around the call site.
+      CallerSavedFP = DAG.getCopyFromReg(Chain, DL,
+                                         Info->getFrameOffsetReg(), MVT::i32);
+    }
   }
 
   // Stack pointer relative accesses are done by changing the offset SGPR. This
@@ -2344,8 +2355,14 @@ SDValue SITargetLowering::LowerCall(CallLoweringInfo &CLI,
   Chain = Call.getValue(0);
   InFlag = Call.getValue(1);
 
-  uint64_t CalleePopBytes = 0;
-  Chain = DAG.getCALLSEQ_END(Chain, DAG.getTargetConstant(NumBytes, DL, MVT::i32),
+  if (CallerSavedFP) {
+    SDValue FPReg = DAG.getRegister(Info->getFrameOffsetReg(), MVT::i32);
+    Chain = DAG.getCopyToReg(Chain, DL, FPReg, CallerSavedFP, InFlag);
+    InFlag = Chain.getValue(1);
+  }
+
+  uint64_t CalleePopBytes = NumBytes;
+  Chain = DAG.getCALLSEQ_END(Chain, DAG.getTargetConstant(0, DL, MVT::i32),
                              DAG.getTargetConstant(CalleePopBytes, DL, MVT::i32),
                              InFlag, DL);
   if (!Ins.empty())
@@ -2996,15 +3013,18 @@ MachineBasicBlock *SITargetLowering::EmitInstrWithCustomInserter(
 
     unsigned DstLo = MRI.createVirtualRegister(&AMDGPU::VGPR_32RegClass);
     unsigned DstHi = MRI.createVirtualRegister(&AMDGPU::VGPR_32RegClass);
+    unsigned SrcCondCopy = MRI.createVirtualRegister(&AMDGPU::SReg_64_XEXECRegClass);
 
+    BuildMI(*BB, MI, DL, TII->get(AMDGPU::COPY), SrcCondCopy)
+      .addReg(SrcCond);
     BuildMI(*BB, MI, DL, TII->get(AMDGPU::V_CNDMASK_B32_e64), DstLo)
       .addReg(Src0, 0, AMDGPU::sub0)
       .addReg(Src1, 0, AMDGPU::sub0)
-      .addReg(SrcCond);
+      .addReg(SrcCondCopy);
     BuildMI(*BB, MI, DL, TII->get(AMDGPU::V_CNDMASK_B32_e64), DstHi)
       .addReg(Src0, 0, AMDGPU::sub1)
       .addReg(Src1, 0, AMDGPU::sub1)
-      .addReg(SrcCond);
+      .addReg(SrcCondCopy);
 
     BuildMI(*BB, MI, DL, TII->get(AMDGPU::REG_SEQUENCE), Dst)
       .addReg(DstLo)
@@ -5838,7 +5858,7 @@ SDValue SITargetLowering::performExtractVectorEltCombine(
   SDNode *N, DAGCombinerInfo &DCI) const {
   SDValue Vec = N->getOperand(0);
 
-  SelectionDAG &DAG= DCI.DAG;
+  SelectionDAG &DAG = DCI.DAG;
   if (Vec.getOpcode() == ISD::FNEG && allUsesHaveSourceMods(N)) {
     SDLoc SL(N);
     EVT EltVT = N->getValueType(0);
@@ -5851,6 +5871,47 @@ SDValue SITargetLowering::performExtractVectorEltCombine(
   return SDValue();
 }
 
+static bool convertBuildVectorCastElt(SelectionDAG &DAG,
+                                      SDValue &Lo, SDValue &Hi) {
+  if (Hi.getOpcode() == ISD::BITCAST &&
+      Hi.getOperand(0).getValueType() == MVT::f16 &&
+      (isa<ConstantSDNode>(Lo) || Lo.isUndef())) {
+    Lo = DAG.getNode(ISD::BITCAST, SDLoc(Lo), MVT::f16, Lo);
+    Hi = Hi.getOperand(0);
+    return true;
+  }
+
+  return false;
+}
+
+SDValue SITargetLowering::performBuildVectorCombine(
+  SDNode *N, DAGCombinerInfo &DCI) const {
+  SDLoc SL(N);
+
+  if (!isTypeLegal(MVT::v2i16))
+    return SDValue();
+  SelectionDAG &DAG = DCI.DAG;
+  EVT VT = N->getValueType(0);
+
+  if (VT == MVT::v2i16) {
+    SDValue Lo = N->getOperand(0);
+    SDValue Hi = N->getOperand(1);
+
+    // v2i16 build_vector (const|undef), (bitcast f16:$x)
+    // -> bitcast (v2f16 build_vector const|undef, $x
+    if (convertBuildVectorCastElt(DAG, Lo, Hi)) {
+      SDValue NewVec = DAG.getBuildVector(MVT::v2f16, SL, { Lo, Hi  });
+      return DAG.getNode(ISD::BITCAST, SL, VT, NewVec);
+    }
+
+    if (convertBuildVectorCastElt(DAG, Hi, Lo)) {
+      SDValue NewVec = DAG.getBuildVector(MVT::v2f16, SL, { Hi, Lo  });
+      return DAG.getNode(ISD::BITCAST, SL, VT, NewVec);
+    }
+  }
+
+  return SDValue();
+}
 
 unsigned SITargetLowering::getFusedOpcode(const SelectionDAG &DAG,
                                           const SDNode *N0,
@@ -6272,6 +6333,8 @@ SDValue SITargetLowering::PerformDAGCombine(SDNode *N,
   }
   case ISD::EXTRACT_VECTOR_ELT:
     return performExtractVectorEltCombine(N, DCI);
+  case ISD::BUILD_VECTOR:
+    return performBuildVectorCombine(N, DCI);
   }
   return AMDGPUTargetLowering::PerformDAGCombine(N, DCI);
 }

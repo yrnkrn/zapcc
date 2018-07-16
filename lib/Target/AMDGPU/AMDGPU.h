@@ -23,6 +23,7 @@ class ModulePass;
 class Pass;
 class Target;
 class TargetMachine;
+class TargetOptions;
 class PassRegistry;
 class Module;
 
@@ -52,7 +53,7 @@ FunctionPass *createSIDebuggerInsertNopsPass();
 FunctionPass *createSIInsertWaitsPass();
 FunctionPass *createSIInsertWaitcntsPass();
 FunctionPass *createSIFixWWMLivenessPass();
-FunctionPass *createAMDGPUSimplifyLibCallsPass();
+FunctionPass *createAMDGPUSimplifyLibCallsPass(const TargetOptions &);
 FunctionPass *createAMDGPUUseNativeCallsPass();
 FunctionPass *createAMDGPUCodeGenPreparePass();
 FunctionPass *createAMDGPUMachineCFGStructurizerPass();
@@ -181,6 +182,9 @@ ImmutablePass *createAMDGPUAAWrapperPass();
 void initializeAMDGPUAAWrapperPassPass(PassRegistry&);
 
 void initializeAMDGPUArgumentUsageInfoPass(PassRegistry &);
+
+Pass *createAMDGPUFunctionInliningPass();
+void initializeAMDGPUInlinerPass(PassRegistry&);
 
 Target &getTheAMDGPUTarget();
 Target &getTheGCNTarget();

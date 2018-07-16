@@ -15,12 +15,14 @@
 #define LLVM_COV_SOURCECOVERAGEVIEW_H
 
 #include "CoverageViewOptions.h"
+#include "CoverageSummaryInfo.h"
 #include "llvm/ProfileData/Coverage/CoverageMapping.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include <vector>
 
 namespace llvm {
 
+class CoverageFiltersMatchAll;
 class SourceCoverageView;
 
 /// \brief A view that represents a macro or include expansion.
@@ -62,20 +64,6 @@ struct InstantiationView {
                         const InstantiationView &RHS) {
     return LHS.Line < RHS.Line;
   }
-};
-
-/// \brief Coverage statistics for a single line.
-struct LineCoverageStats {
-  uint64_t ExecutionCount;
-  bool HasMultipleRegions;
-  bool Mapped;
-
-  LineCoverageStats(ArrayRef<const coverage::CoverageSegment *> LineSegments,
-                    const coverage::CoverageSegment *WrappedSegment);
-
-  bool isMapped() const { return Mapped; }
-
-  bool hasMultipleRegions() const { return HasMultipleRegions; }
 };
 
 /// \brief A file manager that handles format-aware file creation.
@@ -124,7 +112,8 @@ public:
 
   /// \brief Create an index which lists reports for the given source files.
   virtual Error createIndexFile(ArrayRef<std::string> SourceFiles,
-                                const coverage::CoverageMapping &Coverage) = 0;
+                                const coverage::CoverageMapping &Coverage,
+                                const CoverageFiltersMatchAll &Filters) = 0;
 
   /// @}
 };
@@ -271,7 +260,7 @@ public:
   /// \brief Print the code coverage information for a specific portion of a
   /// source file to the output stream.
   void print(raw_ostream &OS, bool WholeFile, bool ShowSourceName,
-             unsigned ViewDepth = 0);
+             bool ShowTitle, unsigned ViewDepth = 0);
 };
 
 } // namespace llvm

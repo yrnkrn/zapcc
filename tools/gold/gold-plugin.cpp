@@ -22,6 +22,7 @@
 #include "llvm/LTO/Caching.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Error.h"
+#include "llvm/Support/CachePruning.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/ManagedStatic.h"
@@ -174,12 +175,16 @@ namespace options {
   static std::string thinlto_object_suffix_replace;
   // Optional path to a directory for caching ThinLTO objects.
   static std::string cache_dir;
+  // Optional pruning policy for ThinLTO caches.
+  static std::string cache_policy;
   // Additional options to pass into the code generator.
   // Note: This array will contain all plugin options which are not claimed
   // as plugin exclusive to pass to the code generator.
   static std::vector<const char *> extra;
   // Sample profile file path
   static std::string sample_profile;
+  // New pass manager
+  static bool new_pass_manager = false;
 
   static void process_plugin_option(const char *opt_)
   {
@@ -222,6 +227,8 @@ namespace options {
                 "thinlto-object-suffix-replace expects 'old;new' format");
     } else if (opt.startswith("cache-dir=")) {
       cache_dir = opt.substr(strlen("cache-dir="));
+    } else if (opt.startswith("cache-policy=")) {
+      cache_policy = opt.substr(strlen("cache-policy="));
     } else if (opt.size() == 2 && opt[0] == 'O') {
       if (opt[1] < '0' || opt[1] > '3')
         message(LDPL_FATAL, "Optimization level must be between 0 and 3");
@@ -237,6 +244,8 @@ namespace options {
       DisableVerify = true;
     } else if (opt.startswith("sample-profile=")) {
       sample_profile= opt.substr(strlen("sample-profile="));
+    } else if (opt == "new-pass-manager") {
+      new_pass_manager = true;
     } else {
       // Save this option to pass to the code generator.
       // ParseCommandLineOptions() expects argv[0] to be program name. Lazily
@@ -603,16 +612,11 @@ static std::string getThinLTOObjectFileName(StringRef Path, StringRef OldSuffix,
   return NewNewPath;
 }
 
-static bool isAlpha(char C) {
-  return ('a' <= C && C <= 'z') || ('A' <= C && C <= 'Z') || C == '_';
-}
-
-static bool isAlnum(char C) { return isAlpha(C) || ('0' <= C && C <= '9'); }
-
 // Returns true if S is valid as a C language identifier.
 static bool isValidCIdentifier(StringRef S) {
-  return !S.empty() && isAlpha(S[0]) &&
-         std::all_of(S.begin() + 1, S.end(), isAlnum);
+  return !S.empty() && (isAlpha(S[0]) || S[0] == '_') &&
+         std::all_of(S.begin() + 1, S.end(),
+                     [](char C) { return C == '_' || isAlnum(C); });
 }
 
 static void addModule(LTO &Lto, claimed_file &F, const void *View,
@@ -805,6 +809,9 @@ static std::unique_ptr<LTO> createLTO() {
   if (!options::sample_profile.empty())
     Conf.SampleProfile = options::sample_profile;
 
+  // Use new pass manager if set in driver
+  Conf.UseNewPM = options::new_pass_manager;
+
   return llvm::make_unique<LTO>(std::move(Conf), Backend,
                                 options::ParallelCodeGenParallelismLevel);
 }
@@ -969,6 +976,12 @@ static ld_plugin_status cleanup_hook(void) {
     if (EC)
       message(LDPL_ERROR, "Failed to delete '%s': %s", Name.c_str(),
               EC.message().c_str());
+  }
+
+  // Prune cache
+  if (!options::cache_policy.empty()) {
+    CachePruningPolicy policy = check(parseCachePruningPolicy(options::cache_policy));
+    pruneCache(options::cache_dir, policy);
   }
 
   return LDPS_OK;

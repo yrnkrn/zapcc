@@ -21,6 +21,56 @@ include "llvm/IR/Intrinsics.td"
 
 class RegisterClass; // Forward def
 
+class HwMode<string FS> {
+  // A string representing subtarget features that turn on this HW mode.
+  // For example, "+feat1,-feat2" will indicate that the mode is active
+  // when "feat1" is enabled and "feat2" is disabled at the same time.
+  // Any other features are not checked.
+  // When multiple modes are used, they should be mutually exclusive,
+  // otherwise the results are unpredictable.
+  string Features = FS;
+}
+
+// A special mode recognized by tablegen. This mode is considered active
+// when no other mode is active. For targets that do not use specific hw
+// modes, this is the only mode.
+def DefaultMode : HwMode<"">;
+
+// A class used to associate objects with HW modes. It is only intended to
+// be used as a base class, where the derived class should contain a member
+// "Objects", which is a list of the same length as the list of modes.
+// The n-th element on the Objects list will be associated with the n-th
+// element on the Modes list.
+class HwModeSelect<list<HwMode> Ms> {
+  list<HwMode> Modes = Ms;
+}
+
+// A common class that implements a counterpart of ValueType, which is
+// dependent on a HW mode. This class inherits from ValueType itself,
+// which makes it possible to use objects of this class where ValueType
+// objects could be used. This is specifically applicable to selection
+// patterns.
+class ValueTypeByHwMode<list<HwMode> Ms, list<ValueType> Ts>
+    : HwModeSelect<Ms>, ValueType<0, 0> {
+  // The length of this list must be the same as the length of Ms.
+  list<ValueType> Objects = Ts;
+}
+
+// A class representing the register size, spill size and spill alignment
+// in bits of a register.
+class RegInfo<int RS, int SS, int SA> {
+  int RegSize = RS;         // Register size in bits.
+  int SpillSize = SS;       // Spill slot size in bits.
+  int SpillAlignment = SA;  // Spill slot alignment in bits.
+}
+
+// The register size/alignment information, parameterized by a HW mode.
+class RegInfoByHwMode<list<HwMode> Ms = [], list<RegInfo> Ts = []>
+    : HwModeSelect<Ms> {
+  // The length of this list must be the same as the length of Ms.
+  list<RegInfo> Objects = Ts;
+}
+
 // SubRegIndex - Use instances of SubRegIndex to identify subregisters.
 class SubRegIndex<int size, int offset = 0> {
   string Namespace = "";
@@ -155,6 +205,9 @@ class RegisterClass<string namespace, list<ValueType> regTypes, int alignment,
                     dag regList, RegAltNameIndex idx = NoRegAltName>
   : DAGOperand {
   string Namespace = namespace;
+
+  // The register size/alignment information, parameterized by a HW mode.
+  RegInfoByHwMode RegInfos;
 
   // RegType - Specify the list ValueType of the registers in this register
   // class.  Note that all registers in a register class must have the same
@@ -624,6 +677,10 @@ class AsmOperandClass {
   // diagnostic. The target AsmParser maps these codes to text.
   string DiagnosticType = "";
 
+  /// A diagnostic message to emit when an invalid value is provided for this
+  /// operand.
+  string DiagnosticString = "";
+
   /// Set to 1 if this operand is optional and not always required. Typically,
   /// the AsmParser will emit an error when it finishes parsing an
   /// instruction if it hasn't matched all the operands yet.  However, this
@@ -996,6 +1053,7 @@ def PATCHABLE_RET : Instruction {
   let AsmString = "# XRay Function Patchable RET.";
   let usesCustomInserter = 1;
   let hasSideEffects = 1;
+  let isTerminator = 1;
   let isReturn = 1;
 }
 def PATCHABLE_FUNCTION_EXIT : Instruction {
@@ -1072,6 +1130,14 @@ class AsmParser {
   // HasMnemonicFirst - Set to false if target instructions don't always
   // start with a mnemonic as the first token.
   bit HasMnemonicFirst = 1;
+
+  // ReportMultipleNearMisses -
+  // When 0, the assembly matcher reports an error for one encoding or operand
+  // that did not match the parsed instruction.
+  // When 1, the assmebly matcher returns a list of encodings that were close
+  // to matching the parsed instruction, so to allow more detailed error
+  // messages.
+  bit ReportMultipleNearMisses = 0;
 }
 def DefaultAsmParser : AsmParser;
 

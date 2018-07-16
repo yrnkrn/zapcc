@@ -299,10 +299,7 @@ public:
   }
 
   unsigned getStructNumBases() const {
-#if 0
-    // FIXME: restore after https://bugs.llvm.org//show_bug.cgi?id=32864
     assert(isStruct() && "Invalid accessor");
-#endif
     return ((const StructData*)(const char*)Data.buffer)->NumBases;
   }
   unsigned getStructNumFields() const {
@@ -310,17 +307,11 @@ public:
     return ((const StructData*)(const char*)Data.buffer)->NumFields;
   }
   APValue &getStructBase(unsigned i) {
-#if 0
-    // FIXME: restore after https://bugs.llvm.org//show_bug.cgi?id=32864
     assert(isStruct() && "Invalid accessor");
-#endif
     return ((StructData*)(char*)Data.buffer)->Elts[i];
   }
   APValue &getStructField(unsigned i) {
-#if 0
-    // FIXME: restore after https://bugs.llvm.org//show_bug.cgi?id=32864
     assert(isStruct() && "Invalid accessor");
-#endif
     return ((StructData*)(char*)Data.buffer)->Elts[getStructNumBases() + i];
   }
   const APValue &getStructBase(unsigned i) const {

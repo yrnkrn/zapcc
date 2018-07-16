@@ -502,6 +502,16 @@ static bool functionHasLines(Function &F) {
   return false;
 }
 
+static bool shouldKeepInEntry(BasicBlock::iterator It) {
+	if (isa<AllocaInst>(*It)) return true;
+	if (isa<DbgInfoIntrinsic>(*It)) return true;
+	if (auto *II = dyn_cast<IntrinsicInst>(It)) {
+		if (II->getIntrinsicID() == llvm::Intrinsic::localescape) return true;
+	}
+
+	return false;
+}
+
 void GCOVProfiler::emitProfileNotes() {
   NamedMDNode *CU_Nodes = M->getNamedMetadata("llvm.dbg.cu");
   if (!CU_Nodes) return;
@@ -520,6 +530,12 @@ void GCOVProfiler::emitProfileNotes() {
 
     std::error_code EC;
     raw_fd_ostream out(mangleName(CU, GCovFileType::GCNO), EC, sys::fs::F_None);
+    if (EC) {
+      Ctx->emitError(Twine("failed to open coverage notes file for writing: ") +
+                     EC.message());
+      continue;
+    }
+
     std::string EdgeDestinations;
 
     unsigned FunctionIdent = 0;
@@ -532,7 +548,7 @@ void GCOVProfiler::emitProfileNotes() {
       // single successor, so split the entry block to make sure of that.
       BasicBlock &EntryBlock = F.getEntryBlock();
       BasicBlock::iterator It = EntryBlock.begin();
-      while (isa<AllocaInst>(*It) || isa<DbgInfoIntrinsic>(*It))
+      while (shouldKeepInEntry(It))
         ++It;
       EntryBlock.splitBasicBlock(It);
 

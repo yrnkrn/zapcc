@@ -11,13 +11,13 @@
 #include "RewriterTestContext.h"
 #include "clang/Tooling/Refactoring.h"
 #include "clang/Tooling/Refactoring/RefactoringActionRules.h"
+#include "clang/Tooling/Refactoring/Rename/SymbolName.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/Support/Errc.h"
 #include "gtest/gtest.h"
 
 using namespace clang;
 using namespace tooling;
-using namespace refactoring_action_rules;
 
 namespace {
 
@@ -41,6 +41,9 @@ createReplacements(const std::unique_ptr<RefactoringActionRule> &Rule,
     void handle(AtomicChanges SourceReplacements) override {
       Result = std::move(SourceReplacements);
     }
+    void handle(SymbolOccurrences Occurrences) override {
+      RefactoringResultConsumer::handle(std::move(Occurrences));
+    }
 
   public:
     Optional<Expected<AtomicChanges>> Result;
@@ -52,27 +55,39 @@ createReplacements(const std::unique_ptr<RefactoringActionRule> &Rule,
 }
 
 TEST_F(RefactoringActionRulesTest, MyFirstRefactoringRule) {
-  auto ReplaceAWithB =
-      [](std::pair<selection::SourceSelectionRange, int> Selection)
-      -> Expected<AtomicChanges> {
-    const SourceManager &SM = Selection.first.getSources();
-    SourceLocation Loc = Selection.first.getRange().getBegin().getLocWithOffset(
-        Selection.second);
-    AtomicChange Change(SM, Loc);
-    llvm::Error E = Change.replace(SM, Loc, 1, "b");
-    if (E)
-      return std::move(E);
-    return AtomicChanges{Change};
-  };
-  class SelectionRequirement : public selection::Requirement {
+  class ReplaceAWithB : public SourceChangeRefactoringRule {
+    std::pair<SourceRange, int> Selection;
+
   public:
-    std::pair<selection::SourceSelectionRange, int>
-    evaluateSelection(selection::SourceSelectionRange Selection) const {
-      return std::make_pair(Selection, 20);
+    ReplaceAWithB(std::pair<SourceRange, int> Selection)
+        : Selection(Selection) {}
+
+    Expected<AtomicChanges>
+    createSourceReplacements(RefactoringRuleContext &Context) {
+      const SourceManager &SM = Context.getSources();
+      SourceLocation Loc =
+          Selection.first.getBegin().getLocWithOffset(Selection.second);
+      AtomicChange Change(SM, Loc);
+      llvm::Error E = Change.replace(SM, Loc, 1, "b");
+      if (E)
+        return std::move(E);
+      return AtomicChanges{Change};
     }
   };
-  auto Rule = createRefactoringRule(ReplaceAWithB,
-                                    requiredSelection(SelectionRequirement()));
+
+  class SelectionRequirement : public SourceRangeSelectionRequirement {
+  public:
+    Expected<std::pair<SourceRange, int>>
+    evaluate(RefactoringRuleContext &Context) const {
+      Expected<SourceRange> R =
+          SourceRangeSelectionRequirement::evaluate(Context);
+      if (!R)
+        return R.takeError();
+      return std::make_pair(*R, 20);
+    }
+  };
+  auto Rule =
+      createRefactoringActionRule<ReplaceAWithB>(SelectionRequirement());
 
   // When the requirements are satisifed, the rule's function must be invoked.
   {
@@ -117,21 +132,23 @@ TEST_F(RefactoringActionRulesTest, MyFirstRefactoringRule) {
     llvm::handleAllErrors(
         ErrorOrResult.takeError(),
         [&](llvm::StringError &Error) { Message = Error.getMessage(); });
-    EXPECT_EQ(Message, "refactoring action can't be initiated with the "
-                       "specified selection range");
+    EXPECT_EQ(Message,
+              "refactoring action can't be initiated without a selection");
   }
 }
 
 TEST_F(RefactoringActionRulesTest, ReturnError) {
-  Expected<AtomicChanges> (*Func)(selection::SourceSelectionRange) =
-      [](selection::SourceSelectionRange) -> Expected<AtomicChanges> {
-    return llvm::make_error<llvm::StringError>(
-        "Error", llvm::make_error_code(llvm::errc::invalid_argument));
+  class ErrorRule : public SourceChangeRefactoringRule {
+  public:
+    ErrorRule(SourceRange R) {}
+    Expected<AtomicChanges> createSourceReplacements(RefactoringRuleContext &) {
+      return llvm::make_error<llvm::StringError>(
+          "Error", llvm::make_error_code(llvm::errc::invalid_argument));
+    }
   };
-  auto Rule = createRefactoringRule(
-      Func, requiredSelection(
-                selection::identity<selection::SourceSelectionRange>()));
 
+  auto Rule =
+      createRefactoringActionRule<ErrorRule>(SourceRangeSelectionRequirement());
   RefactoringRuleContext RefContext(Context.Sources);
   SourceLocation Cursor =
       Context.Sources.getLocForStartOfFile(Context.Sources.getMainFileID());
@@ -146,33 +163,59 @@ TEST_F(RefactoringActionRulesTest, ReturnError) {
   EXPECT_EQ(Message, "Error");
 }
 
-TEST_F(RefactoringActionRulesTest, ReturnInitiationDiagnostic) {
-  RefactoringRuleContext RefContext(Context.Sources);
-  class SelectionRequirement : public selection::Requirement {
+Optional<SymbolOccurrences> findOccurrences(RefactoringActionRule &Rule,
+                                            RefactoringRuleContext &Context) {
+  class Consumer final : public RefactoringResultConsumer {
+    void handleError(llvm::Error) override {}
+    void handle(SymbolOccurrences Occurrences) override {
+      Result = std::move(Occurrences);
+    }
+    void handle(AtomicChanges Changes) override {
+      RefactoringResultConsumer::handle(std::move(Changes));
+    }
+
   public:
-    Expected<Optional<int>>
-    evaluateSelection(selection::SourceSelectionRange Selection) const {
-      return llvm::make_error<llvm::StringError>(
-          "bad selection", llvm::make_error_code(llvm::errc::invalid_argument));
+    Optional<SymbolOccurrences> Result;
+  };
+
+  Consumer C;
+  Rule.invoke(C, Context);
+  return std::move(C.Result);
+}
+
+TEST_F(RefactoringActionRulesTest, ReturnSymbolOccurrences) {
+  class FindOccurrences : public FindSymbolOccurrencesRefactoringRule {
+    SourceRange Selection;
+
+  public:
+    FindOccurrences(SourceRange Selection) : Selection(Selection) {}
+
+    Expected<SymbolOccurrences>
+    findSymbolOccurrences(RefactoringRuleContext &) override {
+      SymbolOccurrences Occurrences;
+      Occurrences.push_back(SymbolOccurrence(SymbolName("test"),
+                                             SymbolOccurrence::MatchingSymbol,
+                                             Selection.getBegin()));
+      return std::move(Occurrences);
     }
   };
-  auto Rule = createRefactoringRule(
-      [](int) -> Expected<AtomicChanges> {
-        llvm::report_fatal_error("Should not run!");
-      },
-      requiredSelection(SelectionRequirement()));
 
+  auto Rule = createRefactoringActionRule<FindOccurrences>(
+      SourceRangeSelectionRequirement());
+
+  RefactoringRuleContext RefContext(Context.Sources);
   SourceLocation Cursor =
       Context.Sources.getLocForStartOfFile(Context.Sources.getMainFileID());
   RefContext.setSelectionRange({Cursor, Cursor});
-  Expected<AtomicChanges> Result = createReplacements(Rule, RefContext);
+  Optional<SymbolOccurrences> Result = findOccurrences(*Rule, RefContext);
 
-  ASSERT_TRUE(!Result);
-  std::string Message;
-  llvm::handleAllErrors(Result.takeError(), [&](llvm::StringError &Error) {
-    Message = Error.getMessage();
-  });
-  EXPECT_EQ(Message, "bad selection");
+  ASSERT_FALSE(!Result);
+  SymbolOccurrences Occurrences = std::move(*Result);
+  EXPECT_EQ(Occurrences.size(), 1u);
+  EXPECT_EQ(Occurrences[0].getKind(), SymbolOccurrence::MatchingSymbol);
+  EXPECT_EQ(Occurrences[0].getNameRanges().size(), 1u);
+  EXPECT_EQ(Occurrences[0].getNameRanges()[0],
+            SourceRange(Cursor, Cursor.getLocWithOffset(strlen("test"))));
 }
 
 } // end anonymous namespace

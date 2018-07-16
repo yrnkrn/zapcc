@@ -473,10 +473,12 @@ class DIFile : public DIScope {
   friend class MDNode;
 
 public:
+  // These values must be explictly set, as they end up in the final object
+  // file.
   enum ChecksumKind {
-    CSK_None,
-    CSK_MD5,
-    CSK_SHA1,
+    CSK_None = 0,
+    CSK_MD5 = 1,
+    CSK_SHA1 = 2,
     CSK_Last = CSK_SHA1 // Should be last enumeration.
   };
 
@@ -510,7 +512,7 @@ public:
                              ChecksumKind CSK = CSK_None,
                              StringRef CS = StringRef()),
                     (Filename, Directory, CSK, CS))
-  DEFINE_MDNODE_GET(DIFile, (MDString *Filename, MDString *Directory,
+  DEFINE_MDNODE_GET(DIFile, (MDString * Filename, MDString *Directory,
                              ChecksumKind CSK = CSK_None,
                              MDString *CS = nullptr),
                     (Filename, Directory, CSK, CS))
@@ -1073,16 +1075,17 @@ private:
   uint64_t DWOId;
   bool SplitDebugInlining;
   bool DebugInfoForProfiling;
+  bool GnuPubnames;
 
   DICompileUnit(LLVMContext &C, StorageType Storage, unsigned SourceLanguage,
                 bool IsOptimized, unsigned RuntimeVersion,
                 unsigned EmissionKind, uint64_t DWOId, bool SplitDebugInlining,
-                bool DebugInfoForProfiling, ArrayRef<Metadata *> Ops)
+                bool DebugInfoForProfiling, bool GnuPubnames, ArrayRef<Metadata *> Ops)
       : DIScope(C, DICompileUnitKind, Storage, dwarf::DW_TAG_compile_unit, Ops),
         SourceLanguage(SourceLanguage), IsOptimized(IsOptimized),
         RuntimeVersion(RuntimeVersion), EmissionKind(EmissionKind),
         DWOId(DWOId), SplitDebugInlining(SplitDebugInlining),
-        DebugInfoForProfiling(DebugInfoForProfiling) {
+        DebugInfoForProfiling(DebugInfoForProfiling), GnuPubnames(GnuPubnames) {
     assert(Storage != Uniqued);
   }
   ~DICompileUnit() = default;
@@ -1096,15 +1099,14 @@ private:
           DIGlobalVariableExpressionArray GlobalVariables,
           DIImportedEntityArray ImportedEntities, DIMacroNodeArray Macros,
           uint64_t DWOId, bool SplitDebugInlining, bool DebugInfoForProfiling,
-          StorageType Storage, bool ShouldCreate = true) {
-    return getImpl(Context, SourceLanguage, File,
-                   getCanonicalMDString(Context, Producer), IsOptimized,
-                   getCanonicalMDString(Context, Flags), RuntimeVersion,
-                   getCanonicalMDString(Context, SplitDebugFilename),
-                   EmissionKind, EnumTypes.get(), RetainedTypes.get(),
-                   GlobalVariables.get(), ImportedEntities.get(), Macros.get(),
-                   DWOId, SplitDebugInlining, DebugInfoForProfiling, Storage,
-                   ShouldCreate);
+          bool GnuPubnames, StorageType Storage, bool ShouldCreate = true) {
+    return getImpl(
+        Context, SourceLanguage, File, getCanonicalMDString(Context, Producer),
+        IsOptimized, getCanonicalMDString(Context, Flags), RuntimeVersion,
+        getCanonicalMDString(Context, SplitDebugFilename), EmissionKind,
+        EnumTypes.get(), RetainedTypes.get(), GlobalVariables.get(),
+        ImportedEntities.get(), Macros.get(), DWOId, SplitDebugInlining,
+        DebugInfoForProfiling, GnuPubnames, Storage, ShouldCreate);
   }
   static DICompileUnit *
   getImpl(LLVMContext &Context, unsigned SourceLanguage, Metadata *File,
@@ -1113,7 +1115,7 @@ private:
           unsigned EmissionKind, Metadata *EnumTypes, Metadata *RetainedTypes,
           Metadata *GlobalVariables, Metadata *ImportedEntities,
           Metadata *Macros, uint64_t DWOId, bool SplitDebugInlining,
-          bool DebugInfoForProfiling, StorageType Storage,
+          bool DebugInfoForProfiling, bool GnuPubnames, StorageType Storage,
           bool ShouldCreate = true);
 
   TempDICompileUnit cloneImpl() const {
@@ -1123,7 +1125,7 @@ private:
                         getEmissionKind(), getEnumTypes(), getRetainedTypes(),
                         getGlobalVariables(), getImportedEntities(),
                         getMacros(), DWOId, getSplitDebugInlining(),
-                        getDebugInfoForProfiling());
+                        getDebugInfoForProfiling(), getGnuPubnames());
   }
 
 public:
@@ -1138,11 +1140,12 @@ public:
        DICompositeTypeArray EnumTypes, DIScopeArray RetainedTypes,
        DIGlobalVariableExpressionArray GlobalVariables,
        DIImportedEntityArray ImportedEntities, DIMacroNodeArray Macros,
-       uint64_t DWOId, bool SplitDebugInlining, bool DebugInfoForProfiling),
+       uint64_t DWOId, bool SplitDebugInlining, bool DebugInfoForProfiling,
+       bool GnuPubnames),
       (SourceLanguage, File, Producer, IsOptimized, Flags, RuntimeVersion,
        SplitDebugFilename, EmissionKind, EnumTypes, RetainedTypes,
        GlobalVariables, ImportedEntities, Macros, DWOId, SplitDebugInlining,
-       DebugInfoForProfiling))
+       DebugInfoForProfiling, GnuPubnames))
   DEFINE_MDNODE_GET_DISTINCT_TEMPORARY(
       DICompileUnit,
       (unsigned SourceLanguage, Metadata *File, MDString *Producer,
@@ -1150,11 +1153,11 @@ public:
        MDString *SplitDebugFilename, unsigned EmissionKind, Metadata *EnumTypes,
        Metadata *RetainedTypes, Metadata *GlobalVariables,
        Metadata *ImportedEntities, Metadata *Macros, uint64_t DWOId,
-       bool SplitDebugInlining, bool DebugInfoForProfiling),
+       bool SplitDebugInlining, bool DebugInfoForProfiling, bool GnuPubnames),
       (SourceLanguage, File, Producer, IsOptimized, Flags, RuntimeVersion,
        SplitDebugFilename, EmissionKind, EnumTypes, RetainedTypes,
        GlobalVariables, ImportedEntities, Macros, DWOId, SplitDebugInlining,
-       DebugInfoForProfiling))
+       DebugInfoForProfiling, GnuPubnames))
 
   TempDICompileUnit clone() const { return cloneImpl(); }
 
@@ -1165,6 +1168,7 @@ public:
     return (DebugEmissionKind)EmissionKind;
   }
   bool getDebugInfoForProfiling() const { return DebugInfoForProfiling; }
+  bool getGnuPubnames() const { return GnuPubnames; }
   StringRef getProducer() const { return getStringOperand(1); }
   StringRef getFlags() const { return getStringOperand(2); }
   StringRef getSplitDebugFilename() const { return getStringOperand(3); }
@@ -1422,11 +1426,15 @@ public:
   /// could create a location with a new discriminator. If they are from
   /// different files/lines the location is ambiguous and can't be
   /// represented in a single line entry.  In this case, no location
-  /// should be set.
+  /// should be set, unless the merged instruction is a call, which we will
+  /// set the merged debug location as line 0 of the nearest common scope
+  /// where 2 locations are inlined from. This only applies to Instruction,
+  /// For MachineInstruction, as it is post-inline, we will treat the call
+  /// instruction the same way as other instructions.
   ///
-  /// Currently the function does not create a new location. If the locations
-  /// are the same, or cannot be discriminated, the first location is returned.
-  /// Otherwise an empty location will be used.
+  /// This should only be used by MachineInstruction because call can be
+  /// treated the same as other instructions. Otherwise, use
+  /// \p applyMergedLocation instead.
   static const DILocation *getMergedLocation(const DILocation *LocA,
                                              const DILocation *LocB) {
     if (LocA && LocB && (LocA == LocB || !LocA->canDiscriminate(*LocB)))

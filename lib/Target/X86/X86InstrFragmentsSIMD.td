@@ -146,8 +146,11 @@ def X86fpextRnd  : SDNode<"X86ISD::VFPEXTS_RND",
                                              SDTCisSameSizeAs<0, 2>,
                                              SDTCisVT<3, i32>]>>;
 
-def X86vshldq  : SDNode<"X86ISD::VSHLDQ",    SDTIntShiftOp>;
-def X86vshrdq  : SDNode<"X86ISD::VSRLDQ",    SDTIntShiftOp>;
+def X86vshiftimm : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
+                                        SDTCisVT<2, i8>, SDTCisInt<0>]>;
+
+def X86vshldq  : SDNode<"X86ISD::VSHLDQ",    X86vshiftimm>;
+def X86vshrdq  : SDNode<"X86ISD::VSRLDQ",    X86vshiftimm>;
 def X86cmpp    : SDNode<"X86ISD::CMPP",      SDTX86VFCMP>;
 def X86pcmpeq  : SDNode<"X86ISD::PCMPEQ", SDTIntBinOp, [SDNPCommutative]>;
 def X86pcmpgt  : SDNode<"X86ISD::PCMPGT", SDTIntBinOp>;
@@ -164,15 +167,16 @@ def X86CmpMaskCC :
                        SDTCisSameNumEltsAs<0, 1>, SDTCisVT<3, i8>]>;
 def X86CmpMaskCCRound :
       SDTypeProfile<1, 4, [SDTCisVec<0>,SDTCVecEltisVT<0, i1>,
-                       SDTCisVec<1>, SDTCisSameAs<2, 1>,
+                       SDTCisVec<1>, SDTCisFP<1>, SDTCisSameAs<2, 1>,
                        SDTCisSameNumEltsAs<0, 1>, SDTCisVT<3, i8>,
                        SDTCisVT<4, i32>]>;
 def X86CmpMaskCCScalar :
-      SDTypeProfile<1, 3, [SDTCisInt<0>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>]>;
+      SDTypeProfile<1, 3, [SDTCisInt<0>, SDTCisFP<1>, SDTCisSameAs<1, 2>,
+                           SDTCisVT<3, i8>]>;
 
 def X86CmpMaskCCScalarRound :
-      SDTypeProfile<1, 4, [SDTCisInt<0>, SDTCisSameAs<1, 2>, SDTCisVT<3, i8>,
-                           SDTCisVT<4, i32>]>;
+      SDTypeProfile<1, 4, [SDTCisInt<0>, SDTCisFP<1>, SDTCisSameAs<1, 2>,
+                           SDTCisVT<3, i8>, SDTCisVT<4, i32>]>;
 
 def X86cmpm     : SDNode<"X86ISD::CMPM",     X86CmpMaskCC>;
 def X86cmpmRnd  : SDNode<"X86ISD::CMPM_RND", X86CmpMaskCCRound>;
@@ -180,23 +184,22 @@ def X86cmpmu    : SDNode<"X86ISD::CMPMU",    X86CmpMaskCC>;
 def X86cmpms    : SDNode<"X86ISD::FSETCCM",   X86CmpMaskCCScalar>;
 def X86cmpmsRnd : SDNode<"X86ISD::FSETCCM_RND",   X86CmpMaskCCScalarRound>;
 
-def X86vshl    : SDNode<"X86ISD::VSHL",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                      SDTCisVec<2>]>>;
-def X86vsrl    : SDNode<"X86ISD::VSRL",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                      SDTCisVec<2>]>>;
-def X86vsra    : SDNode<"X86ISD::VSRA",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                      SDTCisVec<2>]>>;
+def X86vshiftuniform : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
+                                            SDTCisVec<2>, SDTCisInt<0>,
+                                            SDTCisInt<1>]>;
 
-def X86vsrav   : SDNode<"X86ISD::VSRAV" ,
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                             SDTCisSameAs<0,2>]>>;
+def X86vshl    : SDNode<"X86ISD::VSHL", X86vshiftuniform>;
+def X86vsrl    : SDNode<"X86ISD::VSRL", X86vshiftuniform>;
+def X86vsra    : SDNode<"X86ISD::VSRA", X86vshiftuniform>;
 
-def X86vshli   : SDNode<"X86ISD::VSHLI", SDTIntShiftOp>;
-def X86vsrli   : SDNode<"X86ISD::VSRLI", SDTIntShiftOp>;
-def X86vsrai   : SDNode<"X86ISD::VSRAI", SDTIntShiftOp>;
+def X86vshiftvariable : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
+                                             SDTCisSameAs<0,2>, SDTCisInt<0>]>;
+
+def X86vsrav   : SDNode<"X86ISD::VSRAV", X86vshiftvariable>;
+
+def X86vshli   : SDNode<"X86ISD::VSHLI", X86vshiftimm>;
+def X86vsrli   : SDNode<"X86ISD::VSRLI", X86vshiftimm>;
+def X86vsrai   : SDNode<"X86ISD::VSRAI", X86vshiftimm>;
 
 def X86kshiftl : SDNode<"X86ISD::KSHIFTL",
                         SDTypeProfile<1, 2, [SDTCVecEltisVT<0, i1>,
@@ -207,31 +210,20 @@ def X86kshiftr : SDNode<"X86ISD::KSHIFTR",
                                              SDTCisSameAs<0, 1>,
                                              SDTCisVT<2, i8>]>>;
 
-def X86vrotli  : SDNode<"X86ISD::VROTLI", SDTIntShiftOp>;
-def X86vrotri  : SDNode<"X86ISD::VROTRI", SDTIntShiftOp>;
+def X86vrotli  : SDNode<"X86ISD::VROTLI", X86vshiftimm>;
+def X86vrotri  : SDNode<"X86ISD::VROTRI", X86vshiftimm>;
 
-def X86vprot   : SDNode<"X86ISD::VPROT",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                             SDTCisSameAs<0,2>]>>;
-def X86vproti  : SDNode<"X86ISD::VPROTI",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                             SDTCisVT<2, i8>]>>;
-
-def X86vpshl   : SDNode<"X86ISD::VPSHL",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                             SDTCisSameAs<0,2>]>>;
-def X86vpsha   : SDNode<"X86ISD::VPSHA",
-                        SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0,1>,
-                                             SDTCisSameAs<0,2>]>>;
+def X86vpshl   : SDNode<"X86ISD::VPSHL", X86vshiftvariable>;
+def X86vpsha   : SDNode<"X86ISD::VPSHA", X86vshiftvariable>;
 
 def X86vpcom   : SDNode<"X86ISD::VPCOM",
                         SDTypeProfile<1, 3, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                              SDTCisSameAs<0,2>,
-                                             SDTCisVT<3, i8>]>>;
+                                             SDTCisVT<3, i8>, SDTCisInt<0>]>>;
 def X86vpcomu  : SDNode<"X86ISD::VPCOMU",
                         SDTypeProfile<1, 3, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                              SDTCisSameAs<0,2>,
-                                             SDTCisVT<3, i8>]>>;
+                                             SDTCisVT<3, i8>, SDTCisInt<0>]>>;
 def X86vpermil2 : SDNode<"X86ISD::VPERMIL2",
                         SDTypeProfile<1, 4, [SDTCisVec<0>, SDTCisSameAs<0,1>,
                                              SDTCisSameAs<0,2>,
@@ -266,12 +258,6 @@ def X86testnm  : SDNode<"X86ISD::TESTNM", SDTX86Testm, [SDNPCommutative]>;
 
 def X86movmsk : SDNode<"X86ISD::MOVMSK",
                         SDTypeProfile<1, 1, [SDTCisVT<0, i32>, SDTCisVec<1>]>>;
-
-def X86select  : SDNode<"X86ISD::SELECT",
-                        SDTypeProfile<1, 3, [SDTCVecEltisVT<1, i1>,
-                                             SDTCisSameAs<0, 2>,
-                                             SDTCisSameAs<2, 3>,
-                                             SDTCisSameNumEltsAs<0, 1>]>>;
 
 def X86selects : SDNode<"X86ISD::SELECTS",
                         SDTypeProfile<1, 3, [SDTCisVT<1, v1i1>,
@@ -509,8 +495,8 @@ def X86FnmsubRnds3  : SDNode<"X86ISD::FNMSUBS3_RND",    SDTFmaRound, [SDNPCommut
 
 def SDTIFma : SDTypeProfile<1, 3, [SDTCisInt<0>, SDTCisSameAs<0,1>,
                            SDTCisSameAs<1,2>, SDTCisSameAs<1,3>]>;
-def x86vpmadd52l     : SDNode<"X86ISD::VPMADD52L",     SDTIFma>;
-def x86vpmadd52h     : SDNode<"X86ISD::VPMADD52H",     SDTIFma>;
+def x86vpmadd52l     : SDNode<"X86ISD::VPMADD52L",     SDTIFma, [SDNPCommutative]>;
+def x86vpmadd52h     : SDNode<"X86ISD::VPMADD52H",     SDTIFma, [SDNPCommutative]>;
 
 def X86rsqrt28   : SDNode<"X86ISD::RSQRT28",  SDTFPUnaryOpRound>;
 def X86rcp28     : SDNode<"X86ISD::RCP28",    SDTFPUnaryOpRound>;
@@ -895,53 +881,48 @@ def BYTE_imm  : SDNodeXForm<imm, [{
 // EXTRACT_get_vextract128_imm xform function: convert extract_subvector index
 // to VEXTRACTF128/VEXTRACTI128 imm.
 def EXTRACT_get_vextract128_imm : SDNodeXForm<extract_subvector, [{
-  return getI8Imm(X86::getExtractVEXTRACT128Immediate(N), SDLoc(N));
+  return getExtractVEXTRACTImmediate(N, 128, SDLoc(N));
 }]>;
 
 // INSERT_get_vinsert128_imm xform function: convert insert_subvector index to
 // VINSERTF128/VINSERTI128 imm.
 def INSERT_get_vinsert128_imm : SDNodeXForm<insert_subvector, [{
-  return getI8Imm(X86::getInsertVINSERT128Immediate(N), SDLoc(N));
+  return getInsertVINSERTImmediate(N, 128, SDLoc(N));
 }]>;
 
 // EXTRACT_get_vextract256_imm xform function: convert extract_subvector index
 // to VEXTRACTF64x4 imm.
 def EXTRACT_get_vextract256_imm : SDNodeXForm<extract_subvector, [{
-  return getI8Imm(X86::getExtractVEXTRACT256Immediate(N), SDLoc(N));
+  return getExtractVEXTRACTImmediate(N, 256, SDLoc(N));
 }]>;
 
 // INSERT_get_vinsert256_imm xform function: convert insert_subvector index to
 // VINSERTF64x4 imm.
 def INSERT_get_vinsert256_imm : SDNodeXForm<insert_subvector, [{
-  return getI8Imm(X86::getInsertVINSERT256Immediate(N), SDLoc(N));
+  return getInsertVINSERTImmediate(N, 256, SDLoc(N));
 }]>;
 
 def vextract128_extract : PatFrag<(ops node:$bigvec, node:$index),
                                    (extract_subvector node:$bigvec,
-                                                      node:$index), [{
-  return X86::isVEXTRACT128Index(N);
-}], EXTRACT_get_vextract128_imm>;
+                                                      node:$index), [{}],
+                                  EXTRACT_get_vextract128_imm>;
 
 def vinsert128_insert : PatFrag<(ops node:$bigvec, node:$smallvec,
                                       node:$index),
                                  (insert_subvector node:$bigvec, node:$smallvec,
-                                                   node:$index), [{
-  return X86::isVINSERT128Index(N);
-}], INSERT_get_vinsert128_imm>;
-
+                                                   node:$index), [{}],
+                                INSERT_get_vinsert128_imm>;
 
 def vextract256_extract : PatFrag<(ops node:$bigvec, node:$index),
                                    (extract_subvector node:$bigvec,
-                                                      node:$index), [{
-  return X86::isVEXTRACT256Index(N);
-}], EXTRACT_get_vextract256_imm>;
+                                                      node:$index), [{}],
+                                  EXTRACT_get_vextract256_imm>;
 
 def vinsert256_insert : PatFrag<(ops node:$bigvec, node:$smallvec,
                                       node:$index),
                                  (insert_subvector node:$bigvec, node:$smallvec,
-                                                   node:$index), [{
-  return X86::isVINSERT256Index(N);
-}], INSERT_get_vinsert256_imm>;
+                                                   node:$index), [{}],
+                                INSERT_get_vinsert256_imm>;
 
 def X86mload : PatFrag<(ops node:$src1, node:$src2, node:$src3),
                          (masked_load node:$src1, node:$src2, node:$src3), [{

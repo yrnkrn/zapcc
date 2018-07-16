@@ -75,6 +75,17 @@ namespace llvm {
     /// Create an \a temporary node and track it in \a UnresolvedNodes.
     void trackIfUnresolved(MDNode *N);
 
+    /// Internal helper for insertDeclare.
+    Instruction *insertDeclare(llvm::Value *Storage, DILocalVariable *VarInfo,
+                               DIExpression *Expr, const DILocation *DL,
+                               BasicBlock *InsertBB, Instruction *InsertBefore);
+
+    /// Internal helper for insertDbgValueIntrinsic.
+    Instruction *
+    insertDbgValueIntrinsic(llvm::Value *Val, DILocalVariable *VarInfo,
+                            DIExpression *Expr, const DILocation *DL,
+                            BasicBlock *InsertBB, Instruction *InsertBefore);
+
   public:
     /// Construct a builder for a module.
     ///
@@ -113,6 +124,8 @@ namespace llvm {
     /// \param SplitDebugInlining    Whether to emit inline debug info.
     /// \param DebugInfoForProfiling Whether to emit extra debug info for
     ///                              profile collection.
+    /// \param GnuPubnames   Whether to emit .debug_gnu_pubnames section instead
+    ///                      of .debug_pubnames.
     DICompileUnit *
     createCompileUnit(unsigned Lang, DIFile *File, StringRef Producer,
                       bool isOptimized, StringRef Flags, unsigned RV,
@@ -120,7 +133,8 @@ namespace llvm {
                       DICompileUnit::DebugEmissionKind Kind =
                           DICompileUnit::DebugEmissionKind::FullDebug,
                       uint64_t DWOId = 0, bool SplitDebugInlining = true,
-                      bool DebugInfoForProfiling = false);
+                      bool DebugInfoForProfiling = false,
+                      bool GnuPubnames = false);
 
     /// Create a file descriptor to hold debugging information for a file.
     /// \param Filename  File name.

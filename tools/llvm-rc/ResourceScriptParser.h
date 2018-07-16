@@ -77,11 +77,17 @@ private:
 
   // The following methods try to read a single token, check if it has the
   // correct type and then parse it.
+  // Each integer can be written as an arithmetic expression producing an
+  // unsigned 32-bit integer.
   Expected<uint32_t> readInt();            // Parse an integer.
   Expected<StringRef> readString();        // Parse a string.
   Expected<StringRef> readIdentifier();    // Parse an identifier.
   Expected<IntOrString> readIntOrString(); // Parse an integer or a string.
   Expected<IntOrString> readTypeOrName();  // Parse an integer or an identifier.
+
+  // Helper integer expression parsing methods.
+  Expected<uint32_t> parseIntExpr1();
+  Expected<uint32_t> parseIntExpr2();
 
   // Advance the state by one, discarding the current token.
   // If the discarded token had an incorrect type, fail.
@@ -100,10 +106,11 @@ private:
 
   // Read an unknown number of flags preceded by commas. Each correct flag
   // has an entry in FlagDesc array of length NumFlags. In case i-th
-  // flag (0-based) has been read, the i-th bit of the result is set.
+  // flag (0-based) has been read, the result is OR-ed with FlagValues[i].
   // As long as parser has a comma to read, it expects to be fed with
   // a correct flag afterwards.
-  Expected<uint32_t> parseFlags(ArrayRef<StringRef> FlagDesc);
+  Expected<uint32_t> parseFlags(ArrayRef<StringRef> FlagDesc,
+                                ArrayRef<uint32_t> FlagValues);
 
   // Reads a set of optional statements. These can change the behavior of
   // a number of resource types (e.g. STRINGTABLE, MENU or DIALOG) if provided
@@ -133,12 +140,23 @@ private:
   ParseType parseHTMLResource();
   ParseType parseMenuResource();
   ParseType parseStringTableResource();
+  ParseType parseUserDefinedResource(IntOrString Type);
+  ParseType parseVersionInfoResource();
 
   // Helper DIALOG parser - a single control.
   Expected<Control> parseControl();
 
   // Helper MENU parser.
   Expected<MenuDefinitionList> parseMenuItemsList();
+
+  // Helper VERSIONINFO parser - read the contents of a single BLOCK statement,
+  // from BEGIN to END.
+  Expected<std::unique_ptr<VersionInfoBlock>>
+  parseVersionInfoBlockContents(StringRef BlockName);
+  // Helper VERSIONINFO parser - read either VALUE or BLOCK statement.
+  Expected<std::unique_ptr<VersionInfoStmt>> parseVersionInfoStmt();
+  // Helper VERSIONINFO parser - read fixed VERSIONINFO statements.
+  Expected<VersionInfoResource::VersionInfoFixed> parseVersionInfoFixed();
 
   // Optional statement parsers.
   ParseOptionType parseLanguageStmt();

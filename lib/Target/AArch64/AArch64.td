@@ -215,6 +215,7 @@ def ProcA53     : SubtargetFeature<"a53", "ARMProcFamily", "CortexA53",
 
 def ProcA55     : SubtargetFeature<"a55", "ARMProcFamily", "CortexA55",
                                    "Cortex-A55 ARM processors", [
+                                   HasV8_2aOps,
                                    FeatureCrypto,
                                    FeatureFPARMv8,
                                    FeatureFuseAES,
@@ -262,6 +263,7 @@ def ProcA73     : SubtargetFeature<"a73", "ARMProcFamily", "CortexA73",
 
 def ProcA75     : SubtargetFeature<"a75", "ARMProcFamily", "CortexA75",
                                    "Cortex-A75 ARM processors", [
+                                   HasV8_2aOps,
                                    FeatureCrypto,
                                    FeatureFPARMv8,
                                    FeatureFuseAES,
@@ -346,6 +348,20 @@ def ProcFalkor  : SubtargetFeature<"falkor", "ARMProcFamily", "Falkor",
                                    FeatureSlowSTRQro
                                    ]>;
 
+def ProcSaphira  : SubtargetFeature<"saphira", "ARMProcFamily", "Saphira",
+                                   "Qualcomm Saphira processors", [
+                                   FeatureCrypto,
+                                   FeatureCustomCheapAsMoveHandling,
+                                   FeatureFPARMv8,
+                                   FeatureNEON,
+                                   FeatureSPE,
+                                   FeaturePerfMon,
+                                   FeaturePostRAScheduler,
+                                   FeaturePredictableSelectIsExpensive,
+                                   FeatureZCZeroing,
+                                   FeatureLSLFast,
+                                   HasV8_3aOps]>;
+
 def ProcThunderX2T99  : SubtargetFeature<"thunderx2t99", "ARMProcFamily",
                                          "ThunderX2T99",
                                          "Cavium ThunderX2 processors", [
@@ -424,6 +440,7 @@ def : ProcessorModel<"exynos-m1", ExynosM1Model, [ProcExynosM1]>;
 def : ProcessorModel<"exynos-m2", ExynosM1Model, [ProcExynosM2]>;
 def : ProcessorModel<"exynos-m3", ExynosM1Model, [ProcExynosM2]>;
 def : ProcessorModel<"falkor", FalkorModel, [ProcFalkor]>;
+def : ProcessorModel<"saphira", FalkorModel, [ProcSaphira]>;
 def : ProcessorModel<"kryo", KryoModel, [ProcKryo]>;
 // Cavium ThunderX/ThunderX T8X  Processors
 def : ProcessorModel<"thunderx", ThunderXT8XModel,  [ProcThunderX]>;
