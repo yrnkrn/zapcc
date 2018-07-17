@@ -269,6 +269,21 @@ class RegisterClass<string namespace, list<ValueType> regTypes, int alignment,
   // useful as it is sometimes beneficial to assign registers to highly
   // constrained classes first. The value has to be in the range [0,63].
   int AllocationPriority = 0;
+
+  // The diagnostic type to present when referencing this operand in a match
+  // failure error message. If this is empty, the default Match_InvalidOperand
+  // diagnostic type will be used. If this is "<name>", a Match_<name> enum
+  // value will be generated and used for this operand type. The target
+  // assembly parser is responsible for converting this into a user-facing
+  // diagnostic message.
+  string DiagnosticType = "";
+
+  // A diagnostic message to emit when an invalid value is provided for this
+  // register class when it is being used an an assembly operand. If this is
+  // non-empty, an anonymous diagnostic type enum value will be generated, and
+  // the assembly matcher will provide a function to map from diagnostic types
+  // to message strings.
+  string DiagnosticString = "";
 }
 
 // The memberList in a RegisterClass is a dag of set operations. TableGen
@@ -753,6 +768,12 @@ class RegisterOperand<RegisterClass regclass, string pm = "printOperand">
   AsmOperandClass ParserMatchClass;
 
   string OperandType = "OPERAND_REGISTER";
+
+  // When referenced in the result of a CodeGen pattern, GlobalISel will
+  // normally copy the matched operand to the result. When this is set, it will
+  // emit a special copy that will replace zero-immediates with the specified
+  // zero-register.
+  Register GIZeroRegister = ?;
 }
 
 let OperandType = "OPERAND_IMMEDIATE" in {
@@ -863,12 +884,16 @@ class InstrInfo {
 // Standard Pseudo Instructions.
 // This list must match TargetOpcodes.h and CodeGenTarget.cpp.
 // Only these instructions are allowed in the TargetOpcode namespace.
-let isCodeGenOnly = 1, isPseudo = 1, hasNoSchedulingInfo = 1,
-    Namespace = "TargetOpcode" in {
+// Ensure mayLoad and mayStore have a default value, so as not to break
+// targets that set guessInstructionProperties=0. Any local definition of
+// mayLoad/mayStore takes precedence over these default values.
+let mayLoad = 0, mayStore = 0, isCodeGenOnly = 1, isPseudo = 1,
+    hasNoSchedulingInfo = 1, Namespace = "TargetOpcode" in {
 def PHI : Instruction {
   let OutOperandList = (outs unknown:$dst);
   let InOperandList = (ins variable_ops);
   let AsmString = "PHINODE";
+  let hasSideEffects = 0;
 }
 def INLINEASM : Instruction {
   let OutOperandList = (outs);
@@ -881,6 +906,7 @@ def CFI_INSTRUCTION : Instruction {
   let InOperandList = (ins i32imm:$id);
   let AsmString = "";
   let hasCtrlDep = 1;
+  let hasSideEffects = 1;
   let isNotDuplicable = 1;
 }
 def EH_LABEL : Instruction {
@@ -888,6 +914,7 @@ def EH_LABEL : Instruction {
   let InOperandList = (ins i32imm:$id);
   let AsmString = "";
   let hasCtrlDep = 1;
+  let hasSideEffects = 1;
   let isNotDuplicable = 1;
 }
 def GC_LABEL : Instruction {
@@ -895,6 +922,7 @@ def GC_LABEL : Instruction {
   let InOperandList = (ins i32imm:$id);
   let AsmString = "";
   let hasCtrlDep = 1;
+  let hasSideEffects = 1;
   let isNotDuplicable = 1;
 }
 def ANNOTATION_LABEL : Instruction {
@@ -902,6 +930,7 @@ def ANNOTATION_LABEL : Instruction {
   let InOperandList = (ins i32imm:$id);
   let AsmString = "";
   let hasCtrlDep = 1;
+  let hasSideEffects = 1;
   let isNotDuplicable = 1;
 }
 def KILL : Instruction {
@@ -969,6 +998,7 @@ def BUNDLE : Instruction {
   let OutOperandList = (outs);
   let InOperandList = (ins variable_ops);
   let AsmString = "BUNDLE";
+  let hasSideEffects = 1;
 }
 def LIFETIME_START : Instruction {
   let OutOperandList = (outs);
@@ -985,6 +1015,7 @@ def LIFETIME_END : Instruction {
 def STACKMAP : Instruction {
   let OutOperandList = (outs);
   let InOperandList = (ins i64imm:$id, i32imm:$nbytes, variable_ops);
+  let hasSideEffects = 1;
   let isCall = 1;
   let mayLoad = 1;
   let usesCustomInserter = 1;
@@ -993,6 +1024,7 @@ def PATCHPOINT : Instruction {
   let OutOperandList = (outs unknown:$dst);
   let InOperandList = (ins i64imm:$id, i32imm:$nbytes, unknown:$callee,
                        i32imm:$nargs, i32imm:$cc, variable_ops);
+  let hasSideEffects = 1;
   let isCall = 1;
   let mayLoad = 1;
   let usesCustomInserter = 1;
@@ -1027,6 +1059,7 @@ def FAULTING_OP : Instruction {
   let OutOperandList = (outs unknown:$dst);
   let InOperandList = (ins variable_ops);
   let usesCustomInserter = 1;
+  let hasSideEffects = 1;
   let mayLoad = 1;
   let mayStore = 1;
   let isTerminator = 1;

@@ -17,6 +17,7 @@
 
 #include "AMDGPU.h"
 #include "AMDKernelCodeT.h"
+#include "MCTargetDesc/AMDGPUHSAMetadataStreamer.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include <cstddef>
@@ -112,12 +113,14 @@ private:
 
   SIProgramInfo CurrentProgramInfo;
   DenseMap<const Function *, SIFunctionResourceInfo> CallGraphResourceInfo;
-  std::map<uint32_t, uint32_t> PalMetadata;
+
+  AMDGPU::HSAMD::MetadataStreamer HSAMetadataStream;
+  std::map<uint32_t, uint32_t> PALMetadataMap;
 
   uint64_t getFunctionCodeSize(const MachineFunction &MF) const;
   SIFunctionResourceInfo analyzeResourceUsage(const MachineFunction &MF) const;
 
-  void readPalMetadata(Module &M);
+  void readPALMetadata(Module &M);
   void getSIProgramInfo(SIProgramInfo &Out, const MachineFunction &MF);
   void getAmdKernelCode(amd_kernel_code_t &Out, const SIProgramInfo &KernelInfo,
                         const MachineFunction &MF) const;
@@ -125,11 +128,20 @@ private:
                               unsigned &NumSGPR,
                               unsigned &NumVGPR) const;
 
+  AMDGPU::HSAMD::Kernel::CodeProps::Metadata getHSACodeProps(
+      const MachineFunction &MF,
+      const SIProgramInfo &ProgramInfo) const;
+  AMDGPU::HSAMD::Kernel::DebugProps::Metadata getHSADebugProps(
+      const MachineFunction &MF,
+      const SIProgramInfo &ProgramInfo) const;
+
   /// \brief Emit register usage information so that the GPU driver
   /// can correctly setup the GPU state.
   void EmitProgramInfoR600(const MachineFunction &MF);
-  void EmitProgramInfoSI(const MachineFunction &MF, const SIProgramInfo &KernelInfo);
-  void EmitPalMetadata(const MachineFunction &MF, const SIProgramInfo &KernelInfo);
+  void EmitProgramInfoSI(const MachineFunction &MF,
+                         const SIProgramInfo &KernelInfo);
+  void EmitPALMetadata(const MachineFunction &MF,
+                       const SIProgramInfo &KernelInfo);
   void emitCommonFunctionComments(uint32_t NumVGPR,
                                   uint32_t NumSGPR,
                                   uint32_t ScratchSize,
@@ -143,7 +155,7 @@ public:
 
   const MCSubtargetInfo* getSTI() const;
 
-  AMDGPUTargetStreamer& getTargetStreamer() const;
+  AMDGPUTargetStreamer* getTargetStreamer() const;
 
   bool doFinalization(Module &M) override;
   bool runOnMachineFunction(MachineFunction &MF) override;

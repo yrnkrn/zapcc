@@ -1741,6 +1741,16 @@ private:
   const SCEV *computeBECount(const SCEV *Delta, const SCEV *Stride,
                              bool Equality);
 
+  /// Compute the maximum backedge count based on the range of values
+  /// permitted by Start, End, and Stride. This is for loops of the form
+  /// {Start, +, Stride} LT End.
+  ///
+  /// Precondition: the induction variable is known to be positive.  We *don't*
+  /// assert these preconditions so please be careful.
+  const SCEV *computeMaxBECountForLT(const SCEV *Start, const SCEV *Stride,
+                                     const SCEV *End, unsigned BitWidth,
+                                     bool IsSigned);
+
   /// Verify if an linear IV with positive stride can overflow when in a
   /// less-than comparison, knowing the invariant term of the comparison,
   /// the stride and the knowledge of NSW/NUW flags on the recurrence.
@@ -1761,9 +1771,17 @@ private:
   const SCEV *getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
                                  SCEV::NoWrapFlags Flags);
 
+  /// Find all of the loops transitively used in \p S, and update \c LoopUsers
+  /// accordingly.
+  void addToLoopUseLists(const SCEV *S);
+
   FoldingSet<SCEV> UniqueSCEVs;
   FoldingSet<SCEVPredicate> UniquePreds;
   BumpPtrAllocator SCEVAllocator;
+
+  /// This maps loops to a list of SCEV expressions that (transitively) use said
+  /// loop.
+  DenseMap<const Loop *, SmallVector<const SCEV *, 4>> LoopUsers;
 
   /// Cache tentative mappings from UnknownSCEVs in a Loop, to a SCEV expression
   /// they can be rewritten into under certain predicates.

@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
@@ -19,6 +19,7 @@
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/CodeGen/ScoreboardHazardRecognizer.h"
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -26,7 +27,6 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -191,7 +191,7 @@ MachineInstr *TargetInstrInfo::commuteInstructionImpl(MachineInstr &MI,
   MachineInstr *CommutedMI = nullptr;
   if (NewMI) {
     // Create a new instruction.
-    MachineFunction &MF = *MI.getParent()->getParent();
+    MachineFunction &MF = *MI.getMF();
     CommutedMI = MF.CloneMachineInstr(&MI);
   } else {
     CommutedMI = &MI;
@@ -438,7 +438,7 @@ static const TargetRegisterClass *canFoldCopy(const MachineInstr &MI,
   assert(TargetRegisterInfo::isVirtualRegister(FoldReg) &&
          "Cannot fold physregs");
 
-  const MachineRegisterInfo &MRI = MI.getParent()->getParent()->getRegInfo();
+  const MachineRegisterInfo &MRI = MI.getMF()->getRegInfo();
   const TargetRegisterClass *RC = MRI.getRegClass(FoldReg);
 
   if (TargetRegisterInfo::isPhysicalRegister(LiveOp.getReg()))
@@ -763,7 +763,7 @@ void TargetInstrInfo::reassociateOps(
     SmallVectorImpl<MachineInstr *> &InsInstrs,
     SmallVectorImpl<MachineInstr *> &DelInstrs,
     DenseMap<unsigned, unsigned> &InstrIdxForVirtReg) const {
-  MachineFunction *MF = Root.getParent()->getParent();
+  MachineFunction *MF = Root.getMF();
   MachineRegisterInfo &MRI = MF->getRegInfo();
   const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
   const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
@@ -846,7 +846,7 @@ void TargetInstrInfo::genAlternativeCodeSequence(
     SmallVectorImpl<MachineInstr *> &InsInstrs,
     SmallVectorImpl<MachineInstr *> &DelInstrs,
     DenseMap<unsigned, unsigned> &InstIdxForVirtReg) const {
-  MachineRegisterInfo &MRI = Root.getParent()->getParent()->getRegInfo();
+  MachineRegisterInfo &MRI = Root.getMF()->getRegInfo();
 
   // Select the previous instruction in the sequence based on the input pattern.
   MachineInstr *Prev = nullptr;
@@ -870,7 +870,7 @@ void TargetInstrInfo::genAlternativeCodeSequence(
 
 bool TargetInstrInfo::isReallyTriviallyReMaterializableGeneric(
     const MachineInstr &MI, AliasAnalysis *AA) const {
-  const MachineFunction &MF = *MI.getParent()->getParent();
+  const MachineFunction &MF = *MI.getMF();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
 
   // Remat clients assume operand 0 is the defined register.
@@ -948,7 +948,7 @@ bool TargetInstrInfo::isReallyTriviallyReMaterializableGeneric(
 }
 
 int TargetInstrInfo::getSPAdjust(const MachineInstr &MI) const {
-  const MachineFunction *MF = MI.getParent()->getParent();
+  const MachineFunction *MF = MI.getMF();
   const TargetFrameLowering *TFI = MF->getSubtarget().getFrameLowering();
   bool StackGrowsDown =
     TFI->getStackGrowthDirection() == TargetFrameLowering::StackGrowsDown;

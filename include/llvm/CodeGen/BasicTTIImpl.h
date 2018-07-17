@@ -189,11 +189,6 @@ public:
     return BaseT::getGEPCost(PointeeType, Ptr, Operands);
   }
 
-  int getGEPCost(const GEPOperator *GEP,
-                 ArrayRef<const Value *> Operands) {
-    return BaseT::getGEPCost(GEP, Operands);
-  }
-
   int getExtCost(const Instruction *I, const Value *Src) {
     if (getTLI()->isExtFree(I))
       return TargetTransformInfo::TCC_Free;
@@ -1028,6 +1023,7 @@ public:
     // FIXME: We should return 0 whenever getIntrinsicCost == TCC_Free.
     case Intrinsic::lifetime_start:
     case Intrinsic::lifetime_end:
+    case Intrinsic::sideeffect:
       return 0;
     case Intrinsic::masked_store:
       return static_cast<T *>(this)

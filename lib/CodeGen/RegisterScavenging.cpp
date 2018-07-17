@@ -28,13 +28,13 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetFrameLowering.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <algorithm>
@@ -463,7 +463,7 @@ RegScavenger::spill(unsigned Reg, const TargetRegisterClass &RC, int SPAdj,
                     MachineBasicBlock::iterator &UseMI) {
   // Find an available scavenging slot with size and alignment matching
   // the requirements of the class RC.
-  const MachineFunction &MF = *Before->getParent()->getParent();
+  const MachineFunction &MF = *Before->getMF();
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   unsigned NeedSize = TRI->getSpillSize(RC);
   unsigned NeedAlign = TRI->getSpillAlignment(RC);
@@ -536,7 +536,7 @@ unsigned RegScavenger::scavengeRegister(const TargetRegisterClass *RC,
                                         MachineBasicBlock::iterator I,
                                         int SPAdj) {
   MachineInstr &MI = *I;
-  const MachineFunction &MF = *MI.getParent()->getParent();
+  const MachineFunction &MF = *MI.getMF();
   // Consider all allocatable registers in the register class initially
   BitVector Candidates = TRI->getAllocatableSet(MF, RC);
 

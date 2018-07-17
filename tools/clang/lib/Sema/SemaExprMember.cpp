@@ -384,7 +384,9 @@ CheckExtVectorComponent(Sema &S, QualType baseType, ExprValueKind &VK,
     }
   }
 
-  if (!HalvingSwizzle) {
+  // OpenCL mode requires swizzle length to be in accordance with accepted
+  // sizes. Clang however supports arbitrary lengths for other languages.
+  if (S.getLangOpts().OpenCL && !HalvingSwizzle) {
     unsigned SwizzleLength = CompName->getLength();
 
     if (HexSwizzle)
@@ -693,8 +695,7 @@ static bool LookupMemberExprInRecord(Sema &SemaRef, LookupResult &R,
     Sema::RedeclarationKind Redecl;
   };
   QueryState Q = {R.getSema(), R.getLookupNameInfo(), R.getLookupKind(),
-                  R.isForRedeclaration() ? Sema::ForRedeclaration
-                                         : Sema::NotForRedeclaration};
+                  R.redeclarationKind()};
   TE = SemaRef.CorrectTypoDelayed(
       R.getLookupNameInfo(), R.getLookupKind(), nullptr, &SS,
       llvm::make_unique<RecordMemberExprValidatorCCC>(RTy),
@@ -1790,7 +1791,9 @@ Sema::BuildFieldReferenceExpr(Expr *BaseExpr, bool IsArrow,
       MemberType = Context.getQualifiedType(MemberType, Combined);
   }
 
-  UnusedPrivateFields.remove(Field);
+  auto *CurMethod = dyn_cast<CXXMethodDecl>(CurContext);
+  if (!(CurMethod && CurMethod->isDefaulted()))
+    UnusedPrivateFields.remove(Field);
 
   ExprResult Base = PerformObjectMemberConversion(BaseExpr, SS.getScopeRep(),
                                                   FoundDecl, Field);

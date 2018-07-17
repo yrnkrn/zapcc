@@ -336,6 +336,14 @@ private:
         .getRawSubclassData();
   }
 
+  template <typename SDNodeTy>
+  static uint16_t getSyntheticNodeSubclassData(unsigned Opc, unsigned Order,
+                                                SDVTList VTs, EVT MemoryVT,
+                                                MachineMemOperand *MMO) {
+    return SDNodeTy(Opc, Order, DebugLoc(), VTs, MemoryVT, MMO)
+         .getRawSubclassData();
+  }
+
   void createOperands(SDNode *Node, ArrayRef<SDValue> Vals) {
     assert(!Node->OperandList && "Node already has operands");
     SDUse *Ops = OperandRecycler.allocate(
@@ -1176,15 +1184,20 @@ public:
                           unsigned R, bool IsIndirect, const DebugLoc &DL,
                           unsigned O);
 
-  /// Constant
+  /// Creates a constant SDDbgValue node.
   SDDbgValue *getConstantDbgValue(DIVariable *Var, DIExpression *Expr,
                                   const Value *C, const DebugLoc &DL,
                                   unsigned O);
 
-  /// FrameIndex
+  /// Creates a FrameIndex SDDbgValue node.
   SDDbgValue *getFrameIndexDbgValue(DIVariable *Var, DIExpression *Expr,
                                     unsigned FI, const DebugLoc &DL,
                                     unsigned O);
+
+  /// Transfer debug values from one node to another, while optionally
+  /// generating fragment expressions for split-up values.
+  void transferDbgValues(SDValue From, SDValue To, unsigned OffsetInBits = 0,
+                         unsigned SizeInBits = 0);
 
   /// Remove the specified node from the system. If any of its
   /// operands then becomes dead, remove them as well. Inform UpdateListener
@@ -1285,6 +1298,10 @@ public:
   SDDbgInfo::DbgIterator ByvalParmDbgEnd()   {
     return DbgInfo->ByvalParmDbgEnd();
   }
+
+  /// To be invoked on an SDNode that is slated to be erased. This
+  /// function mirrors \c llvm::salvageDebugInfo.
+  void salvageDebugInfo(SDNode &N);
 
   void dump() const;
 

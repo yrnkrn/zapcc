@@ -17,7 +17,7 @@
 #include "AArch64.h"
 #include "AArch64RegisterInfo.h"
 #include "llvm/CodeGen/MachineCombinerPattern.h"
-#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 
 #define GET_INSTRINFO_HEADER
 #include "AArch64GenInstrInfo.inc"
@@ -352,7 +352,8 @@ public:
 
   bool
   canOutlineWithoutLRSave(MachineBasicBlock::iterator &CallInsertionPt) const;
-  bool isFunctionSafeToOutlineFrom(MachineFunction &MF) const override;
+  bool isFunctionSafeToOutlineFrom(MachineFunction &MF,
+                                   bool OutlineFromLinkOnceODRs) const override;
   MachineOutlinerInfo getOutlininingCandidateInfo(
       std::vector<
           std::pair<MachineBasicBlock::iterator, MachineBasicBlock::iterator>>

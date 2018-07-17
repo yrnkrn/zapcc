@@ -26,13 +26,13 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
 #include "llvm/MC/MachineLocation.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 
@@ -118,11 +118,11 @@ HexagonRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   bool HasEHReturn = MF->getInfo<HexagonMachineFunctionInfo>()->hasEHReturn();
 
   switch (MF->getSubtarget<HexagonSubtarget>().getHexagonArchVersion()) {
-  case HexagonSubtarget::V4:
-  case HexagonSubtarget::V5:
-  case HexagonSubtarget::V55:
-  case HexagonSubtarget::V60:
-  case HexagonSubtarget::V62:
+  case Hexagon::ArchEnum::V4:
+  case Hexagon::ArchEnum::V5:
+  case Hexagon::ArchEnum::V55:
+  case Hexagon::ArchEnum::V60:
+  case Hexagon::ArchEnum::V62:
     return HasEHReturn ? CalleeSavedRegsV3EHReturn : CalleeSavedRegsV3;
   }
 

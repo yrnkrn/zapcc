@@ -41,7 +41,7 @@
 #include "llvm/Analysis/MemoryDependenceAnalysis.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ModuleSummaryAnalysis.h"
-#include "llvm/Analysis/OptimizationDiagnosticInfo.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/Analysis/RegionInfo.h"
@@ -63,6 +63,7 @@
 #include "llvm/Transforms/GCOVProfiler.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/ArgumentPromotion.h"
+#include "llvm/Transforms/IPO/CalledValuePropagation.h"
 #include "llvm/Transforms/IPO/ConstantMerge.h"
 #include "llvm/Transforms/IPO/CrossDSOCFI.h"
 #include "llvm/Transforms/IPO/DeadArgumentElimination.h"
@@ -88,6 +89,7 @@
 #include "llvm/Transforms/Scalar/ADCE.h"
 #include "llvm/Transforms/Scalar/AlignmentFromAssumptions.h"
 #include "llvm/Transforms/Scalar/BDCE.h"
+#include "llvm/Transforms/Scalar/CallSiteSplitting.h"
 #include "llvm/Transforms/Scalar/ConstantHoisting.h"
 #include "llvm/Transforms/Scalar/CorrelatedValuePropagation.h"
 #include "llvm/Transforms/Scalar/DCE.h"
@@ -362,6 +364,12 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
 
   invokePeepholeEPCallbacks(FPM, Level);
 
+  // For PGO use pipeline, try to optimize memory intrinsics such as memcpy
+  // using the size value profile. Don't perform this when optimizing for size.
+  if (PGOOpt && !PGOOpt->ProfileUseFile.empty() &&
+      !isOptimizingForSize(Level))
+    FPM.addPass(PGOMemOPSizeOpt());
+
   FPM.addPass(TailCallElimPass());
   FPM.addPass(SimplifyCFGPass());
 
@@ -541,6 +549,9 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   EarlyFPM.addPass(SROA());
   EarlyFPM.addPass(EarlyCSEPass());
   EarlyFPM.addPass(LowerExpectIntrinsicPass());
+  if (Level == O3)
+    EarlyFPM.addPass(CallSiteSplittingPass());
+
   // In SamplePGO ThinLTO backend, we need instcombine before profile annotation
   // to convert bitcast to direct calls so that they can be inlined during the
   // profile annotation prepration step.
@@ -573,6 +584,10 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
   // FIXME: This position in the pipeline hasn't been carefully considered in
   // years, it should be re-analyzed.
   MPM.addPass(IPSCCPPass());
+
+  // Attach metadata to indirect call sites indicating the set of functions
+  // they may target at run-time. This should follow IPSCCP.
+  MPM.addPass(CalledValuePropagationPass());
 
   // Optimize globals to try and fold them into constants.
   MPM.addPass(GlobalOptPass());
@@ -904,17 +919,24 @@ ModulePassManager PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   MPM.addPass(InferFunctionAttrsPass());
 
   if (Level > 1) {
+    FunctionPassManager EarlyFPM(DebugLogging);
+    EarlyFPM.addPass(CallSiteSplittingPass());
+    MPM.addPass(createModuleToFunctionPassAdaptor(std::move(EarlyFPM)));
+
     // Indirect call promotion. This should promote all the targets that are
     // left by the earlier promotion pass that promotes intra-module targets.
     // This two-step promotion is to save the compile time. For LTO, it should
     // produce the same result as if we only do promotion here.
     MPM.addPass(PGOIndirectCallPromotion(
         true /* InLTO */, PGOOpt && !PGOOpt->SampleProfileFile.empty()));
-
     // Propagate constants at call sites into the functions they call.  This
     // opens opportunities for globalopt (and inlining) by substituting function
     // pointers passed as arguments to direct uses of functions.
    MPM.addPass(IPSCCPPass());
+
+   // Attach metadata to indirect call sites indicating the set of functions
+   // they may target at run-time. This should follow IPSCCP.
+   MPM.addPass(CalledValuePropagationPass());
   }
 
   // Now deduce any function attributes based in the current code.

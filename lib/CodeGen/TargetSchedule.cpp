@@ -16,13 +16,13 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <algorithm>
@@ -316,7 +316,7 @@ computeOutputLatency(const MachineInstr *DefMI, unsigned DefOperIdx,
   // correctly append imp-use operands, and readsReg() strangely returns false
   // for predicated defs.
   unsigned Reg = DefMI->getOperand(DefOperIdx).getReg();
-  const MachineFunction &MF = *DefMI->getParent()->getParent();
+  const MachineFunction &MF = *DefMI->getMF();
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
   if (!DepMI->readsRegister(Reg, TRI) && TII->isPredicated(*DepMI))
     return computeInstrLatency(DefMI);

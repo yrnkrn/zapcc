@@ -566,7 +566,6 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
       if (!Args.hasArg(options::OPT_shared) && !TC.getTriple().isAndroid())
         HelperStaticRuntimes.push_back("asan-preinit");
     }
-
     if (SanArgs.needsUbsanRt()) {
       if (SanArgs.requiresMinimalRuntime()) {
         SharedRuntimes.push_back("ubsan_minimal");
@@ -574,6 +573,8 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
         SharedRuntimes.push_back("ubsan_standalone");
       }
     }
+    if (SanArgs.needsScudoRt())
+      SharedRuntimes.push_back("scudo");
   }
 
   // The stats_client library is also statically linked into DSOs.
@@ -630,6 +631,11 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   }
   if (SanArgs.needsEsanRt())
     StaticRuntimes.push_back("esan");
+  if (SanArgs.needsScudoRt()) {
+    StaticRuntimes.push_back("scudo");
+    if (SanArgs.linkCXXRuntimes())
+      StaticRuntimes.push_back("scudo_cxx");
+  }
 }
 
 // Should be called before we add system libraries (C++ ABI, libstdc++/libc++,
@@ -719,7 +725,8 @@ void tools::SplitDebugInfo(const ToolChain &TC, Compilation &C, const Tool &T,
   ExtractArgs.push_back(Output.getFilename());
   ExtractArgs.push_back(OutFile);
 
-  const char *Exec = Args.MakeArgString(TC.GetProgramPath("objcopy"));
+  const char *Exec =
+      Args.MakeArgString(TC.GetProgramPath(CLANG_DEFAULT_OBJCOPY));
   InputInfo II(types::TY_Object, Output.getFilename(), Output.getFilename());
 
   // First extract the dwo sections.
@@ -1027,15 +1034,7 @@ void tools::AddRunTimeLibs(const ToolChain &TC, const Driver &D,
 
   switch (RLT) {
   case ToolChain::RLT_CompilerRT:
-    switch (TC.getTriple().getOS()) {
-    default:
-      llvm_unreachable("unsupported OS");
-    case llvm::Triple::Win32:
-    case llvm::Triple::Linux:
-    case llvm::Triple::Fuchsia:
-      CmdArgs.push_back(TC.getCompilerRTArgString(Args, "builtins"));
-      break;
-    }
+    CmdArgs.push_back(TC.getCompilerRTArgString(Args, "builtins"));
     break;
   case ToolChain::RLT_Libgcc:
     // Make sure libgcc is not used under MSVC environment by default

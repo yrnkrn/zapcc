@@ -1212,18 +1212,12 @@ const char *Lexer::SkipEscapedNewLines(const char *P) {
   }
 }
 
-/// \brief Checks that the given token is the first token that occurs after the
-/// given location (this excludes comments and whitespace). Returns the location
-/// immediately after the specified token. If the token is not found or the
-/// location is inside a macro, the returned source location will be invalid.
-SourceLocation Lexer::findLocationAfterToken(SourceLocation Loc,
-                                        tok::TokenKind TKind,
-                                        const SourceManager &SM,
-                                        const LangOptions &LangOpts,
-                                        bool SkipTrailingWhitespaceAndNewLine) {
+Optional<Token> Lexer::findNextToken(SourceLocation Loc,
+                                     const SourceManager &SM,
+                                     const LangOptions &LangOpts) {
   if (Loc.isMacroID()) {
     if (!Lexer::isAtEndOfMacroExpansion(Loc, SM, LangOpts, &Loc))
-      return SourceLocation();
+      return None;
   }
   Loc = Lexer::getLocForEndOfToken(Loc, 0, SM, LangOpts);
 
@@ -1234,7 +1228,7 @@ SourceLocation Lexer::findLocationAfterToken(SourceLocation Loc,
   bool InvalidTemp = false;
   StringRef File = SM.getBufferData(LocInfo.first, &InvalidTemp);
   if (InvalidTemp)
-    return SourceLocation();
+    return None;
 
   const char *TokenBegin = File.data() + LocInfo.second;
 
@@ -1244,15 +1238,25 @@ SourceLocation Lexer::findLocationAfterToken(SourceLocation Loc,
   // Find the token.
   Token Tok;
   lexer.LexFromRawLexer(Tok);
-  if (Tok.isNot(TKind))
+  return Tok;
+}
+
+/// \brief Checks that the given token is the first token that occurs after the
+/// given location (this excludes comments and whitespace). Returns the location
+/// immediately after the specified token. If the token is not found or the
+/// location is inside a macro, the returned source location will be invalid.
+SourceLocation Lexer::findLocationAfterToken(
+    SourceLocation Loc, tok::TokenKind TKind, const SourceManager &SM,
+    const LangOptions &LangOpts, bool SkipTrailingWhitespaceAndNewLine) {
+  Optional<Token> Tok = findNextToken(Loc, SM, LangOpts);
+  if (!Tok || Tok->isNot(TKind))
     return SourceLocation();
-  SourceLocation TokenLoc = Tok.getLocation();
+  SourceLocation TokenLoc = Tok->getLocation();
 
   // Calculate how much whitespace needs to be skipped if any.
   unsigned NumWhitespaceChars = 0;
   if (SkipTrailingWhitespaceAndNewLine) {
-    const char *TokenEnd = SM.getCharacterData(TokenLoc) +
-                           Tok.getLength();
+    const char *TokenEnd = SM.getCharacterData(TokenLoc) + Tok->getLength();
     unsigned char C = *TokenEnd;
     while (isHorizontalWhitespace(C)) {
       C = *(++TokenEnd);
@@ -1269,7 +1273,7 @@ SourceLocation Lexer::findLocationAfterToken(SourceLocation Loc,
     }
   }
 
-  return TokenLoc.getLocWithOffset(Tok.getLength() + NumWhitespaceChars);
+  return TokenLoc.getLocWithOffset(Tok->getLength() + NumWhitespaceChars);
 }
 
 /// getCharAndSizeSlow - Peek a single 'character' from the specified buffer,
@@ -2144,7 +2148,8 @@ bool Lexer::SkipLineComment(Token &Result, const char *CurPtr,
     // If we read multiple characters, and one of those characters was a \r or
     // \n, then we had an escaped newline within the comment.  Emit diagnostic
     // unless the next line is also a // comment.
-    if (CurPtr != OldPtr+1 && C != '/' && CurPtr[0] != '/') {
+    if (CurPtr != OldPtr + 1 && C != '/' &&
+        (CurPtr == BufferEnd + 1 || CurPtr[0] != '/')) {
       for (; OldPtr != CurPtr; ++OldPtr)
         if (OldPtr[0] == '\n' || OldPtr[0] == '\r') {
           // Okay, we found a // comment that ends in a newline, if the next
@@ -3542,7 +3547,8 @@ LexNextToken:
     } else if (LangOpts.Digraphs && Char == '%') {     // '<%' -> '{'
       CurPtr = ConsumeChar(CurPtr, SizeTmp, Result);
       Kind = tok::l_brace;
-    } else if (Char == '#' && lexEditorPlaceholder(Result, CurPtr)) {
+    } else if (Char == '#' && /*Not a trigraph*/ SizeTmp == 1 &&
+               lexEditorPlaceholder(Result, CurPtr)) {
       return true;
     } else {
       Kind = tok::less;
@@ -3610,7 +3616,9 @@ LexNextToken:
     if (LangOpts.Digraphs && Char == '>') {
       Kind = tok::r_square; // ':>' -> ']'
       CurPtr = ConsumeChar(CurPtr, SizeTmp, Result);
-    } else if (LangOpts.CPlusPlus && Char == ':') {
+    } else if ((LangOpts.CPlusPlus ||
+                LangOpts.DoubleSquareBracketAttributes) &&
+               Char == ':') {
       Kind = tok::coloncolon;
       CurPtr = ConsumeChar(CurPtr, SizeTmp, Result);
     } else {

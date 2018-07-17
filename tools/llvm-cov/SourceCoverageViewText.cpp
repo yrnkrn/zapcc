@@ -29,8 +29,7 @@ void CoveragePrinterText::closeViewFile(OwnedStream OS) {
 }
 
 Error CoveragePrinterText::createIndexFile(
-    ArrayRef<std::string> SourceFiles,
-    const coverage::CoverageMapping &Coverage,
+    ArrayRef<std::string> SourceFiles, const CoverageMapping &Coverage,
     const CoverageFiltersMatchAll &Filters) {
   auto OSOrErr = createOutputStream("index", "txt", /*InToplevel=*/true);
   if (Error E = OSOrErr.takeError())
@@ -94,18 +93,21 @@ void SourceCoverageViewText::renderViewDivider(raw_ostream &OS,
   OS << '\n';
 }
 
-void SourceCoverageViewText::renderLine(
-    raw_ostream &OS, LineRef L,
-    const coverage::CoverageSegment *WrappedSegment,
-    CoverageSegmentArray Segments, unsigned ExpansionCol, unsigned ViewDepth) {
+void SourceCoverageViewText::renderLine(raw_ostream &OS, LineRef L,
+                                        const LineCoverageStats &LCS,
+                                        unsigned ExpansionCol,
+                                        unsigned ViewDepth) {
   StringRef Line = L.Line;
   unsigned LineNumber = L.LineNo;
+  auto *WrappedSegment = LCS.getWrappedSegment();
+  CoverageSegmentArray Segments = LCS.getLineSegments();
 
   Optional<raw_ostream::Colors> Highlight;
   SmallVector<std::pair<unsigned, unsigned>, 2> HighlightedRanges;
 
   // The first segment overlaps from a previous line, so we treat it specially.
-  if (WrappedSegment && WrappedSegment->HasCount && WrappedSegment->Count == 0)
+  if (WrappedSegment && !WrappedSegment->IsGapRegion &&
+      WrappedSegment->HasCount && WrappedSegment->Count == 0)
     Highlight = raw_ostream::RED;
 
   // Output each segment of the line, possibly highlighted.
@@ -119,10 +121,11 @@ void SourceCoverageViewText::renderLine(
     if (getOptions().Debug && Highlight)
       HighlightedRanges.push_back(std::make_pair(Col, End));
     Col = End;
-    if (Col == ExpansionCol)
-      Highlight = raw_ostream::CYAN;
-    else if (!S->IsGapRegion && S->HasCount && S->Count == 0)
+    if ((!S->IsGapRegion || (Highlight && *Highlight == raw_ostream::RED)) &&
+        S->HasCount && S->Count == 0)
       Highlight = raw_ostream::RED;
+    else if (Col == ExpansionCol)
+      Highlight = raw_ostream::CYAN;
     else
       Highlight = None;
   }
@@ -148,7 +151,7 @@ void SourceCoverageViewText::renderLineCoverageColumn(
     OS.indent(LineCoverageColumnWidth) << '|';
     return;
   }
-  std::string C = formatCount(Line.ExecutionCount);
+  std::string C = formatCount(Line.getExecutionCount());
   OS.indent(LineCoverageColumnWidth - C.size());
   colored_ostream(OS, raw_ostream::MAGENTA,
                   Line.hasMultipleRegions() && getOptions().Colors)
@@ -167,10 +170,13 @@ void SourceCoverageViewText::renderLineNumberColumn(raw_ostream &OS,
   OS.indent(LineNumberColumnWidth - Str.size()) << Str << '|';
 }
 
-void SourceCoverageViewText::renderRegionMarkers(
-    raw_ostream &OS, CoverageSegmentArray Segments, unsigned ViewDepth) {
+void SourceCoverageViewText::renderRegionMarkers(raw_ostream &OS,
+                                                 const LineCoverageStats &Line,
+                                                 unsigned ViewDepth) {
   renderLinePrefix(OS, ViewDepth);
   OS.indent(getCombinedColumnWidth(getOptions()));
+
+  CoverageSegmentArray Segments = Line.getLineSegments();
 
   // Just consider the segments which start *and* end on this line.
   if (Segments.size() > 1)
@@ -179,6 +185,8 @@ void SourceCoverageViewText::renderRegionMarkers(
   unsigned PrevColumn = 1;
   for (const auto *S : Segments) {
     if (!S->IsRegionEntry)
+      continue;
+    if (S->Count == Line.getExecutionCount())
       continue;
     // Skip to the new region.
     if (S->Col > PrevColumn)
@@ -195,12 +203,13 @@ void SourceCoverageViewText::renderRegionMarkers(
   OS << '\n';
 }
 
-void SourceCoverageViewText::renderExpansionSite(
-    raw_ostream &OS, LineRef L, const coverage::CoverageSegment *WrappedSegment,
-    CoverageSegmentArray Segments, unsigned ExpansionCol, unsigned ViewDepth) {
+void SourceCoverageViewText::renderExpansionSite(raw_ostream &OS, LineRef L,
+                                                 const LineCoverageStats &LCS,
+                                                 unsigned ExpansionCol,
+                                                 unsigned ViewDepth) {
   renderLinePrefix(OS, ViewDepth);
   OS.indent(getCombinedColumnWidth(getOptions()) + (ViewDepth == 0 ? 0 : 1));
-  renderLine(OS, L, WrappedSegment, Segments, ExpansionCol, ViewDepth);
+  renderLine(OS, L, LCS, ExpansionCol, ViewDepth);
 }
 
 void SourceCoverageViewText::renderExpansionView(raw_ostream &OS,

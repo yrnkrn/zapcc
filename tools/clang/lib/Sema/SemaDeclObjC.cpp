@@ -943,8 +943,9 @@ ActOnStartClassInterface(Scope *S, SourceLocation AtInterfaceLoc,
   assert(ClassName && "Missing class identifier");
 
   // Check for another declaration kind with the same name.
-  NamedDecl *PrevDecl = LookupSingleName(TUScope, ClassName, ClassLoc,
-                                         LookupOrdinaryName, ForRedeclaration);
+  NamedDecl *PrevDecl =
+      LookupSingleName(TUScope, ClassName, ClassLoc, LookupOrdinaryName,
+                       forRedeclarationInCurContext());
 
   if (PrevDecl && !isa<ObjCInterfaceDecl>(PrevDecl)) {
     Diag(ClassLoc, diag::err_redefinition_different_kind) << ClassName;
@@ -1095,16 +1096,18 @@ Decl *Sema::ActOnCompatibilityAlias(SourceLocation AtLoc,
                                     IdentifierInfo *ClassName,
                                     SourceLocation ClassLocation) {
   // Look for previous declaration of alias name
-  NamedDecl *ADecl = LookupSingleName(TUScope, AliasName, AliasLocation,
-                                      LookupOrdinaryName, ForRedeclaration);
+  NamedDecl *ADecl =
+      LookupSingleName(TUScope, AliasName, AliasLocation, LookupOrdinaryName,
+                       forRedeclarationInCurContext());
   if (ADecl) {
     Diag(AliasLocation, diag::err_conflicting_aliasing_type) << AliasName;
     Diag(ADecl->getLocation(), diag::note_previous_declaration);
     return nullptr;
   }
   // Check for class declaration
-  NamedDecl *CDeclU = LookupSingleName(TUScope, ClassName, ClassLocation,
-                                       LookupOrdinaryName, ForRedeclaration);
+  NamedDecl *CDeclU =
+      LookupSingleName(TUScope, ClassName, ClassLocation, LookupOrdinaryName,
+                       forRedeclarationInCurContext());
   if (const TypedefNameDecl *TDecl =
         dyn_cast_or_null<TypedefNameDecl>(CDeclU)) {
     QualType T = TDecl->getUnderlyingType();
@@ -1112,7 +1115,8 @@ Decl *Sema::ActOnCompatibilityAlias(SourceLocation AtLoc,
       if (NamedDecl *IDecl = T->getAs<ObjCObjectType>()->getInterface()) {
         ClassName = IDecl->getIdentifier();
         CDeclU = LookupSingleName(TUScope, ClassName, ClassLocation,
-                                  LookupOrdinaryName, ForRedeclaration);
+                                  LookupOrdinaryName,
+                                  forRedeclarationInCurContext());
       }
     }
   }
@@ -1174,7 +1178,7 @@ Sema::ActOnStartProtocolInterface(SourceLocation AtProtoInterfaceLoc,
   // FIXME: Deal with AttrList.
   assert(ProtocolName && "Missing protocol identifier");
   ObjCProtocolDecl *PrevDecl = LookupProtocol(ProtocolName, ProtocolLoc,
-                                              ForRedeclaration);
+                                              forRedeclarationInCurContext());
   ObjCProtocolDecl *PDecl = nullptr;
   if (ObjCProtocolDecl *Def = PrevDecl? PrevDecl->getDefinition() : nullptr) {
     // If we already have a definition, complain.
@@ -1730,7 +1734,7 @@ Sema::ActOnForwardProtocolDeclaration(SourceLocation AtProtocolLoc,
   for (const IdentifierLocPair &IdentPair : IdentList) {
     IdentifierInfo *Ident = IdentPair.first;
     ObjCProtocolDecl *PrevDecl = LookupProtocol(Ident, IdentPair.second,
-                                                ForRedeclaration);
+                                                forRedeclarationInCurContext());
     ObjCProtocolDecl *PDecl
       = ObjCProtocolDecl::Create(Context, CurContext, Ident, 
                                  IdentPair.second, AtProtocolLoc,
@@ -1921,7 +1925,7 @@ Decl *Sema::ActOnStartClassImplementation(
   // Check for another declaration kind with the same name.
   NamedDecl *PrevDecl
     = LookupSingleName(TUScope, ClassName, ClassLoc, LookupOrdinaryName,
-                       ForRedeclaration);
+                       forRedeclarationInCurContext());
   if (PrevDecl && !isa<ObjCInterfaceDecl>(PrevDecl)) {
     Diag(ClassLoc, diag::err_redefinition_different_kind) << ClassName;
     Diag(PrevDecl->getLocation(), diag::note_previous_definition);
@@ -2997,7 +3001,7 @@ Sema::ActOnForwardClassDeclaration(SourceLocation AtClassLoc,
     // Check for another declaration kind with the same name.
     NamedDecl *PrevDecl
       = LookupSingleName(TUScope, IdentList[i], IdentLocs[i], 
-                         LookupOrdinaryName, ForRedeclaration);
+                         LookupOrdinaryName, forRedeclarationInCurContext());
     if (PrevDecl && !isa<ObjCInterfaceDecl>(PrevDecl)) {
       // GCC apparently allows the following idiom:
       //
@@ -3717,6 +3721,26 @@ static void DiagnoseWeakIvars(Sema &S, ObjCImplementationDecl *ID) {
   }
 }
 
+/// Diagnose attempts to use flexible array member with retainable object type.
+static void DiagnoseRetainableFlexibleArrayMember(Sema &S,
+                                                  ObjCInterfaceDecl *ID) {
+  if (!S.getLangOpts().ObjCAutoRefCount)
+    return;
+
+  for (auto ivar = ID->all_declared_ivar_begin(); ivar;
+       ivar = ivar->getNextIvar()) {
+    if (ivar->isInvalidDecl())
+      continue;
+    QualType IvarTy = ivar->getType();
+    if (IvarTy->isIncompleteArrayType() &&
+        (IvarTy.getObjCLifetime() != Qualifiers::OCL_ExplicitNone) &&
+        IvarTy->isObjCLifetimeType()) {
+      S.Diag(ivar->getLocation(), diag::err_flexible_array_arc_retainable);
+      ivar->setInvalidDecl();
+    }
+  }
+}
+
 Sema::ObjCContainerKind Sema::getObjCContainerKind() const {
   switch (CurContext->getDeclKind()) {
     case Decl::ObjCInterface:
@@ -3734,6 +3758,96 @@ Sema::ObjCContainerKind Sema::getObjCContainerKind() const {
 
     default:
       return Sema::OCK_None;
+  }
+}
+
+static bool IsVariableSizedType(QualType T) {
+  if (T->isIncompleteArrayType())
+    return true;
+  const auto *RecordTy = T->getAs<RecordType>();
+  return (RecordTy && RecordTy->getDecl()->hasFlexibleArrayMember());
+}
+
+static void DiagnoseVariableSizedIvars(Sema &S, ObjCContainerDecl *OCD) {
+  ObjCInterfaceDecl *IntfDecl = nullptr;
+  ObjCInterfaceDecl::ivar_range Ivars = llvm::make_range(
+      ObjCInterfaceDecl::ivar_iterator(), ObjCInterfaceDecl::ivar_iterator());
+  if ((IntfDecl = dyn_cast<ObjCInterfaceDecl>(OCD))) {
+    Ivars = IntfDecl->ivars();
+  } else if (auto *ImplDecl = dyn_cast<ObjCImplementationDecl>(OCD)) {
+    IntfDecl = ImplDecl->getClassInterface();
+    Ivars = ImplDecl->ivars();
+  } else if (auto *CategoryDecl = dyn_cast<ObjCCategoryDecl>(OCD)) {
+    if (CategoryDecl->IsClassExtension()) {
+      IntfDecl = CategoryDecl->getClassInterface();
+      Ivars = CategoryDecl->ivars();
+    }
+  }
+
+  // Check if variable sized ivar is in interface and visible to subclasses.
+  if (!isa<ObjCInterfaceDecl>(OCD)) {
+    for (auto ivar : Ivars) {
+      if (!ivar->isInvalidDecl() && IsVariableSizedType(ivar->getType())) {
+        S.Diag(ivar->getLocation(), diag::warn_variable_sized_ivar_visibility)
+            << ivar->getDeclName() << ivar->getType();
+      }
+    }
+  }
+
+  // Subsequent checks require interface decl.
+  if (!IntfDecl)
+    return;
+
+  // Check if variable sized ivar is followed by another ivar.
+  for (ObjCIvarDecl *ivar = IntfDecl->all_declared_ivar_begin(); ivar;
+       ivar = ivar->getNextIvar()) {
+    if (ivar->isInvalidDecl() || !ivar->getNextIvar())
+      continue;
+    QualType IvarTy = ivar->getType();
+    bool IsInvalidIvar = false;
+    if (IvarTy->isIncompleteArrayType()) {
+      S.Diag(ivar->getLocation(), diag::err_flexible_array_not_at_end)
+          << ivar->getDeclName() << IvarTy
+          << TTK_Class; // Use "class" for Obj-C.
+      IsInvalidIvar = true;
+    } else if (const RecordType *RecordTy = IvarTy->getAs<RecordType>()) {
+      if (RecordTy->getDecl()->hasFlexibleArrayMember()) {
+        S.Diag(ivar->getLocation(),
+               diag::err_objc_variable_sized_type_not_at_end)
+            << ivar->getDeclName() << IvarTy;
+        IsInvalidIvar = true;
+      }
+    }
+    if (IsInvalidIvar) {
+      S.Diag(ivar->getNextIvar()->getLocation(),
+             diag::note_next_ivar_declaration)
+          << ivar->getNextIvar()->getSynthesize();
+      ivar->setInvalidDecl();
+    }
+  }
+
+  // Check if ObjC container adds ivars after variable sized ivar in superclass.
+  // Perform the check only if OCD is the first container to declare ivars to
+  // avoid multiple warnings for the same ivar.
+  ObjCIvarDecl *FirstIvar =
+      (Ivars.begin() == Ivars.end()) ? nullptr : *Ivars.begin();
+  if (FirstIvar && (FirstIvar == IntfDecl->all_declared_ivar_begin())) {
+    const ObjCInterfaceDecl *SuperClass = IntfDecl->getSuperClass();
+    while (SuperClass && SuperClass->ivar_empty())
+      SuperClass = SuperClass->getSuperClass();
+    if (SuperClass) {
+      auto IvarIter = SuperClass->ivar_begin();
+      std::advance(IvarIter, SuperClass->ivar_size() - 1);
+      const ObjCIvarDecl *LastIvar = *IvarIter;
+      if (IsVariableSizedType(LastIvar->getType())) {
+        S.Diag(FirstIvar->getLocation(),
+               diag::warn_superclass_variable_sized_type_not_at_end)
+            << FirstIvar->getDeclName() << LastIvar->getDeclName()
+            << LastIvar->getType() << SuperClass->getDeclName();
+        S.Diag(LastIvar->getLocation(), diag::note_entity_declared_at)
+            << LastIvar->getDeclName();
+      }
+    }
   }
 }
 
@@ -3868,6 +3982,7 @@ Decl *Sema::ActOnAtEnd(Scope *S, SourceRange AtEnd, ArrayRef<Decl *> allMethods,
       if (IDecl->hasDesignatedInitializers())
         DiagnoseMissingDesignatedInitOverrides(IC, IDecl);
       DiagnoseWeakIvars(*this, IC);
+      DiagnoseRetainableFlexibleArrayMember(*this, IDecl);
 
       bool HasRootClassAttr = IDecl->hasAttr<ObjCRootClassAttr>();
       if (IDecl->getSuperClass() == nullptr) {
@@ -3937,6 +4052,7 @@ Decl *Sema::ActOnAtEnd(Scope *S, SourceRange AtEnd, ArrayRef<Decl *> allMethods,
       }
     }
   }
+  DiagnoseVariableSizedIvars(*this, OCD);
   if (isInterfaceDeclKind) {
     // Reject invalid vardecls.
     for (unsigned i = 0, e = allTUVars.size(); i != e; i++) {
@@ -4219,6 +4335,10 @@ void Sema::CheckObjCMethodOverrides(ObjCMethodDecl *ObjCMethod,
 
     // Then merge the declarations.
     mergeObjCMethodDecls(ObjCMethod, overridden);
+  }
+
+  for (ObjCMethodDecl *overridden : overrides) {
+    CheckObjCMethodOverride(ObjCMethod, overridden);
 
     if (ObjCMethod->isImplicit() && overridden->isImplicit())
       continue; // Conflicting properties are detected elsewhere.
@@ -4443,7 +4563,7 @@ Decl *Sema::ActOnMethodDeclaration(
     }
 
     LookupResult R(*this, ArgInfo[i].Name, ArgInfo[i].NameLoc, 
-                   LookupOrdinaryName, ForRedeclaration);
+                   LookupOrdinaryName, forRedeclarationInCurContext());
     LookupName(R, S);
     if (R.isSingleResult()) {
       NamedDecl *PrevDecl = R.getFoundDecl();
@@ -4680,7 +4800,7 @@ VarDecl *Sema::BuildObjCExceptionDecl(TypeSourceInfo *TInfo, QualType T,
   // duration shall not be qualified by an address-space qualifier."
   // Since all parameters have automatic store duration, they can not have
   // an address space.
-  if (T.getAddressSpace() != 0) {
+  if (T.getAddressSpace() != LangAS::Default) {
     Diag(IdLoc, diag::err_arg_with_address_space);
     Invalid = true;
   }

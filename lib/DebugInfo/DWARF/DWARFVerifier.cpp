@@ -13,9 +13,11 @@
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
+#include "llvm/DebugInfo/DWARF/DWARFExpression.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFSection.h"
 #include "llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/raw_ostream.h"
 #include <map>
 #include <set>
@@ -134,7 +136,7 @@ bool DWARFVerifier::verifyUnitHeader(const DWARFDataExtractor DebugInfoData,
     UnitType = DebugInfoData.getU8(Offset);
     AddrSize = DebugInfoData.getU8(Offset);
     AbbrOffset = DebugInfoData.getU32(Offset);
-    ValidType = DWARFUnit::isValidUnitType(UnitType);
+    ValidType = dwarf::isUnitType(UnitType);
   } else {
     UnitType = 0;
     AbbrOffset = DebugInfoData.getU32(Offset);
@@ -169,7 +171,7 @@ bool DWARFVerifier::verifyUnitHeader(const DWARFDataExtractor DebugInfoData,
   return Success;
 }
 
-bool DWARFVerifier::verifyUnitContents(DWARFUnit Unit) {
+bool DWARFVerifier::verifyUnitContents(DWARFUnit Unit, uint8_t UnitType) {
   uint32_t NumUnitErrors = 0;
   unsigned NumDies = Unit.getNumDIEs();
   for (unsigned I = 0; I < NumDies; ++I) {
@@ -182,13 +184,29 @@ bool DWARFVerifier::verifyUnitContents(DWARFUnit Unit) {
     }
   }
 
-  if (DWARFDie Die = Unit.getUnitDIE(/* ExtractUnitDIEOnly = */ false)) {
-    DieRangeInfo RI;
-    NumUnitErrors += verifyDieRanges(Die, RI);
-  } else {
-    error() << "Compilation unit without unit DIE.\n";
+  DWARFDie Die = Unit.getUnitDIE(/* ExtractUnitDIEOnly = */ false);
+  if (!Die) {
+    error() << "Compilation unit without DIE.\n";
+    NumUnitErrors++;
+    return NumUnitErrors == 0;
+  }
+
+  if (!dwarf::isUnitType(Die.getTag())) {
+    error() << "Compilation unit root DIE is not a unit DIE: "
+            << dwarf::TagString(Die.getTag()) << ".\n";
     NumUnitErrors++;
   }
+
+  if (UnitType != 0 &&
+      !DWARFUnit::isMatchingUnitTypeAndTag(UnitType, Die.getTag())) {
+    error() << "Compilation unit type (" << dwarf::UnitTypeString(UnitType)
+            << ") and root DIE (" << dwarf::TagString(Die.getTag())
+            << ") do not match.\n";
+    NumUnitErrors++;
+  }
+
+  DieRangeInfo RI;
+  NumUnitErrors += verifyDieRanges(Die, RI);
 
   return NumUnitErrors == 0;
 }
@@ -246,6 +264,8 @@ bool DWARFVerifier::handleDebugInfo() {
   bool isUnitDWARF64 = false;
   bool isHeaderChainValid = true;
   bool hasDIE = DebugInfoData.isValidOffset(Offset);
+  DWARFUnitSection<DWARFTypeUnit> TUSection{};
+  DWARFUnitSection<DWARFCompileUnit> CUSection{};
   while (hasDIE) {
     OffsetStart = Offset;
     if (!verifyUnitHeader(DebugInfoData, &Offset, UnitIdx, UnitType,
@@ -258,7 +278,6 @@ bool DWARFVerifier::handleDebugInfo() {
       switch (UnitType) {
       case dwarf::DW_UT_type:
       case dwarf::DW_UT_split_type: {
-        DWARFUnitSection<DWARFTypeUnit> TUSection{};
         Unit.reset(new DWARFTypeUnit(
             DCtx, DObj.getInfoSection(), DCtx.getDebugAbbrev(),
             &DObj.getRangeSection(), DObj.getStringSection(),
@@ -274,7 +293,6 @@ bool DWARFVerifier::handleDebugInfo() {
       // UnitType = 0 means that we are
       // verifying a compile unit in DWARF v4.
       case 0: {
-        DWARFUnitSection<DWARFCompileUnit> CUSection{};
         Unit.reset(new DWARFCompileUnit(
             DCtx, DObj.getInfoSection(), DCtx.getDebugAbbrev(),
             &DObj.getRangeSection(), DObj.getStringSection(),
@@ -286,7 +304,7 @@ bool DWARFVerifier::handleDebugInfo() {
       default: { llvm_unreachable("Invalid UnitType."); }
       }
       Unit->extract(DebugInfoData, &OffsetStart);
-      if (!verifyUnitContents(*Unit))
+      if (!verifyUnitContents(*Unit, UnitType))
         ++NumDebugInfoErrors;
     }
     hasDIE = DebugInfoData.isValidOffset(Offset);
@@ -361,45 +379,55 @@ unsigned DWARFVerifier::verifyDieRanges(const DWARFDie &Die,
 
 unsigned DWARFVerifier::verifyDebugInfoAttribute(const DWARFDie &Die,
                                                  DWARFAttribute &AttrValue) {
-  const DWARFObject &DObj = DCtx.getDWARFObj();
   unsigned NumErrors = 0;
+  auto ReportError = [&](const Twine &TitleMsg) {
+    ++NumErrors;
+    error() << TitleMsg << '\n';
+    Die.dump(OS, 0, DumpOpts);
+    OS << "\n";
+  };
+
+  const DWARFObject &DObj = DCtx.getDWARFObj();
   const auto Attr = AttrValue.Attr;
   switch (Attr) {
   case DW_AT_ranges:
     // Make sure the offset in the DW_AT_ranges attribute is valid.
     if (auto SectionOffset = AttrValue.Value.getAsSectionOffset()) {
-      if (*SectionOffset >= DObj.getRangeSection().Data.size()) {
-        ++NumErrors;
-        error() << "DW_AT_ranges offset is beyond .debug_ranges "
-                   "bounds:\n";
-        Die.dump(OS, 0, DumpOpts);
-        OS << "\n";
-      }
-    } else {
-      ++NumErrors;
-      error() << "DIE has invalid DW_AT_ranges encoding:\n";
-      Die.dump(OS, 0, DumpOpts);
-      OS << "\n";
+      if (*SectionOffset >= DObj.getRangeSection().Data.size())
+        ReportError("DW_AT_ranges offset is beyond .debug_ranges bounds:");
+      break;
     }
+    ReportError("DIE has invalid DW_AT_ranges encoding:");
     break;
   case DW_AT_stmt_list:
     // Make sure the offset in the DW_AT_stmt_list attribute is valid.
     if (auto SectionOffset = AttrValue.Value.getAsSectionOffset()) {
-      if (*SectionOffset >= DObj.getLineSection().Data.size()) {
-        ++NumErrors;
-        error() << "DW_AT_stmt_list offset is beyond .debug_line "
-                   "bounds: "
-                << format("0x%08" PRIx64, *SectionOffset) << "\n";
-        Die.dump(OS, 0, DumpOpts);
-        OS << "\n";
-      }
-    } else {
-      ++NumErrors;
-      error() << "DIE has invalid DW_AT_stmt_list encoding:\n";
-      Die.dump(OS, 0, DumpOpts);
-      OS << "\n";
+      if (*SectionOffset >= DObj.getLineSection().Data.size())
+        ReportError("DW_AT_stmt_list offset is beyond .debug_line bounds: " +
+                    llvm::formatv("{0:x8}", *SectionOffset));
+      break;
     }
+    ReportError("DIE has invalid DW_AT_stmt_list encoding:");
     break;
+  case DW_AT_location: {
+    Optional<ArrayRef<uint8_t>> Expr = AttrValue.Value.getAsBlock();
+    if (!Expr) {
+      ReportError("DIE has invalid DW_AT_location encoding:");
+      break;
+    }
+
+    DWARFUnit *U = Die.getDwarfUnit();
+    DataExtractor Data(
+        StringRef(reinterpret_cast<const char *>(Expr->data()), Expr->size()),
+        DCtx.isLittleEndian(), 0);
+    DWARFExpression Expression(Data, U->getVersion(), U->getAddressByteSize());
+    bool Error = llvm::any_of(Expression, [](DWARFExpression::Operation &Op) {
+      return Op.isError();
+    });
+    if (Error)
+      ReportError("DIE contains invalid DWARF expression:");
+    break;
+  }
 
   default:
     break;

@@ -30,6 +30,7 @@ void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializeDwarfEHPreparePass(Registry);
   initializeEarlyIfConverterPass(Registry);
   initializeExpandISelPseudosPass(Registry);
+  initializeExpandMemCmpPassPass(Registry);
   initializeExpandPostRAPass(Registry);
   initializeFEntryInserterPass(Registry);
   initializeFinalizeMachineBundlesPass(Registry);
@@ -99,6 +100,7 @@ void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializeVirtRegRewriterPass(Registry);
   initializeWinEHPreparePass(Registry);
   initializeXRayInstrumentationPass(Registry);
+  initializeMIRCanonicalizerPass(Registry);
 }
 
 void LLVMInitializeCodeGen(LLVMPassRegistryRef R) {

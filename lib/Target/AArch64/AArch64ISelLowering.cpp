@@ -42,6 +42,7 @@
 #include "llvm/CodeGen/RuntimeLibcalls.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Constants.h"
@@ -71,7 +72,6 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetCallingConv.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
@@ -1972,10 +1972,41 @@ SDValue AArch64TargetLowering::LowerF128Call(SDValue Op, SelectionDAG &DAG,
   return makeLibCall(DAG, Call, MVT::f128, Ops, false, SDLoc(Op)).first;
 }
 
+// Returns true if the given Op is the overflow flag result of an overflow
+// intrinsic operation.
+static bool isOverflowIntrOpRes(SDValue Op) {
+  unsigned Opc = Op.getOpcode();
+  return (Op.getResNo() == 1 &&
+          (Opc == ISD::SADDO || Opc == ISD::UADDO || Opc == ISD::SSUBO ||
+           Opc == ISD::USUBO || Opc == ISD::SMULO || Opc == ISD::UMULO));
+}
+
 static SDValue LowerXOR(SDValue Op, SelectionDAG &DAG) {
   SDValue Sel = Op.getOperand(0);
   SDValue Other = Op.getOperand(1);
+  SDLoc dl(Sel);
 
+  // If the operand is an overflow checking operation, invert the condition
+  // code and kill the Not operation. I.e., transform:
+  // (xor (overflow_op_bool, 1))
+  //   -->
+  // (csel 1, 0, invert(cc), overflow_op_bool)
+  // ... which later gets transformed to just a cset instruction with an
+  // inverted condition code, rather than a cset + eor sequence.
+  if (isOneConstant(Other) && isOverflowIntrOpRes(Sel)) {
+    // Only lower legal XALUO ops.
+    if (!DAG.getTargetLoweringInfo().isTypeLegal(Sel->getValueType(0)))
+      return SDValue();
+
+    SDValue TVal = DAG.getConstant(1, dl, MVT::i32);
+    SDValue FVal = DAG.getConstant(0, dl, MVT::i32);
+    AArch64CC::CondCode CC;
+    SDValue Value, Overflow;
+    std::tie(Value, Overflow) = getAArch64XALUOOp(CC, Sel.getValue(0), DAG);
+    SDValue CCVal = DAG.getConstant(getInvertedCondCode(CC), dl, MVT::i32);
+    return DAG.getNode(AArch64ISD::CSEL, dl, Op.getValueType(), TVal, FVal,
+                       CCVal, Overflow);
+  }
   // If neither operand is a SELECT_CC, give up.
   if (Sel.getOpcode() != ISD::SELECT_CC)
     std::swap(Sel, Other);
@@ -1994,7 +2025,6 @@ static SDValue LowerXOR(SDValue Op, SelectionDAG &DAG) {
   SDValue RHS = Sel.getOperand(1);
   SDValue TVal = Sel.getOperand(2);
   SDValue FVal = Sel.getOperand(3);
-  SDLoc dl(Sel);
 
   // FIXME: This could be generalized to non-integer comparisons.
   if (LHS.getValueType() != MVT::i32 && LHS.getValueType() != MVT::i64)
@@ -3457,6 +3487,10 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
         AArch64II::MO_GOT) {
       Callee = DAG.getTargetGlobalAddress(GV, DL, PtrVT, 0, AArch64II::MO_GOT);
       Callee = DAG.getNode(AArch64ISD::LOADgot, DL, PtrVT, Callee);
+    } else if (Subtarget->isTargetCOFF() && GV->hasDLLImportStorageClass()) {
+      assert(Subtarget->isTargetWindows() &&
+             "Windows is the only supported COFF target");
+      Callee = getGOT(G, DAG, AArch64II::MO_DLLIMPORT);
     } else {
       const GlobalValue *GV = G->getGlobal();
       Callee = DAG.getTargetGlobalAddress(GV, DL, PtrVT, 0, 0);
@@ -3657,11 +3691,12 @@ SDValue AArch64TargetLowering::getTargetNode(BlockAddressSDNode* N, EVT Ty,
 
 // (loadGOT sym)
 template <class NodeTy>
-SDValue AArch64TargetLowering::getGOT(NodeTy *N, SelectionDAG &DAG) const {
+SDValue AArch64TargetLowering::getGOT(NodeTy *N, SelectionDAG &DAG,
+                                      unsigned Flags) const {
   DEBUG(dbgs() << "AArch64TargetLowering::getGOT\n");
   SDLoc DL(N);
   EVT Ty = getPointerTy(DAG.getDataLayout());
-  SDValue GotAddr = getTargetNode(N, Ty, DAG, AArch64II::MO_GOT);
+  SDValue GotAddr = getTargetNode(N, Ty, DAG, AArch64II::MO_GOT | Flags);
   // FIXME: Once remat is capable of dealing with instructions with register
   // operands, expand this into two nodes instead of using a wrapper node.
   return DAG.getNode(AArch64ISD::LOADgot, DL, Ty, GotAddr);
@@ -3669,29 +3704,30 @@ SDValue AArch64TargetLowering::getGOT(NodeTy *N, SelectionDAG &DAG) const {
 
 // (wrapper %highest(sym), %higher(sym), %hi(sym), %lo(sym))
 template <class NodeTy>
-SDValue AArch64TargetLowering::getAddrLarge(NodeTy *N, SelectionDAG &DAG)
-  const {
+SDValue AArch64TargetLowering::getAddrLarge(NodeTy *N, SelectionDAG &DAG,
+                                            unsigned Flags) const {
   DEBUG(dbgs() << "AArch64TargetLowering::getAddrLarge\n");
   SDLoc DL(N);
   EVT Ty = getPointerTy(DAG.getDataLayout());
   const unsigned char MO_NC = AArch64II::MO_NC;
   return DAG.getNode(
-        AArch64ISD::WrapperLarge, DL, Ty,
-        getTargetNode(N, Ty, DAG, AArch64II::MO_G3),
-        getTargetNode(N, Ty, DAG, AArch64II::MO_G2 | MO_NC),
-        getTargetNode(N, Ty, DAG, AArch64II::MO_G1 | MO_NC),
-        getTargetNode(N, Ty, DAG, AArch64II::MO_G0 | MO_NC));
+      AArch64ISD::WrapperLarge, DL, Ty,
+      getTargetNode(N, Ty, DAG, AArch64II::MO_G3 | Flags),
+      getTargetNode(N, Ty, DAG, AArch64II::MO_G2 | MO_NC | Flags),
+      getTargetNode(N, Ty, DAG, AArch64II::MO_G1 | MO_NC | Flags),
+      getTargetNode(N, Ty, DAG, AArch64II::MO_G0 | MO_NC | Flags));
 }
 
 // (addlow (adrp %hi(sym)) %lo(sym))
 template <class NodeTy>
-SDValue AArch64TargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG) const {
+SDValue AArch64TargetLowering::getAddr(NodeTy *N, SelectionDAG &DAG,
+                                       unsigned Flags) const {
   DEBUG(dbgs() << "AArch64TargetLowering::getAddr\n");
   SDLoc DL(N);
   EVT Ty = getPointerTy(DAG.getDataLayout());
-  SDValue Hi = getTargetNode(N, Ty, DAG, AArch64II::MO_PAGE);
+  SDValue Hi = getTargetNode(N, Ty, DAG, AArch64II::MO_PAGE | Flags);
   SDValue Lo = getTargetNode(N, Ty, DAG,
-                             AArch64II::MO_PAGEOFF | AArch64II::MO_NC);
+                             AArch64II::MO_PAGEOFF | AArch64II::MO_NC | Flags);
   SDValue ADRP = DAG.getNode(AArch64ISD::ADRP, DL, Ty, Hi);
   return DAG.getNode(AArch64ISD::ADDlow, DL, Ty, ADRP, Lo);
 }
@@ -3700,6 +3736,9 @@ SDValue AArch64TargetLowering::LowerGlobalAddress(SDValue Op,
                                                   SelectionDAG &DAG) const {
   GlobalAddressSDNode *GN = cast<GlobalAddressSDNode>(Op);
   const GlobalValue *GV = GN->getGlobal();
+  const AArch64II::TOF TargetFlags =
+      (GV->hasDLLImportStorageClass() ? AArch64II::MO_DLLIMPORT
+                                      : AArch64II::MO_NO_FLAG);
   unsigned char OpFlags =
       Subtarget->ClassifyGlobalReference(GV, getTargetMachine());
 
@@ -3708,14 +3747,21 @@ SDValue AArch64TargetLowering::LowerGlobalAddress(SDValue Op,
 
   // This also catches the large code model case for Darwin.
   if ((OpFlags & AArch64II::MO_GOT) != 0) {
-    return getGOT(GN, DAG);
+    return getGOT(GN, DAG, TargetFlags);
   }
 
+  SDValue Result;
   if (getTargetMachine().getCodeModel() == CodeModel::Large) {
-    return getAddrLarge(GN, DAG);
+    Result = getAddrLarge(GN, DAG, TargetFlags);
   } else {
-    return getAddr(GN, DAG);
+    Result = getAddr(GN, DAG, TargetFlags);
   }
+  EVT PtrVT = getPointerTy(DAG.getDataLayout());
+  SDLoc DL(GN);
+  if (GV->hasDLLImportStorageClass())
+    Result = DAG.getLoad(PtrVT, DL, DAG.getEntryNode(), Result,
+                         MachinePointerInfo::getGOT(DAG.getMachineFunction()));
+  return Result;
 }
 
 /// \brief Convert a TLS address reference into the correct sequence of loads
@@ -3958,10 +4004,7 @@ SDValue AArch64TargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const {
 
   // Optimize {s|u}{add|sub|mul}.with.overflow feeding into a branch
   // instruction.
-  unsigned Opc = LHS.getOpcode();
-  if (LHS.getResNo() == 1 && isOneConstant(RHS) &&
-      (Opc == ISD::SADDO || Opc == ISD::UADDO || Opc == ISD::SSUBO ||
-       Opc == ISD::USUBO || Opc == ISD::SMULO || Opc == ISD::UMULO)) {
+  if (isOverflowIntrOpRes(LHS) && isOneConstant(RHS)) {
     assert((CC == ISD::SETEQ || CC == ISD::SETNE) &&
            "Unexpected condition code.");
     // Only lower legal XALUO ops.
@@ -4453,12 +4496,9 @@ SDValue AArch64TargetLowering::LowerSELECT(SDValue Op,
   SDValue FVal = Op->getOperand(2);
   SDLoc DL(Op);
 
-  unsigned Opc = CCVal.getOpcode();
   // Optimize {s|u}{add|sub|mul}.with.overflow feeding into a select
   // instruction.
-  if (CCVal.getResNo() == 1 &&
-      (Opc == ISD::SADDO || Opc == ISD::UADDO || Opc == ISD::SSUBO ||
-       Opc == ISD::USUBO || Opc == ISD::SMULO || Opc == ISD::UMULO)) {
+  if (isOverflowIntrOpRes(CCVal)) {
     // Only lower legal XALUO ops.
     if (!DAG.getTargetLoweringInfo().isTypeLegal(CCVal->getValueType(0)))
       return SDValue();
@@ -4941,7 +4981,7 @@ static SDValue getEstimate(const AArch64Subtarget *ST, unsigned Opcode,
       // the initial estimate is 2^-8.  Thus the number of extra steps to refine
       // the result for float (23 mantissa bits) is 2 and for double (52
       // mantissa bits) is 3.
-      ExtraSteps = VT == MVT::f64 ? 3 : 2;
+      ExtraSteps = VT.getScalarType() == MVT::f64 ? 3 : 2;
 
     return DAG.getNode(Opcode, SDLoc(Operand), VT, Operand);
   }

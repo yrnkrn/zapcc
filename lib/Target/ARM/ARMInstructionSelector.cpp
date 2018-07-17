@@ -15,13 +15,12 @@
 #include "ARMSubtarget.h"
 #include "ARMTargetMachine.h"
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
+#include "llvm/CodeGen/GlobalISel/InstructionSelectorImpl.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "arm-isel"
-
-#include "llvm/CodeGen/GlobalISel/InstructionSelectorImpl.h"
 
 using namespace llvm;
 
@@ -37,6 +36,7 @@ public:
                          const ARMRegisterBankInfo &RBI);
 
   bool select(MachineInstr &I) const override;
+  static const char *getName() { return DEBUG_TYPE; }
 
 private:
   bool selectImpl(MachineInstr &I) const;
@@ -59,6 +59,7 @@ private:
 
   bool selectGlobal(MachineInstrBuilder &MIB, MachineRegisterInfo &MRI) const;
   bool selectSelect(MachineInstrBuilder &MIB, MachineRegisterInfo &MRI) const;
+  bool selectShift(unsigned ShiftOpc, MachineInstrBuilder &MIB) const;
 
   // Check if the types match and both operands have the expected size and
   // register bank.
@@ -640,6 +641,14 @@ bool ARMInstructionSelector::selectSelect(MachineInstrBuilder &MIB,
   return true;
 }
 
+bool ARMInstructionSelector::selectShift(unsigned ShiftOpc,
+                                         MachineInstrBuilder &MIB) const {
+  MIB->setDesc(TII.get(ARM::MOVsr));
+  MIB.addImm(ShiftOpc);
+  MIB.add(predOps(ARMCC::AL)).add(condCodeOp());
+  return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
+}
+
 bool ARMInstructionSelector::select(MachineInstr &I) const {
   assert(I.getParent() && "Instruction should be in a basic block!");
   assert(I.getParent()->getParent() && "Instruction should be in a function!");
@@ -765,6 +774,13 @@ bool ARMInstructionSelector::select(MachineInstr &I) const {
     CmpConstants Helper(Size == 32 ? ARM::VCMPS : ARM::VCMPD, ARM::FMSTAT,
                         ARM::FPRRegBankID, Size);
     return selectCmp(Helper, MIB, MRI);
+  }
+  case G_LSHR:
+    return selectShift(ARM_AM::ShiftOpc::lsr, MIB);
+  case G_ASHR:
+    return selectShift(ARM_AM::ShiftOpc::asr, MIB);
+  case G_SHL: {
+    return selectShift(ARM_AM::ShiftOpc::lsl, MIB);
   }
   case G_GEP:
     I.setDesc(TII.get(ARM::ADDrr));

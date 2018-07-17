@@ -21,6 +21,7 @@ add_llvm_library(LLVMCodeGen
   EdgeBundles.cpp
   ExecutionDepsFix.cpp
   ExpandISelPseudos.cpp
+  ExpandMemCmp.cpp
   ExpandPostRAPseudos.cpp
   ExpandReductions.cpp
   FaultMaps.cpp
@@ -113,6 +114,7 @@ add_llvm_library(LLVMCodeGen
   RegisterPressure.cpp
   RegisterScavenging.cpp
   RenameIndependentSubregs.cpp
+  MIRCanonicalizerPass.cpp
   RegisterUsageInfo.cpp
   RegUsageInfoCollector.cpp
   RegUsageInfoPropagate.cpp

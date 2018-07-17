@@ -449,7 +449,7 @@ def FLT32_TO_FLT16 : R600_1OP_Helper <0xA2, "FLT32_TO_FLT16", AMDGPUfp_to_f16, V
 def FLT16_TO_FLT32 : R600_1OP_Helper <0xA3, "FLT16_TO_FLT32", f16_to_fp, VecALU>;
 def BCNT_INT : R600_1OP_Helper <0xAA, "BCNT_INT", ctpop, VecALU>;
 def FFBH_UINT : R600_1OP_Helper <0xAB, "FFBH_UINT", AMDGPUffbh_u32, VecALU>;
-def FFBL_INT : R600_1OP_Helper <0xAC, "FFBL_INT", cttz_zero_undef, VecALU>;
+def FFBL_INT : R600_1OP_Helper <0xAC, "FFBL_INT", AMDGPUffbl_b32, VecALU>;
 
 let hasSideEffects = 1 in {
   def MOVA_INT_eg : R600_1OP <0xCC, "MOVA_INT", [], VecALU>;
@@ -660,7 +660,7 @@ def LDS_WRXCHG_RET : R600_LDS_1A1D_RET <0x2d, "LDS_WRXCHG",
   [(set i32:$dst, (atomic_swap_local i32:$src0, i32:$src1))]
 >;
 def LDS_CMPST_RET : R600_LDS_1A2D_RET <0x30, "LDS_CMPST",
-  [(set i32:$dst, (atomic_cmp_swap_32_local i32:$src0, i32:$src1, i32:$src2))]
+  [(set i32:$dst, (atomic_cmp_swap_local i32:$src0, i32:$src1, i32:$src2))]
 >;
 def LDS_READ_RET : R600_LDS_1A <0x32, "LDS_READ_RET",
   [(set (i32 R600_Reg32:$dst), (load_local R600_Reg32:$src0))]

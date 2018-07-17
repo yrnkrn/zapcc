@@ -1110,10 +1110,12 @@ static void writeAtomicRMWOperation(raw_ostream &Out,
 
 static void WriteOptimizationInfo(raw_ostream &Out, const User *U) {
   if (const FPMathOperator *FPO = dyn_cast<const FPMathOperator>(U)) {
-    // Unsafe algebra implies all the others, no need to write them all out
-    if (FPO->hasUnsafeAlgebra())
+    // 'Fast' is an abbreviation for all fast-math-flags.
+    if (FPO->isFast())
       Out << " fast";
     else {
+      if (FPO->hasAllowReassoc())
+        Out << " reassoc";
       if (FPO->hasNoNaNs())
         Out << " nnan";
       if (FPO->hasNoInfs())
@@ -1124,6 +1126,8 @@ static void WriteOptimizationInfo(raw_ostream &Out, const User *U) {
         Out << " arcp";
       if (FPO->hasAllowContract())
         Out << " contract";
+      if (FPO->hasApproxFunc())
+        Out << " afn";
     }
   }
 
@@ -2495,6 +2499,11 @@ static void PrintVisibility(GlobalValue::VisibilityTypes Vis,
   }
 }
 
+static void PrintDSOLocation(bool IsDSOLocal, formatted_raw_ostream &Out){
+  if (IsDSOLocal)
+    Out << "dso_local ";
+}
+
 static void PrintDLLStorageClass(GlobalValue::DLLStorageClassTypes SCT,
                                  formatted_raw_ostream &Out) {
   switch (SCT) {
@@ -2565,6 +2574,7 @@ void AssemblyWriter::printGlobal(const GlobalVariable *GV) {
     Out << "external ";
 
   Out << getLinkagePrintName(GV->getLinkage());
+  PrintDSOLocation(GV->isDSOLocal(), Out);
   PrintVisibility(GV->getVisibility(), Out);
   PrintDLLStorageClass(GV->getDLLStorageClass(), Out);
   PrintThreadLocalModel(GV->getThreadLocalMode(), Out);
@@ -2611,6 +2621,7 @@ void AssemblyWriter::printIndirectSymbol(const GlobalIndirectSymbol *GIS) {
   Out << " = ";
 
   Out << getLinkagePrintName(GIS->getLinkage());
+  PrintDSOLocation(GIS->isDSOLocal(), Out);
   PrintVisibility(GIS->getVisibility(), Out);
   PrintDLLStorageClass(GIS->getDLLStorageClass(), Out);
   PrintThreadLocalModel(GIS->getThreadLocalMode(), Out);
@@ -2722,6 +2733,7 @@ void AssemblyWriter::printFunction(const Function *F) {
     Out << "define ";
 
   Out << getLinkagePrintName(F->getLinkage());
+  PrintDSOLocation(F->isDSOLocal(), Out);
   PrintVisibility(F->getVisibility(), Out);
   PrintDLLStorageClass(F->getDLLStorageClass(), Out);
 

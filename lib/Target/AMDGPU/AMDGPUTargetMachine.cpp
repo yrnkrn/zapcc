@@ -117,10 +117,10 @@ static cl::opt<bool> EnableSIInsertWaitcntsPass(
   cl::init(true));
 
 // Option to run late CFG structurizer
-static cl::opt<bool> LateCFGStructurize(
+static cl::opt<bool, true> LateCFGStructurize(
   "amdgpu-late-structurize",
   cl::desc("Enable late CFG structurization"),
-  cl::init(false),
+  cl::location(AMDGPUTargetMachine::EnableLateStructurizeCFG),
   cl::Hidden);
 
 static cl::opt<bool> EnableAMDGPUFunctionCalls(
@@ -161,6 +161,7 @@ extern "C" void LLVMInitializeAMDGPUTarget() {
   initializeAMDGPUAnnotateUniformValuesPass(*PR);
   initializeAMDGPUArgumentUsageInfoPass(*PR);
   initializeAMDGPULowerIntrinsicsPass(*PR);
+  initializeAMDGPUOpenCLEnqueuedBlockLoweringPass(*PR);
   initializeAMDGPUPromoteAllocaPass(*PR);
   initializeAMDGPUCodeGenPreparePass(*PR);
   initializeAMDGPURewriteOutArgumentsPass(*PR);
@@ -244,6 +245,10 @@ GCNMinRegSchedRegistry("gcn-minreg",
 static StringRef computeDataLayout(const Triple &TT) {
   if (TT.getArch() == Triple::r600) {
     // 32-bit pointers.
+    if (TT.getEnvironmentName() == "amdgiz" ||
+        TT.getEnvironmentName() == "amdgizcl")
+      return "e-p:32:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128"
+             "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-A5";
     return "e-p:32:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128"
             "-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64";
   }
@@ -299,6 +304,8 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, const Triple &TT,
 
 AMDGPUTargetMachine::~AMDGPUTargetMachine() = default;
 
+bool AMDGPUTargetMachine::EnableLateStructurizeCFG = false;
+
 StringRef AMDGPUTargetMachine::getGPUName(const Function &F) const {
   Attribute GPUAttr = F.getFnAttribute("target-cpu");
   return GPUAttr.hasAttribute(Attribute::None) ?
@@ -321,7 +328,7 @@ static ImmutablePass *createAMDGPUExternalAAWrapperPass() {
 }
 
 /// Predicate for Internalize pass.
-bool mustPreserveGV(const GlobalValue &GV) {
+static bool mustPreserveGV(const GlobalValue &GV) {
   if (const Function *F = dyn_cast<Function>(&GV))
     return F->isDeclaration() || AMDGPU::isEntryFunctionCC(F->getCallingConv());
 
@@ -609,6 +616,9 @@ void AMDGPUPassConfig::addIRPasses() {
 
   // Handle uses of OpenCL image2d_t, image3d_t and sampler_t arguments.
   addPass(createAMDGPUOpenCLImageTypeLoweringPass());
+
+  // Replace OpenCL enqueued block function pointers with global variables.
+  addPass(createAMDGPUOpenCLEnqueuedBlockLoweringPass());
 
   if (TM.getOptLevel() > CodeGenOpt::None) {
     addPass(createInferAddressSpacesPass());

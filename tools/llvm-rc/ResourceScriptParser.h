@@ -25,6 +25,9 @@
 #include <vector>
 
 namespace llvm {
+namespace opt {
+class InputArgList;
+}
 namespace rc {
 
 class RCParser {
@@ -36,7 +39,7 @@ public:
   // Class describing a single failure of parser.
   class ParserError : public ErrorInfo<ParserError> {
   public:
-    ParserError(Twine Expected, const LocIter CurLoc, const LocIter End);
+    ParserError(const Twine &Expected, const LocIter CurLoc, const LocIter End);
 
     void log(raw_ostream &OS) const override { OS << CurMessage; }
     std::error_code convertToErrorCode() const override {
@@ -51,8 +54,7 @@ public:
     LocIter ErrorLoc, FileEnd;
   };
 
-  RCParser(const std::vector<RCToken> &TokenList);
-  RCParser(std::vector<RCToken> &&TokenList);
+  explicit RCParser(std::vector<RCToken> TokenList);
 
   // Reads and returns a single resource definition, or error message if any
   // occurred.
@@ -79,15 +81,15 @@ private:
   // correct type and then parse it.
   // Each integer can be written as an arithmetic expression producing an
   // unsigned 32-bit integer.
-  Expected<uint32_t> readInt();            // Parse an integer.
+  Expected<RCInt> readInt();               // Parse an integer.
   Expected<StringRef> readString();        // Parse a string.
   Expected<StringRef> readIdentifier();    // Parse an identifier.
   Expected<IntOrString> readIntOrString(); // Parse an integer or a string.
   Expected<IntOrString> readTypeOrName();  // Parse an integer or an identifier.
 
   // Helper integer expression parsing methods.
-  Expected<uint32_t> parseIntExpr1();
-  Expected<uint32_t> parseIntExpr2();
+  Expected<RCInt> parseIntExpr1();
+  Expected<RCInt> parseIntExpr2();
 
   // Advance the state by one, discarding the current token.
   // If the discarded token had an incorrect type, fail.
@@ -101,8 +103,8 @@ private:
   // commas. The parser stops reading after fetching MaxCount integers
   // or after an error occurs. Whenever the parser reads a comma, it
   // expects an integer to follow.
-  Expected<SmallVector<uint32_t, 8>> readIntsWithCommas(size_t MinCount,
-                                                        size_t MaxCount);
+  Expected<SmallVector<RCInt, 8>> readIntsWithCommas(size_t MinCount,
+                                                     size_t MaxCount);
 
   // Read an unknown number of flags preceded by commas. Each correct flag
   // has an entry in FlagDesc array of length NumFlags. In case i-th
@@ -124,12 +126,14 @@ private:
   //
   // Ref (to the list of all optional statements):
   //    msdn.microsoft.com/en-us/library/windows/desktop/aa381002(v=vs.85).aspx
+  enum class OptStmtType { BasicStmt, DialogStmt, DialogExStmt };
+
   Expected<OptionalStmtList>
-  parseOptionalStatements(bool UseExtendedStatements = false);
+  parseOptionalStatements(OptStmtType StmtsType = OptStmtType::BasicStmt);
 
   // Read a single optional statement.
   Expected<std::unique_ptr<OptionalStmt>>
-  parseSingleOptionalStatement(bool UseExtendedStatements = false);
+  parseSingleOptionalStatement(OptStmtType StmtsType = OptStmtType::BasicStmt);
 
   // Top-level resource parsers.
   ParseType parseLanguageResource();
@@ -163,14 +167,14 @@ private:
   ParseOptionType parseCharacteristicsStmt();
   ParseOptionType parseVersionStmt();
   ParseOptionType parseCaptionStmt();
-  ParseOptionType parseFontStmt();
+  ParseOptionType parseFontStmt(OptStmtType DialogType);
   ParseOptionType parseStyleStmt();
 
   // Raises an error. If IsAlreadyRead = false (default), this complains about
   // the token that couldn't be parsed. If the flag is on, this complains about
   // the correctly read token that makes no sense (that is, the current parser
   // state is beyond the erroneous token.)
-  Error getExpectedError(const Twine Message, bool IsAlreadyRead = false);
+  Error getExpectedError(const Twine &Message, bool IsAlreadyRead = false);
 
   std::vector<RCToken> Tokens;
   LocIter CurLoc;

@@ -202,13 +202,19 @@
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=memory %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-PIE
 // RUN: %clang -target x86_64-unknown-freebsd -fsanitize=memory %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-PIE
 // RUN: %clang -target aarch64-linux-gnu -fsanitize=memory %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-PIE
-// RUN: %clang -target arm-linux-androideabi -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-PIE
+// RUN: %clang -target arm-linux-androideabi -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-PIC-NO-PIE
+// RUN: %clang -target arm-linux-androideabi24 -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-PIE
+// RUN: %clang -target aarch64-linux-android -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-PIE
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-PIE
 // RUN: %clang -target i386-linux-gnu -fsanitize=address %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-PIE
 
 // CHECK-NO-PIE-NOT: "-pie"
 // CHECK-NO-PIE: "-mrelocation-model" "static"
 // CHECK-NO-PIE-NOT: "-pie"
+
+// CHECK-PIC-NO-PIE-NOT: "-pie"
+// CHECK-PIC-NO-PIE: "-mrelocation-model" "pic"
+// CHECK-PIC-NO-PIE-NOT: "-pie"
 
 // CHECK-PIE: "-mrelocation-model" "pic" "-pic-level" "2" "-pic-is-pie"
 // CHECK-PIE: "-pie"
@@ -280,6 +286,9 @@
 // RUN: %clang -target mips-unknown-linux -fsanitize=leak %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANL-MIPS
 // CHECK-SANL-MIPS: unsupported option '-fsanitize=leak' for target 'mips-unknown-linux'
 
+// RUN: %clang -target powerpc64-unknown-linux -fsanitize=leak %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANL-PPC64
+// RUN: %clang -target powerpc64le-unknown-linux -fsanitize=leak %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANL-PPC64
+// CHECK-SANL-PPC64: "-fsanitize=leak"
 // RUN: %clang -target powerpc-unknown-linux -fsanitize=leak %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANL-PPC
 // CHECK-SANL-PPC: unsupported option '-fsanitize=leak' for target 'powerpc-unknown-linux'
 
@@ -471,6 +480,14 @@
 // CHECK-CFI-NO-CROSS-DSO: -emit-llvm-bc
 // CHECK-CFI-NO-CROSS-DSO-NOT: -fsanitize-cfi-cross-dso
 
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi-icall -fsanitize-cfi-icall-generalize-pointers -fvisibility=hidden -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-GENERALIZE-POINTERS
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi-icall -fvisibility=hidden -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-CFI-GENERALIZE-POINTERS
+// CHECK-CFI-GENERALIZE-POINTERS: -fsanitize-cfi-icall-generalize-pointers
+// CHECK-NO-CFI-GENERALIZE-POINTERS-NOT: -fsanitize-cfi-icall-generalize-pointers
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi-icall -fsanitize-cfi-icall-generalize-pointers -fsanitize-cfi-cross-dso -fvisibility=hidden -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-GENERALIZE-AND-CROSS-DSO
+// CHECK-CFI-GENERALIZE-AND-CROSS-DSO: error: invalid argument '-fsanitize-cfi-cross-dso' not allowed with '-fsanitize-cfi-icall-generalize-pointers'
+
 // RUN: %clang -target x86_64-linux-gnu -fsanitize=cfi -fsanitize-stats -flto -c %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-CFI-STATS
 // CHECK-CFI-STATS: -fsanitize-stats
 
@@ -591,3 +608,29 @@
 // CHECK-CFI-NOICALL-MINIMAL: "-fsanitize=cfi-derived-cast,cfi-unrelated-cast,cfi-nvcall,cfi-vcall"
 // CHECK-CFI-NOICALL-MINIMAL: "-fsanitize-trap=cfi-derived-cast,cfi-unrelated-cast,cfi-nvcall,cfi-vcall"
 // CHECK-CFI-NOICALL-MINIMAL: "-fsanitize-minimal-runtime"
+
+// RUN: %clang -target aarch64-linux-gnu -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO
+// RUN: %clang -target arm-linux-androideabi -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO
+// RUN: %clang -target i386-linux-gnu -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO
+// CHECK-SCUDO: "-fsanitize=scudo"
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-PIE
+// RUN: %clang -target arm-linux-androideabi -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-PIE
+// CHECK-SCUDO-PIE: "-mrelocation-model" "pic" "-pic-level" "2" "-pic-is-pie"
+// CHECK-SCUDO-PIE: "-pie"
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo,undefined %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-UBSAN
+// CHECK-SCUDO-UBSAN: "-fsanitize={{.*}}scudo"
+
+// RUN: %clang -target powerpc-unknown-linux -fsanitize=scudo %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-NO-SCUDO
+// CHECK-NO-SCUDO: unsupported option
+
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo,address  %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-ASAN
+// CHECK-SCUDO-ASAN: error: invalid argument '-fsanitize=scudo' not allowed with '-fsanitize=address'
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo,leak  %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-LSAN
+// CHECK-SCUDO-LSAN: error: invalid argument '-fsanitize=scudo' not allowed with '-fsanitize=leak'
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo,memory  %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-MSAN
+// CHECK-SCUDO-MSAN: error: invalid argument '-fsanitize=scudo' not allowed with '-fsanitize=memory'
+// RUN: %clang -target x86_64-linux-gnu -fsanitize=scudo,thread  %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SCUDO-TSAN
+// CHECK-SCUDO-TSAN: error: invalid argument '-fsanitize=scudo' not allowed with '-fsanitize=thread'

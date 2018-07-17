@@ -831,14 +831,21 @@ template <typename T> struct ExplicitInstantiationTwoAttributes { void f() {} };
 template struct __declspec(dllexport) __declspec(dllimport) ExplicitInstantiationTwoAttributes<int>;
 // M32-DAG: define weak_odr dllexport x86_thiscallcc void @"\01?f@?$ExplicitInstantiationTwoAttributes@H@@QAEXXZ"
 
-// Specializations of exported class template functions get exported.
 namespace pr34849 {
-template <typename T> struct __declspec(dllexport) ExportedClass { void foo(); };
-template<> void ExportedClass<int>::foo() {}
-template struct ExportedClass<int>;
-// M32-DAG: define dllexport x86_thiscallcc void @"\01?foo@?$ExportedClass@H@pr34849@@QAEXXZ"
-}
+// Specializations of exported class template member functions get exported.
+template <typename> struct __declspec(dllexport) ExportedClassTemplate { void foo(); };
+template<> void ExportedClassTemplate<int>::foo() {}
+template struct ExportedClassTemplate<int>;
+// M32-DAG: define dllexport x86_thiscallcc void @"\01?foo@?$ExportedClassTemplate@H@pr34849@@QAEXXZ"
 
+// Specializations of exported class member template functions do not get exported.
+struct __declspec(dllexport) ExportedClass { template <typename> void bar() ; };
+template<> void ExportedClass::bar<int>() {}
+// M32-DAG: define x86_thiscallcc void @"\01??$bar@H@ExportedClass@pr34849@@QAEXXZ"
+template <typename> struct __declspec(dllexport) ExportedClassTemplate2 { template <typename> void baz(); };
+template<> template<> void ExportedClassTemplate2<int>::baz<int>() {}
+// M32-DAG: define x86_thiscallcc void @"\01??$baz@H@?$ExportedClassTemplate2@H@pr34849@@QAEXXZ"
+}
 
 //===----------------------------------------------------------------------===//
 // Classes with template base classes

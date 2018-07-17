@@ -494,6 +494,9 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(declare); KEYWORD(define);
   KEYWORD(global);  KEYWORD(constant);
 
+  KEYWORD(dso_local);
+  KEYWORD(dso_preemptable);
+
   KEYWORD(private);
   KEYWORD(internal);
   KEYWORD(available_externally);
@@ -549,6 +552,8 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(nsz);
   KEYWORD(arcp);
   KEYWORD(contract);
+  KEYWORD(reassoc);
+  KEYWORD(afn);
   KEYWORD(fast);
   KEYWORD(nuw);
   KEYWORD(nsw);

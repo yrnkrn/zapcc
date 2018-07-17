@@ -2,22 +2,20 @@
 
 cmake_minimum_required(VERSION 3.4.3)
 
-if(POLICY CMP0022)
-  cmake_policy(SET CMP0022 NEW) # automatic when 2.8.12 is required
-endif()
+cmake_policy(SET CMP0022 NEW)
 
-if (POLICY CMP0051)
-  # CMake 3.1 and higher include generator expressions of the form
-  # $<TARGETLIB:obj> in the SOURCES property.  These need to be
-  # stripped everywhere that access the SOURCES property, so we just
-  # defer to the OLD behavior of not including generator expressions
-  # in the output for now.
-  cmake_policy(SET CMP0051 OLD)
-endif()
+cmake_policy(SET CMP0048 NEW)
 
-if(POLICY CMP0057)
-  cmake_policy(SET CMP0057 NEW)
-endif()
+# CMake 3.1 and higher include generator expressions of the form
+# $<TARGETLIB:obj> in the SOURCES property.  These need to be
+# stripped everywhere that access the SOURCES property, so we just
+# defer to the OLD behavior of not including generator expressions
+# in the output for now.
+cmake_policy(SET CMP0051 OLD)
+
+cmake_policy(SET CMP0056 NEW)
+
+cmake_policy(SET CMP0057 NEW)
 
 if(NOT DEFINED LLVM_VERSION_MAJOR)
   set(LLVM_VERSION_MAJOR 6)
@@ -30,13 +28,6 @@ if(NOT DEFINED LLVM_VERSION_PATCH)
 endif()
 if(NOT DEFINED LLVM_VERSION_SUFFIX)
   set(LLVM_VERSION_SUFFIX svn)
-endif()
-
-if (POLICY CMP0048)
-  cmake_policy(SET CMP0048 NEW)
-  set(cmake_3_0_PROJ_VERSION
-    VERSION ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH})
-  set(cmake_3_0_LANGUAGES LANGUAGES)
 endif()
 
 if (NOT PACKAGE_VERSION)
@@ -52,9 +43,8 @@ if ((CMAKE_GENERATOR MATCHES "Visual Studio") AND (CMAKE_GENERATOR_TOOLSET STREQ
 endif()
 
 project(LLVM
-  ${cmake_3_0_PROJ_VERSION}
-  ${cmake_3_0_LANGUAGES}
-  C CXX ASM)
+  VERSION ${LLVM_VERSION_MAJOR}.${LLVM_VERSION_MINOR}.${LLVM_VERSION_PATCH}
+  LANGUAGES C CXX ASM)
 
 if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   message(STATUS "No build type selected, default to Debug")
@@ -120,7 +110,7 @@ endif()
 # LLVM_EXTERNAL_${project}_SOURCE_DIR using LLVM_ALL_PROJECTS
 # This allows an easy way of setting up a build directory for llvm and another
 # one for llvm+clang+... using the same sources.
-set(LLVM_ALL_PROJECTS "clang;libcxx;libcxxabi;lldb;compiler-rt;lld;polly")
+set(LLVM_ALL_PROJECTS "clang;libcxx;libcxxabi;lldb;compiler-rt;debuginfo-tests;lld;polly")
 set(LLVM_ENABLE_PROJECTS "" CACHE STRING
 	"Semicolon-separated list of projects to build (${LLVM_ALL_PROJECTS}), or \"all\".")
 if( LLVM_ENABLE_PROJECTS STREQUAL "all" )
@@ -189,6 +179,9 @@ set(CMAKE_MODULE_PATH
 # for use by clang_complete, YouCompleteMe, etc.
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 
+option(LLVM_INSTALL_BINUTILS_SYMLINKS
+  "Install symlinks from the binutils tool names to the corresponding LLVM tools." OFF)
+
 option(LLVM_INSTALL_UTILS "Include utility binaries in the 'install' target." OFF)
 
 option(LLVM_INSTALL_TOOLCHAIN_ONLY "Only include toolchain files in the 'install' target." OFF)
@@ -241,7 +234,7 @@ include(CPack)
 # sure that we don't have any stray generated files lying around in the tree
 # (which would end up getting picked up by header search, instead of the correct
 # versions).
-if( CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR AND NOT MSVC_IDE )
+if( CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR AND NOT MSVC_IDE )
   message(FATAL_ERROR "In-source builds are not allowed.
 CMake would overwrite the makefiles distributed with LLVM.
 Please create a directory and run cmake from there, passing the path
@@ -435,6 +428,8 @@ endif( LLVM_USE_OPROFILE )
 
 set(LLVM_USE_SANITIZER "" CACHE STRING
   "Define the sanitizer used to build binaries and tests.")
+set(LLVM_LIB_FUZZING_ENGINE "" CACHE PATH
+  "Path to fuzzing library for linking with fuzz targets")
 
 option(LLVM_USE_SPLIT_DWARF
   "Use -gsplit-dwarf when compiling llvm." OFF)
@@ -760,6 +755,7 @@ configure_file(
 add_custom_target(srpm
   COMMAND cpack -G TGZ --config CPackSourceConfig.cmake -B ${LLVM_SRPM_DIR}/SOURCES
   COMMAND rpmbuild -bs --define '_topdir ${LLVM_SRPM_DIR}' ${LLVM_SRPM_BINARY_SPECFILE})
+set_target_properties(srpm PROPERTIES FOLDER "Misc")
 
 
 # They are not referenced. See set_output_directory().
@@ -802,7 +798,7 @@ endif()
 if(${CMAKE_SYSTEM_NAME} MATCHES "(FreeBSD|DragonFly)")
   # On FreeBSD, /usr/local/* is not used by default. In order to build LLVM
   # with libxml2, iconv.h, etc., we must add /usr/local paths.
-  include_directories("/usr/local/include")
+  include_directories(SYSTEM "/usr/local/include")
   link_directories("/usr/local/lib")
 endif(${CMAKE_SYSTEM_NAME} MATCHES "(FreeBSD|DragonFly)")
 
@@ -885,13 +881,18 @@ if( LLVM_INCLUDE_EXAMPLES )
 endif()
 
 if( LLVM_INCLUDE_TESTS )
-  if(EXISTS ${LLVM_MAIN_SRC_DIR}/projects/test-suite AND TARGET clang)
+  if(TARGET clang)
     include(LLVMExternalProjectUtils)
-    llvm_ExternalProject_Add(test-suite ${LLVM_MAIN_SRC_DIR}/projects/test-suite
-      USE_TOOLCHAIN
-      EXCLUDE_FROM_ALL
-      NO_INSTALL
-      ALWAYS_CLEAN)
+    if (EXISTS ${LLVM_MAIN_SRC_DIR}/projects/test-suite)
+      llvm_ExternalProject_Add(test-suite ${LLVM_MAIN_SRC_DIR}/projects/test-suite
+        USE_TOOLCHAIN
+        TOOLCHAIN_TOOLS clang lld clang-cl
+        EXCLUDE_FROM_ALL
+        NO_INSTALL
+        ALWAYS_CLEAN)
+    endif()
+
+    add_llvm_external_project(debuginfo-tests projects/debuginfo-tests)
   endif()
   add_subdirectory(utils/lit)
   add_subdirectory(test)
@@ -972,6 +973,7 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
   # Installing the headers needs to depend on generating any public
   # tablegen'd headers.
   add_custom_target(llvm-headers DEPENDS intrinsics_gen)
+  set_target_properties(llvm-headers PROPERTIES FOLDER "Misc")
 
   if (NOT CMAKE_CONFIGURATION_TYPES)
     add_custom_target(install-llvm-headers
@@ -995,13 +997,13 @@ if(LLVM_DISTRIBUTION_COMPONENTS)
     if(TARGET ${target})
       add_dependencies(distribution ${target})
     else()
-      message(FATAL_ERROR "Specified distribution component '${target}' doesn't have a target")
+      message(SEND_ERROR "Specified distribution component '${target}' doesn't have a target")
     endif()
 
     if(TARGET install-${target})
       add_dependencies(install-distribution install-${target})
     else()
-      message(FATAL_ERROR "Specified distribution component '${target}' doesn't have an install target")
+      message(SEND_ERROR "Specified distribution component '${target}' doesn't have an install target")
     endif()
   endforeach()
 endif()
@@ -1010,3 +1012,4 @@ endif()
 if (MSVC)
   include(InstallRequiredSystemLibraries)
 endif()
+

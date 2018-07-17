@@ -106,4 +106,4 @@ Additional zapcc-only code in
 
 ### When was the source last merged with LLVM trunk?
 
-This open-source release was last merged with LLVM 315030 on 2017-10-06.
+This open-source release was last merged with LLVM 318000 on 2017-11-12.

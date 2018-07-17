@@ -11,6 +11,7 @@
 #include "MCTargetDesc/RISCVMCTargetDesc.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCFixup.h"
+#include "llvm/MC/MCObjectWriter.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace llvm;
@@ -61,8 +62,10 @@ unsigned RISCVELFObjectWriter::getRelocType(MCContext &Ctx,
   }
 }
 
-MCObjectWriter *llvm::createRISCVELFObjectWriter(raw_pwrite_stream &OS,
-                                                 uint8_t OSABI, bool Is64Bit) {
-  MCELFObjectTargetWriter *MOTW = new RISCVELFObjectWriter(OSABI, Is64Bit);
-  return createELFObjectWriter(MOTW, OS, /*IsLittleEndian*/ true);
+std::unique_ptr<MCObjectWriter>
+llvm::createRISCVELFObjectWriter(raw_pwrite_stream &OS, uint8_t OSABI,
+                                 bool Is64Bit) {
+  return createELFObjectWriter(
+      llvm::make_unique<RISCVELFObjectWriter>(OSABI, Is64Bit), OS,
+      /*IsLittleEndian=*/true);
 }

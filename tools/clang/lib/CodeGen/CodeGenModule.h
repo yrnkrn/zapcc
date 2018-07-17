@@ -497,7 +497,9 @@ public:
   /// Mapping from canonical types to their metadata identifiers. We need to
   /// maintain this mapping because identifiers may be formed from distinct
   /// MDNodes.
-  llvm::DenseMap<QualType, llvm::Metadata *> MetadataIdMap;
+  typedef llvm::DenseMap<QualType, llvm::Metadata *> MetadataTypeMap;
+  MetadataTypeMap MetadataIdMap;
+  MetadataTypeMap GeneralizedMetadataIdMap;
 
 public:
   CodeGenModule(ASTContext &C, const HeaderSearchOptions &headersearchopts,
@@ -666,12 +668,30 @@ public:
 
   llvm::MDNode *getTBAAStructInfo(QualType QTy);
 
+  /// getTBAABaseTypeInfo - Get metadata that describes the given base access
+  /// type. Return null if the type is not suitable for use in TBAA access tags.
+  llvm::MDNode *getTBAABaseTypeInfo(QualType QTy);
+
   /// getTBAAAccessTagInfo - Get TBAA tag for a given memory access.
   llvm::MDNode *getTBAAAccessTagInfo(TBAAAccessInfo Info);
 
-  /// getTBAAMayAliasAccessInfo - Get TBAA information that represents
-  /// may-alias accesses.
-  TBAAAccessInfo getTBAAMayAliasAccessInfo();
+  /// mergeTBAAInfoForCast - Get merged TBAA information for the purposes of
+  /// type casts.
+  TBAAAccessInfo mergeTBAAInfoForCast(TBAAAccessInfo SourceInfo,
+                                      TBAAAccessInfo TargetInfo);
+
+  /// mergeTBAAInfoForConditionalOperator - Get merged TBAA information for the
+  /// purposes of conditional operator.
+  TBAAAccessInfo mergeTBAAInfoForConditionalOperator(TBAAAccessInfo InfoA,
+                                                     TBAAAccessInfo InfoB);
+
+  /// getTBAAInfoForSubobject - Get TBAA information for an access with a given
+  /// base lvalue.
+  TBAAAccessInfo getTBAAInfoForSubobject(LValue Base, QualType AccessType) {
+    if (Base.getTBAAInfo().isMayAlias())
+      return TBAAAccessInfo::getMayAliasInfo();
+    return getTBAAAccessInfo(AccessType);
+  }
 
   bool isTypeConstant(QualType QTy, bool ExcludeCtorDtor);
 
@@ -731,7 +751,7 @@ public:
   ///
   /// For languages without explicit address spaces, if D has default address
   /// space, target-specific global or constant address space may be returned.
-  unsigned GetGlobalVarAddressSpace(const VarDecl *D);
+  LangAS GetGlobalVarAddressSpace(const VarDecl *D);
 
   /// Return the llvm::Constant for the address of the given global variable.
   /// If Ty is non-null and if the global doesn't exist, then it will be created
@@ -1166,8 +1186,7 @@ public:
   /// are emitted lazily.
   void EmitGlobal(GlobalDecl D);
 
-  bool TryEmitDefinitionAsAlias(GlobalDecl Alias, GlobalDecl Target,
-                                bool InEveryTU);
+  bool TryEmitDefinitionAsAlias(GlobalDecl Alias, GlobalDecl Target);
   bool TryEmitBaseDestructorAsAlias(const CXXDestructorDecl *D);
 
   /// Set attributes for a global definition.
@@ -1216,6 +1235,11 @@ public:
   /// MDString (for external identifiers) or a distinct unnamed MDNode (for
   /// internal identifiers).
   llvm::Metadata *CreateMetadataIdentifierForType(QualType T);
+
+  /// Create a metadata identifier for the generalization of the given type.
+  /// This may either be an MDString (for external identifiers) or a distinct
+  /// unnamed MDNode (for internal identifiers).
+  llvm::Metadata *CreateMetadataIdentifierGeneralized(QualType T);
 
   /// Create and attach type metadata to the given function.
   void CreateFunctionTypeMetadata(const FunctionDecl *FD, llvm::Function *F);

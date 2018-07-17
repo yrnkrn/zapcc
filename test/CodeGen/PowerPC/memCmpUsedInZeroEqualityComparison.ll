@@ -45,13 +45,9 @@ define signext i32 @zeroEqualityTest01(i8* %x, i8* %y) {
 ; CHECK-NEXT:    ld 4, 8(4)
 ; CHECK-NEXT:    cmpld 3, 4
 ; CHECK-NEXT:    li 3, 0
-; CHECK-NEXT:    beq 0, .LBB1_3
+; CHECK-NEXT:    beqlr 0
 ; CHECK-NEXT:  .LBB1_2: # %res_block
 ; CHECK-NEXT:    li 3, 1
-; CHECK-NEXT:    clrldi 3, 3, 32
-; CHECK-NEXT:    blr
-; CHECK-NEXT:  .LBB1_3: # %endblock
-; CHECK-NEXT:    clrldi 3, 3, 32
 ; CHECK-NEXT:    blr
   %call = tail call signext i32 @memcmp(i8* %x, i8* %y, i64 16)
   %not.tobool = icmp ne i32 %call, 0
@@ -77,13 +73,9 @@ define signext i32 @zeroEqualityTest03(i8* %x, i8* %y) {
 ; CHECK-NEXT:    lbz 4, 6(4)
 ; CHECK-NEXT:    cmplw 3, 4
 ; CHECK-NEXT:    li 3, 0
-; CHECK-NEXT:    beq 0, .LBB2_4
+; CHECK-NEXT:    beqlr 0
 ; CHECK-NEXT:  .LBB2_3: # %res_block
 ; CHECK-NEXT:    li 3, 1
-; CHECK-NEXT:    clrldi 3, 3, 32
-; CHECK-NEXT:    blr
-; CHECK-NEXT:  .LBB2_4: # %endblock
-; CHECK-NEXT:    clrldi 3, 3, 32
 ; CHECK-NEXT:    blr
   %call = tail call signext i32 @memcmp(i8* %x, i8* %y, i64 7)
   %not.lnot = icmp ne i32 %call, 0
@@ -207,9 +199,7 @@ define i1 @length2_eq_nobuiltin_attr(i8* %X, i8* %Y) {
 ; CHECK-NEXT:    mflr 0
 ; CHECK-NEXT:    std 0, 16(1)
 ; CHECK-NEXT:    stdu 1, -32(1)
-; CHECK-NEXT:  .Lcfi0:
 ; CHECK-NEXT:    .cfi_def_cfa_offset 32
-; CHECK-NEXT:  .Lcfi1:
 ; CHECK-NEXT:    .cfi_offset lr, 16
 ; CHECK-NEXT:    li 5, 2
 ; CHECK-NEXT:    bl memcmp

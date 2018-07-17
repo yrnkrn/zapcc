@@ -19,6 +19,7 @@
 #include <numeric>
 
 #include "func-id-helper.h"
+#include "trie-node.h"
 #include "xray-registry.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
@@ -66,8 +67,52 @@ static cl::opt<bool>
                      cl::desc("Aggregate stack times across threads"),
                      cl::sub(Stack), cl::init(false));
 
-/// A helper struct to work with formatv and XRayRecords. Makes it easier to use
-/// instrumentation map names or addresses in formatted output.
+static cl::opt<bool>
+    DumpAllStacks("all-stacks",
+                  cl::desc("Dump sum of timings for all stacks. "
+                           "By default separates stacks per-thread."),
+                  cl::sub(Stack), cl::init(false));
+static cl::alias DumpAllStacksShort("all", cl::aliasopt(DumpAllStacks),
+                                    cl::desc("Alias for -all-stacks"),
+                                    cl::sub(Stack));
+
+// TODO(kpw): Add other interesting formats. Perhaps chrome trace viewer format
+// possibly with aggregations or just a linear trace of timings.
+enum StackOutputFormat { HUMAN, FLAMETOOL };
+
+static cl::opt<StackOutputFormat> StacksOutputFormat(
+    "stack-format",
+    cl::desc("The format that output stacks should be "
+             "output in. Only applies with all-stacks."),
+    cl::values(
+        clEnumValN(HUMAN, "human",
+                   "Human readable output. Only valid without -all-stacks."),
+        clEnumValN(FLAMETOOL, "flame",
+                   "Format consumable by Brendan Gregg's FlameGraph tool. "
+                   "Only valid with -all-stacks.")),
+    cl::sub(Stack), cl::init(HUMAN));
+
+// Types of values for each stack in a CallTrie.
+enum class AggregationType {
+  TOTAL_TIME,      // The total time spent in a stack and its callees.
+  INVOCATION_COUNT // The number of times the stack was invoked.
+};
+
+static cl::opt<AggregationType> RequestedAggregation(
+    "aggregation-type",
+    cl::desc("The type of aggregation to do on call stacks."),
+    cl::values(
+        clEnumValN(
+            AggregationType::TOTAL_TIME, "time",
+            "Capture the total time spent in an all invocations of a stack."),
+        clEnumValN(AggregationType::INVOCATION_COUNT, "count",
+                   "Capture the number of times a stack was invoked. "
+                   "In flamegraph mode, this count also includes invocations "
+                   "of all callees.")),
+    cl::sub(Stack), cl::init(AggregationType::TOTAL_TIME));
+
+/// A helper struct to work with formatv and XRayRecords. Makes it easier to
+/// use instrumentation map names or addresses in formatted output.
 struct format_xray_record : public FormatAdapter<XRayRecord> {
   explicit format_xray_record(XRayRecord record,
                               const FuncIdConversionHelper &conv)
@@ -211,84 +256,84 @@ private:
 /// maintain an index of unique functions, and provide a means of iterating
 /// through all the instrumented call stacks which we know about.
 
-struct TrieNode {
-  int32_t FuncId;
-  TrieNode *Parent;
-  SmallVector<TrieNode *, 4> Callees;
-  // Separate durations depending on whether the node is the deepest node in the
-  // stack.
-  SmallVector<int64_t, 4> TerminalDurations;
-  SmallVector<int64_t, 4> IntermediateDurations;
+struct StackDuration {
+  llvm::SmallVector<int64_t, 4> TerminalDurations;
+  llvm::SmallVector<int64_t, 4> IntermediateDurations;
 };
 
-/// Merges together two TrieNodes with like function ids, aggregating their
-/// callee lists and durations. The caller must provide storage where new merged
-/// nodes can be allocated in the form of a linked list.
-TrieNode *mergeTrieNodes(const TrieNode &Left, const TrieNode &Right,
-                         TrieNode *NewParent,
-                         std::forward_list<TrieNode> &NodeStore) {
-  assert(Left.FuncId == Right.FuncId);
-  NodeStore.push_front(TrieNode{Left.FuncId, NewParent, {}, {}, {}});
-  auto I = NodeStore.begin();
-  auto *Node = &*I;
-
-  // Build a map of callees from the left side.
-  DenseMap<int32_t, TrieNode *> LeftCalleesByFuncId;
-  for (auto *Callee : Left.Callees) {
-    LeftCalleesByFuncId[Callee->FuncId] = Callee;
-  }
-
-  // Iterate through the right side, either merging with the map values or
-  // directly adding to the Callees vector. The iteration also removes any
-  // merged values from the left side map.
-  for (auto *Callee : Right.Callees) {
-    auto iter = LeftCalleesByFuncId.find(Callee->FuncId);
-    if (iter != LeftCalleesByFuncId.end()) {
-      Node->Callees.push_back(
-          mergeTrieNodes(*(iter->second), *Callee, Node, NodeStore));
-      LeftCalleesByFuncId.erase(iter);
-    } else {
-      Node->Callees.push_back(Callee);
-    }
-  }
-
-  // Add any callees that weren't found in the right side.
-  for (auto MapPairIter : LeftCalleesByFuncId) {
-    Node->Callees.push_back(MapPairIter.second);
-  }
-
+StackDuration mergeStackDuration(const StackDuration &Left,
+                                 const StackDuration &Right) {
+  StackDuration Data{};
+  Data.TerminalDurations.reserve(Left.TerminalDurations.size() +
+                                 Right.TerminalDurations.size());
+  Data.IntermediateDurations.reserve(Left.IntermediateDurations.size() +
+                                     Right.IntermediateDurations.size());
   // Aggregate the durations.
-  for (auto duration : Left.TerminalDurations) {
-    Node->TerminalDurations.push_back(duration);
-  }
-  for (auto duration : Right.TerminalDurations) {
-    Node->TerminalDurations.push_back(duration);
-  }
-  for (auto duration : Left.IntermediateDurations) {
-    Node->IntermediateDurations.push_back(duration);
-  }
-  for (auto duration : Right.IntermediateDurations) {
-    Node->IntermediateDurations.push_back(duration);
-  }
+  for (auto duration : Left.TerminalDurations)
+    Data.TerminalDurations.push_back(duration);
+  for (auto duration : Right.TerminalDurations)
+    Data.TerminalDurations.push_back(duration);
 
-  return Node;
+  for (auto duration : Left.IntermediateDurations)
+    Data.IntermediateDurations.push_back(duration);
+  for (auto duration : Right.IntermediateDurations)
+    Data.IntermediateDurations.push_back(duration);
+  return Data;
+}
+
+using StackTrieNode = TrieNode<StackDuration>;
+
+template <AggregationType AggType>
+std::size_t GetValueForStack(const StackTrieNode *Node);
+
+// When computing total time spent in a stack, we're adding the timings from
+// its callees and the timings from when it was a leaf.
+template <>
+std::size_t
+GetValueForStack<AggregationType::TOTAL_TIME>(const StackTrieNode *Node) {
+  auto TopSum = std::accumulate(Node->ExtraData.TerminalDurations.begin(),
+                                Node->ExtraData.TerminalDurations.end(), 0uLL);
+  return std::accumulate(Node->ExtraData.IntermediateDurations.begin(),
+                         Node->ExtraData.IntermediateDurations.end(), TopSum);
+}
+
+// Calculates how many times a function was invoked.
+// TODO: Hook up option to produce stacks
+template <>
+std::size_t
+GetValueForStack<AggregationType::INVOCATION_COUNT>(const StackTrieNode *Node) {
+  return Node->ExtraData.TerminalDurations.size() +
+         Node->ExtraData.IntermediateDurations.size();
+}
+
+// Make sure there are implementations for each enum value.
+template <AggregationType T> struct DependentFalseType : std::false_type {};
+
+template <AggregationType AggType>
+std::size_t GetValueForStack(const StackTrieNode *Node) {
+  static_assert(DependentFalseType<AggType>::value,
+                "No implementation found for aggregation type provided.");
+  return 0;
 }
 
 class StackTrie {
+  // Avoid the magic number of 4 propagated through the code with an alias.
+  // We use this SmallVector to track the root nodes in a call graph.
+  using RootVector = SmallVector<StackTrieNode *, 4>;
 
   // We maintain pointers to the roots of the tries we see.
-  DenseMap<uint32_t, SmallVector<TrieNode *, 4>> Roots;
+  DenseMap<uint32_t, RootVector> Roots;
 
   // We make sure all the nodes are accounted for in this list.
-  std::forward_list<TrieNode> NodeStore;
+  std::forward_list<StackTrieNode> NodeStore;
 
   // A map of thread ids to pairs call stack trie nodes and their start times.
-  DenseMap<uint32_t, SmallVector<std::pair<TrieNode *, uint64_t>, 8>>
+  DenseMap<uint32_t, SmallVector<std::pair<StackTrieNode *, uint64_t>, 8>>
       ThreadStackMap;
 
-  TrieNode *createTrieNode(uint32_t ThreadId, int32_t FuncId,
-                           TrieNode *Parent) {
-    NodeStore.push_front(TrieNode{FuncId, Parent, {}, {}, {}});
+  StackTrieNode *createTrieNode(uint32_t ThreadId, int32_t FuncId,
+                                StackTrieNode *Parent) {
+    NodeStore.push_front(StackTrieNode{FuncId, Parent, {}, {{}, {}}});
     auto I = NodeStore.begin();
     auto *Node = &*I;
     if (!Parent)
@@ -296,10 +341,10 @@ class StackTrie {
     return Node;
   }
 
-  TrieNode *findRootNode(uint32_t ThreadId, int32_t FuncId) {
+  StackTrieNode *findRootNode(uint32_t ThreadId, int32_t FuncId) {
     const auto &RootsByThread = Roots[ThreadId];
     auto I = find_if(RootsByThread,
-                     [&](TrieNode *N) { return N->FuncId == FuncId; });
+                     [&](StackTrieNode *N) { return N->FuncId == FuncId; });
     return (I == RootsByThread.end()) ? nullptr : *I;
   }
 
@@ -337,7 +382,7 @@ public:
 
       auto &Top = TS.back();
       auto I = find_if(Top.first->Callees,
-                       [&](TrieNode *N) { return N->FuncId == R.FuncId; });
+                       [&](StackTrieNode *N) { return N->FuncId == R.FuncId; });
       if (I == Top.first->Callees.end()) {
         // We didn't find the callee in the stack trie, so we're going to
         // add to the stack then set up the pointers properly.
@@ -368,8 +413,8 @@ public:
         return AccountRecordStatus::ENTRY_NOT_FOUND;
       }
 
-      auto FunctionEntryMatch =
-          find_if(reverse(TS), [&](const std::pair<TrieNode *, uint64_t> &E) {
+      auto FunctionEntryMatch = find_if(
+          reverse(TS), [&](const std::pair<StackTrieNode *, uint64_t> &E) {
             return E.first->FuncId == R.FuncId;
           });
       auto status = AccountRecordStatus::OK;
@@ -382,14 +427,14 @@ public:
       }
       auto I = FunctionEntryMatch.base();
       for (auto &E : make_range(I, TS.end() - 1))
-        E.first->IntermediateDurations.push_back(std::max(E.second, R.TSC) -
-                                                 std::min(E.second, R.TSC));
+        E.first->ExtraData.IntermediateDurations.push_back(
+            std::max(E.second, R.TSC) - std::min(E.second, R.TSC));
       auto &Deepest = TS.back();
       if (wasLastRecordExit)
-        Deepest.first->IntermediateDurations.push_back(
+        Deepest.first->ExtraData.IntermediateDurations.push_back(
             std::max(Deepest.second, R.TSC) - std::min(Deepest.second, R.TSC));
       else
-        Deepest.first->TerminalDurations.push_back(
+        Deepest.first->ExtraData.TerminalDurations.push_back(
             std::max(Deepest.second, R.TSC) - std::min(Deepest.second, R.TSC));
       TS.erase(I, TS.end());
       return status;
@@ -400,11 +445,11 @@ public:
 
   bool isEmpty() const { return Roots.empty(); }
 
-  void printStack(raw_ostream &OS, const TrieNode *Top,
+  void printStack(raw_ostream &OS, const StackTrieNode *Top,
                   FuncIdConversionHelper &FN) {
     // Traverse the pointers up to the parent, noting the sums, then print
     // in reverse order (callers at top, callees down bottom).
-    SmallVector<const TrieNode *, 8> CurrentStack;
+    SmallVector<const StackTrieNode *, 8> CurrentStack;
     for (auto *F = Top; F != nullptr; F = F->Parent)
       CurrentStack.push_back(F);
     int Level = 0;
@@ -412,21 +457,22 @@ public:
                   "count", "sum");
     for (auto *F :
          reverse(make_range(CurrentStack.begin() + 1, CurrentStack.end()))) {
-      auto Sum = std::accumulate(F->IntermediateDurations.begin(),
-                                 F->IntermediateDurations.end(), 0LL);
+      auto Sum = std::accumulate(F->ExtraData.IntermediateDurations.begin(),
+                                 F->ExtraData.IntermediateDurations.end(), 0LL);
       auto FuncId = FN.SymbolOrNumber(F->FuncId);
       OS << formatv("#{0,-4} {1,-60} {2,+12} {3,+16}\n", Level++,
                     FuncId.size() > 60 ? FuncId.substr(0, 57) + "..." : FuncId,
-                    F->IntermediateDurations.size(), Sum);
+                    F->ExtraData.IntermediateDurations.size(), Sum);
     }
     auto *Leaf = *CurrentStack.begin();
-    auto LeafSum = std::accumulate(Leaf->TerminalDurations.begin(),
-                                   Leaf->TerminalDurations.end(), 0LL);
+    auto LeafSum =
+        std::accumulate(Leaf->ExtraData.TerminalDurations.begin(),
+                        Leaf->ExtraData.TerminalDurations.end(), 0LL);
     auto LeafFuncId = FN.SymbolOrNumber(Leaf->FuncId);
     OS << formatv("#{0,-4} {1,-60} {2,+12} {3,+16}\n", Level++,
                   LeafFuncId.size() > 60 ? LeafFuncId.substr(0, 57) + "..."
                                          : LeafFuncId,
-                  Leaf->TerminalDurations.size(), LeafSum);
+                  Leaf->ExtraData.TerminalDurations.size(), LeafSum);
     OS << "\n";
   }
 
@@ -439,11 +485,23 @@ public:
     }
   }
 
+  /// Prints timing sums for each stack in each threads.
+  template <AggregationType AggType>
+  void printAllPerThread(raw_ostream &OS, FuncIdConversionHelper &FN,
+                         StackOutputFormat format) {
+    for (auto iter : Roots) {
+      uint32_t threadId = iter.first;
+      RootVector &perThreadRoots = iter.second;
+      bool reportThreadId = true;
+      printAll<AggType>(OS, FN, perThreadRoots, threadId, reportThreadId);
+    }
+  }
+
   /// Prints top stacks from looking at all the leaves and ignoring thread IDs.
   /// Stacks that consist of the same function IDs but were called in different
   /// thread IDs are not considered unique in this printout.
   void printIgnoringThreads(raw_ostream &OS, FuncIdConversionHelper &FN) {
-    SmallVector<TrieNode *, 4> RootValues;
+    RootVector RootValues;
 
     // Function to pull the values out of a map iterator.
     using RootsType = decltype(Roots.begin())::value_type;
@@ -459,30 +517,88 @@ public:
     print(OS, FN, RootValues);
   }
 
-  /// Merges the trie by thread id before printing top stacks.
-  void printAggregatingThreads(raw_ostream &OS, FuncIdConversionHelper &FN) {
-    std::forward_list<TrieNode> AggregatedNodeStore;
-    SmallVector<TrieNode *, 4> RootValues;
+  /// Creates a merged list of Tries for unique stacks that disregards their
+  /// thread IDs.
+  RootVector mergeAcrossThreads(std::forward_list<StackTrieNode> &NodeStore) {
+    RootVector MergedByThreadRoots;
     for (auto MapIter : Roots) {
       const auto &RootNodeVector = MapIter.second;
       for (auto *Node : RootNodeVector) {
-        auto MaybeFoundIter = find_if(RootValues, [Node](TrieNode *elem) {
-          return Node->FuncId == elem->FuncId;
-        });
-        if (MaybeFoundIter == RootValues.end()) {
-          RootValues.push_back(Node);
+        auto MaybeFoundIter =
+            find_if(MergedByThreadRoots, [Node](StackTrieNode *elem) {
+              return Node->FuncId == elem->FuncId;
+            });
+        if (MaybeFoundIter == MergedByThreadRoots.end()) {
+          MergedByThreadRoots.push_back(Node);
         } else {
-          RootValues.push_back(mergeTrieNodes(**MaybeFoundIter, *Node, nullptr,
-                                              AggregatedNodeStore));
-          RootValues.erase(MaybeFoundIter);
+          MergedByThreadRoots.push_back(mergeTrieNodes(
+              **MaybeFoundIter, *Node, nullptr, NodeStore, mergeStackDuration));
+          MergedByThreadRoots.erase(MaybeFoundIter);
         }
       }
     }
-    print(OS, FN, RootValues);
+    return MergedByThreadRoots;
+  }
+
+  /// Print timing sums for all stacks merged by Thread ID.
+  template <AggregationType AggType>
+  void printAllAggregatingThreads(raw_ostream &OS, FuncIdConversionHelper &FN,
+                                  StackOutputFormat format) {
+    std::forward_list<StackTrieNode> AggregatedNodeStore;
+    RootVector MergedByThreadRoots = mergeAcrossThreads(AggregatedNodeStore);
+    bool reportThreadId = false;
+    printAll<AggType>(OS, FN, MergedByThreadRoots,
+                      /*threadId*/ 0, reportThreadId);
+  }
+
+  /// Merges the trie by thread id before printing top stacks.
+  void printAggregatingThreads(raw_ostream &OS, FuncIdConversionHelper &FN) {
+    std::forward_list<StackTrieNode> AggregatedNodeStore;
+    RootVector MergedByThreadRoots = mergeAcrossThreads(AggregatedNodeStore);
+    print(OS, FN, MergedByThreadRoots);
+  }
+
+  // TODO: Add a format option when more than one are supported.
+  template <AggregationType AggType>
+  void printAll(raw_ostream &OS, FuncIdConversionHelper &FN,
+                RootVector RootValues, uint32_t ThreadId, bool ReportThread) {
+    SmallVector<const StackTrieNode *, 16> S;
+    for (const auto *N : RootValues) {
+      S.clear();
+      S.push_back(N);
+      while (!S.empty()) {
+        auto *Top = S.pop_back_val();
+        printSingleStack<AggType>(OS, FN, ReportThread, ThreadId, Top);
+        for (const auto *C : Top->Callees)
+          S.push_back(C);
+      }
+    }
+  }
+
+  /// Prints values for stacks in a format consumable for the flamegraph.pl
+  /// tool. This is a line based format that lists each level in the stack
+  /// hierarchy in a semicolon delimited form followed by a space and a numeric
+  /// value. If breaking down by thread, the thread ID will be added as the
+  /// root level of the stack.
+  template <AggregationType AggType>
+  void printSingleStack(raw_ostream &OS, FuncIdConversionHelper &Converter,
+                        bool ReportThread, uint32_t ThreadId,
+                        const StackTrieNode *Node) {
+    if (ReportThread)
+      OS << "thread_" << ThreadId << ";";
+    SmallVector<const StackTrieNode *, 5> lineage{};
+    lineage.push_back(Node);
+    while (lineage.back()->Parent != nullptr)
+      lineage.push_back(lineage.back()->Parent);
+    while (!lineage.empty()) {
+      OS << Converter.SymbolOrNumber(lineage.back()->FuncId) << ";";
+      lineage.pop_back();
+    }
+    OS << " " << GetValueForStack<AggType>(Node) << "\n";
   }
 
   void print(raw_ostream &OS, FuncIdConversionHelper &FN,
-             SmallVector<TrieNode *, 4> RootValues) {
+             RootVector RootValues) {
     // Go through each of the roots, and traverse the call stack, producing the
     // aggregates as you go along. Remember these aggregates and stacks, and
     // show summary statistics about:
@@ -490,26 +606,29 @@ public:
     //   - Total number of unique stacks
     //   - Top 10 stacks by count
     //   - Top 10 stacks by aggregate duration
-    SmallVector<std::pair<const TrieNode *, uint64_t>, 11> TopStacksByCount;
-    SmallVector<std::pair<const TrieNode *, uint64_t>, 11> TopStacksBySum;
-    auto greater_second = [](const std::pair<const TrieNode *, uint64_t> &A,
-                             const std::pair<const TrieNode *, uint64_t> &B) {
-      return A.second > B.second;
-    };
+    SmallVector<std::pair<const StackTrieNode *, uint64_t>, 11>
+        TopStacksByCount;
+    SmallVector<std::pair<const StackTrieNode *, uint64_t>, 11> TopStacksBySum;
+    auto greater_second =
+        [](const std::pair<const StackTrieNode *, uint64_t> &A,
+           const std::pair<const StackTrieNode *, uint64_t> &B) {
+          return A.second > B.second;
+        };
     uint64_t UniqueStacks = 0;
     for (const auto *N : RootValues) {
-      SmallVector<const TrieNode *, 16> S;
+      SmallVector<const StackTrieNode *, 16> S;
       S.emplace_back(N);
 
       while (!S.empty()) {
-        auto Top = S.pop_back_val();
+        auto *Top = S.pop_back_val();
 
         // We only start printing the stack (by walking up the parent pointers)
         // when we get to a leaf function.
-        if (!Top->TerminalDurations.empty()) {
+        if (!Top->ExtraData.TerminalDurations.empty()) {
           ++UniqueStacks;
-          auto TopSum = std::accumulate(Top->TerminalDurations.begin(),
-                                        Top->TerminalDurations.end(), 0uLL);
+          auto TopSum =
+              std::accumulate(Top->ExtraData.TerminalDurations.begin(),
+                              Top->ExtraData.TerminalDurations.end(), 0uLL);
           {
             auto E = std::make_pair(Top, TopSum);
             TopStacksBySum.insert(std::lower_bound(TopStacksBySum.begin(),
@@ -520,7 +639,8 @@ public:
               TopStacksBySum.pop_back();
           }
           {
-            auto E = std::make_pair(Top, Top->TerminalDurations.size());
+            auto E =
+                std::make_pair(Top, Top->ExtraData.TerminalDurations.size());
             TopStacksByCount.insert(std::lower_bound(TopStacksByCount.begin(),
                                                      TopStacksByCount.end(), E,
                                                      greater_second),
@@ -587,6 +707,17 @@ static CommandRegistration Unused(&Stack, []() -> Error {
               "that aggregates threads."),
         std::make_error_code(std::errc::invalid_argument));
 
+  if (!DumpAllStacks && StacksOutputFormat != HUMAN)
+    return make_error<StringError>(
+        Twine("Can't specify a non-human format without -all-stacks."),
+        std::make_error_code(std::errc::invalid_argument));
+
+  if (DumpAllStacks && StacksOutputFormat == HUMAN)
+    return make_error<StringError>(
+        Twine("You must specify a non-human format when reporting with "
+              "-all-stacks."),
+        std::make_error_code(std::errc::invalid_argument));
+
   symbolize::LLVMSymbolizer::Options Opts(
       symbolize::FunctionNameKind::LinkageName, true, true, false, "");
   symbolize::LLVMSymbolizer Symbolizer(Opts);
@@ -625,6 +756,36 @@ static CommandRegistration Unused(&Stack, []() -> Error {
         "No instrumented calls were accounted in the input file.",
         make_error_code(errc::result_out_of_range));
   }
+
+  // Report the stacks in a long form mode for another tool to analyze.
+  if (DumpAllStacks) {
+    if (AggregateThreads) {
+      switch (RequestedAggregation) {
+      case AggregationType::TOTAL_TIME:
+        ST.printAllAggregatingThreads<AggregationType::TOTAL_TIME>(
+            outs(), FuncIdHelper, StacksOutputFormat);
+        break;
+      case AggregationType::INVOCATION_COUNT:
+        ST.printAllAggregatingThreads<AggregationType::INVOCATION_COUNT>(
+            outs(), FuncIdHelper, StacksOutputFormat);
+        break;
+      }
+    } else {
+      switch (RequestedAggregation) {
+      case AggregationType::TOTAL_TIME:
+        ST.printAllPerThread<AggregationType::TOTAL_TIME>(outs(), FuncIdHelper,
+                                                          StacksOutputFormat);
+        break;
+      case AggregationType::INVOCATION_COUNT:
+        ST.printAllPerThread<AggregationType::INVOCATION_COUNT>(
+            outs(), FuncIdHelper, StacksOutputFormat);
+        break;
+      }
+    }
+    return Error::success();
+  }
+
+  // We're only outputting top stacks.
   if (AggregateThreads) {
     ST.printAggregatingThreads(outs(), FuncIdHelper);
   } else if (SeparateThreadStacks) {

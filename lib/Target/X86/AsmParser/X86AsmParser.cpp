@@ -7,11 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "InstPrinter/X86IntelInstPrinter.h"
 #include "MCTargetDesc/X86BaseInfo.h"
+#include "MCTargetDesc/X86TargetStreamer.h"
 #include "X86AsmInstrumentation.h"
 #include "X86AsmParserCommon.h"
 #include "X86Operand.h"
-#include "InstPrinter/X86IntelInstPrinter.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -68,7 +69,6 @@ static const char OpPrecedence[] = {
 };
 
 class X86AsmParser : public MCTargetAsmParser {
-  const MCInstrInfo &MII;
   ParseInstructionInfo *InstInfo;
   std::unique_ptr<X86AsmInstrumentation> Instrumentation;
   bool Code16GCC;
@@ -79,6 +79,13 @@ private:
     SMLoc Result = Parser.getTok().getLoc();
     Parser.Lex();
     return Result;
+  }
+
+  X86TargetStreamer &getTargetStreamer() {
+    assert(getParser().getStreamer().getTargetStreamer() &&
+           "do not have a target streamer");
+    MCTargetStreamer &TS = *getParser().getStreamer().getTargetStreamer();
+    return static_cast<X86TargetStreamer &>(TS);
   }
 
   unsigned MatchInstruction(const OperandVector &Operands, MCInst &Inst,
@@ -840,6 +847,16 @@ private:
   bool ParseDirectiveWord(unsigned Size, SMLoc L);
   bool ParseDirectiveCode(StringRef IDVal, SMLoc L);
 
+  /// CodeView FPO data directives.
+  bool parseDirectiveFPOProc(SMLoc L);
+  bool parseDirectiveFPOSetFrame(SMLoc L);
+  bool parseDirectiveFPOPushReg(SMLoc L);
+  bool parseDirectiveFPOStackAlloc(SMLoc L);
+  bool parseDirectiveFPOEndPrologue(SMLoc L);
+  bool parseDirectiveFPOEndProc(SMLoc L);
+  bool parseDirectiveFPOData(SMLoc L);
+
+  bool validateInstruction(MCInst &Inst, const OperandVector &Ops);
   bool processInstruction(MCInst &Inst, const OperandVector &Ops);
 
   /// Wrapper around MCStreamer::EmitInstruction(). Possibly adds
@@ -893,7 +910,7 @@ private:
     MCSubtargetInfo &STI = copySTI();
     FeatureBitset AllModes({X86::Mode64Bit, X86::Mode32Bit, X86::Mode16Bit});
     FeatureBitset OldMode = STI.getFeatureBits() & AllModes;
-    unsigned FB = ComputeAvailableFeatures(
+    uint64_t FB = ComputeAvailableFeatures(
       STI.ToggleFeature(OldMode.flip(mode)));
     setAvailableFeatures(FB);
 
@@ -923,7 +940,7 @@ public:
 
   X86AsmParser(const MCSubtargetInfo &sti, MCAsmParser &Parser,
                const MCInstrInfo &mii, const MCTargetOptions &Options)
-      : MCTargetAsmParser(Options, sti), MII(mii), InstInfo(nullptr),
+      : MCTargetAsmParser(Options, sti, mii),  InstInfo(nullptr),
         Code16GCC(false) {
 
     // Initialize the set of available features.
@@ -1453,6 +1470,7 @@ bool X86AsmParser::ParseIntelExpression(IntelExprStateMachine &SM, SMLoc &End) {
     case AsmToken::Tilde:   SM.onNot(); break;
     case AsmToken::Star:    SM.onStar(); break;
     case AsmToken::Slash:   SM.onDivide(); break;
+    case AsmToken::Percent: SM.onMod(); break;
     case AsmToken::Pipe:    SM.onOr(); break;
     case AsmToken::Caret:   SM.onXor(); break;
     case AsmToken::Amp:     SM.onAnd(); break;
@@ -2314,7 +2332,6 @@ bool X86AsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
     }
   }
 
-  Operands.push_back(X86Operand::CreateToken(PatchedName, NameLoc));
 
   // Determine whether this is an instruction prefix.
   // FIXME:
@@ -2324,22 +2341,48 @@ bool X86AsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
   // lock addq %rax, %rbx ; Destination operand must be of memory type
   // xacquire <insn>      ; xacquire must be accompanied by 'lock'
   bool isPrefix = StringSwitch<bool>(Name)
-    .Cases("lock",
-           "rep",       "repe",
-           "repz",      "repne",
-           "repnz",     "rex64",
-           "data32",    "data16",   true)
-    .Cases("xacquire",  "xrelease", true)
-    .Cases("acquire",   "release",  isParsingIntelSyntax())
-    .Default(false);
+                      .Cases("rex64", "data32", "data16", true)
+                      .Cases("xacquire", "xrelease", true)
+                      .Cases("acquire", "release", isParsingIntelSyntax())
+                      .Default(false);
+
+  auto isLockRepeatPrefix = [](StringRef N) {
+    return StringSwitch<bool>(N)
+        .Cases("lock", "rep", "repe", "repz", "repne", "repnz", true)
+        .Default(false);
+  };
 
   bool CurlyAsEndOfStatement = false;
+
+  unsigned Flags = X86::IP_NO_PREFIX;
+  while (isLockRepeatPrefix(Name.lower())) {
+    unsigned Prefix =
+        StringSwitch<unsigned>(Name)
+            .Cases("lock", "lock", X86::IP_HAS_LOCK)
+            .Cases("rep", "repe", "repz", X86::IP_HAS_REPEAT)
+            .Cases("repne", "repnz", X86::IP_HAS_REPEAT_NE)
+            .Default(X86::IP_NO_PREFIX); // Invalid prefix (impossible)
+    Flags |= Prefix;
+    Name = Parser.getTok().getString();
+    Parser.Lex(); // eat the prefix
+    // Hack: we could have something like
+    //    "lock; cmpxchg16b $1" or "lock\0A\09incl" or "lock/incl"
+    while (Name.startswith(";") || Name.startswith("\n") ||
+           Name.startswith("\t") || Name.startswith("/")) {
+      Name = Parser.getTok().getString();
+      Parser.Lex(); // go to next prefix or instr
+    }
+  }
+
+  if (Flags)
+    PatchedName = Name;
+  Operands.push_back(X86Operand::CreateToken(PatchedName, NameLoc));
+
   // This does the actual operand parsing.  Don't parse any more if we have a
   // prefix juxtaposed with an operation like "lock incl 4(%rax)", because we
   // just want to parse the "lock" as the first instruction and the "incl" as
   // the next one.
   if (getLexer().isNot(AsmToken::EndOfStatement) && !isPrefix) {
-
     // Parse '*' modifier.
     if (getLexer().is(AsmToken::Star))
       Operands.push_back(X86Operand::CreateToken("*", consumeToken()));
@@ -2577,6 +2620,8 @@ bool X86AsmParser::ParseInstruction(ParseInstructionInfo &Info, StringRef Name,
     }
   }
 
+  if (Flags)
+    Operands.push_back(X86Operand::CreatePrefix(Flags, NameLoc, NameLoc));
   return false;
 }
 
@@ -2584,12 +2629,79 @@ bool X86AsmParser::processInstruction(MCInst &Inst, const OperandVector &Ops) {
   return false;
 }
 
+bool X86AsmParser::validateInstruction(MCInst &Inst, const OperandVector &Ops) {
+  const MCRegisterInfo *MRI = getContext().getRegisterInfo();
+
+  switch (Inst.getOpcode()) {
+  case X86::VGATHERDPDYrm:
+  case X86::VGATHERDPDrm:
+  case X86::VGATHERDPSYrm:
+  case X86::VGATHERDPSrm:
+  case X86::VGATHERQPDYrm:
+  case X86::VGATHERQPDrm:
+  case X86::VGATHERQPSYrm:
+  case X86::VGATHERQPSrm:
+  case X86::VPGATHERDDYrm:
+  case X86::VPGATHERDDrm:
+  case X86::VPGATHERDQYrm:
+  case X86::VPGATHERDQrm:
+  case X86::VPGATHERQDYrm:
+  case X86::VPGATHERQDrm:
+  case X86::VPGATHERQQYrm:
+  case X86::VPGATHERQQrm: {
+    unsigned Dest = MRI->getEncodingValue(Inst.getOperand(0).getReg());
+    unsigned Mask = MRI->getEncodingValue(Inst.getOperand(1).getReg());
+    unsigned Index =
+      MRI->getEncodingValue(Inst.getOperand(3 + X86::AddrIndexReg).getReg());
+    if (Dest == Mask || Dest == Index || Mask == Index)
+      return Warning(Ops[0]->getStartLoc(), "mask, index, and destination "
+                                            "registers should be distinct");
+    break;
+  }
+  case X86::VGATHERDPDZ128rm:
+  case X86::VGATHERDPDZ256rm:
+  case X86::VGATHERDPDZrm:
+  case X86::VGATHERDPSZ128rm:
+  case X86::VGATHERDPSZ256rm:
+  case X86::VGATHERDPSZrm:
+  case X86::VGATHERQPDZ128rm:
+  case X86::VGATHERQPDZ256rm:
+  case X86::VGATHERQPDZrm:
+  case X86::VGATHERQPSZ128rm:
+  case X86::VGATHERQPSZ256rm:
+  case X86::VGATHERQPSZrm:
+  case X86::VPGATHERDDZ128rm:
+  case X86::VPGATHERDDZ256rm:
+  case X86::VPGATHERDDZrm:
+  case X86::VPGATHERDQZ128rm:
+  case X86::VPGATHERDQZ256rm:
+  case X86::VPGATHERDQZrm:
+  case X86::VPGATHERQDZ128rm:
+  case X86::VPGATHERQDZ256rm:
+  case X86::VPGATHERQDZrm:
+  case X86::VPGATHERQQZ128rm:
+  case X86::VPGATHERQQZ256rm:
+  case X86::VPGATHERQQZrm: {
+    unsigned Dest = MRI->getEncodingValue(Inst.getOperand(0).getReg());
+    unsigned Index =
+      MRI->getEncodingValue(Inst.getOperand(4 + X86::AddrIndexReg).getReg());
+    if (Dest == Index)
+      return Warning(Ops[0]->getStartLoc(), "index and destination registers "
+                                            "should be distinct");
+    break;
+  }
+  }
+
+  return false;
+}
+
 static const char *getSubtargetFeatureName(uint64_t Val);
 
 void X86AsmParser::EmitInstruction(MCInst &Inst, OperandVector &Operands,
                                    MCStreamer &Out) {
-  Instrumentation->InstrumentAndEmitInstruction(Inst, Operands, getContext(),
-                                                MII, Out);
+  Instrumentation->InstrumentAndEmitInstruction(
+      Inst, Operands, getContext(), MII, Out,
+      getParser().shouldPrintSchedInfo());
 }
 
 bool X86AsmParser::MatchAndEmitInstruction(SMLoc IDLoc, unsigned &Opcode,
@@ -2644,6 +2756,16 @@ bool X86AsmParser::ErrorMissingFeature(SMLoc IDLoc, uint64_t ErrorInfo,
   return Error(IDLoc, OS.str(), SMRange(), MatchingInlineAsm);
 }
 
+static unsigned getPrefixes(OperandVector &Operands) {
+  unsigned Result = 0;
+  X86Operand &Prefix = static_cast<X86Operand &>(*Operands.back());
+  if (Prefix.isPrefix()) {
+    Result = Prefix.getPrefix();
+    Operands.pop_back();
+  }
+  return Result;
+}
+
 bool X86AsmParser::MatchAndEmitATTInstruction(SMLoc IDLoc, unsigned &Opcode,
                                               OperandVector &Operands,
                                               MCStreamer &Out,
@@ -2658,13 +2780,20 @@ bool X86AsmParser::MatchAndEmitATTInstruction(SMLoc IDLoc, unsigned &Opcode,
   MatchFPUWaitAlias(IDLoc, Op, Operands, Out, MatchingInlineAsm);
 
   bool WasOriginallyInvalidOperand = false;
+  unsigned Prefixes = getPrefixes(Operands);
+
   MCInst Inst;
+
+  if (Prefixes)
+    Inst.setFlags(Prefixes);
 
   // First, try a direct match.
   switch (MatchInstruction(Operands, Inst, ErrorInfo, MatchingInlineAsm,
                            isParsingIntelSyntax())) {
   default: llvm_unreachable("Unexpected match result!");
   case Match_Success:
+    if (!MatchingInlineAsm && validateInstruction(Inst, Operands))
+      return true;
     // Some instructions need post-processing to, for example, tweak which
     // encoding is selected. Loop on it while changes happen so the
     // individual transformations can chain off each other.
@@ -2824,11 +2953,15 @@ bool X86AsmParser::MatchAndEmitIntelInstruction(SMLoc IDLoc, unsigned &Opcode,
   StringRef Mnemonic = Op.getToken();
   SMRange EmptyRange = None;
   StringRef Base = Op.getToken();
+  unsigned Prefixes = getPrefixes(Operands);
 
   // First, handle aliases that expand to multiple instructions.
   MatchFPUWaitAlias(IDLoc, Op, Operands, Out, MatchingInlineAsm);
 
   MCInst Inst;
+
+  if (Prefixes)
+    Inst.setFlags(Prefixes);
 
   // Find one unsized memory operand, if present.
   X86Operand *UnsizedMemOp = nullptr;
@@ -2950,6 +3083,8 @@ bool X86AsmParser::MatchAndEmitIntelInstruction(SMLoc IDLoc, unsigned &Opcode,
   // instruction will already have been filled in correctly, since the failing
   // matches won't have modified it).
   if (NumSuccessfulMatches == 1) {
+    if (!MatchingInlineAsm && validateInstruction(Inst, Operands))
+      return true;
     // Some instructions need post-processing to, for example, tweak which
     // encoding is selected. Loop on it while changes happen so the individual
     // transformations can chain off each other.
@@ -3028,6 +3163,19 @@ bool X86AsmParser::ParseDirective(AsmToken DirectiveID) {
     return false;
   } else if (IDVal == ".even")
     return parseDirectiveEven(DirectiveID.getLoc());
+  else if (IDVal == ".cv_fpo_proc")
+    return parseDirectiveFPOProc(DirectiveID.getLoc());
+  else if (IDVal == ".cv_fpo_setframe")
+    return parseDirectiveFPOSetFrame(DirectiveID.getLoc());
+  else if (IDVal == ".cv_fpo_pushreg")
+    return parseDirectiveFPOPushReg(DirectiveID.getLoc());
+  else if (IDVal == ".cv_fpo_stackalloc")
+    return parseDirectiveFPOStackAlloc(DirectiveID.getLoc());
+  else if (IDVal == ".cv_fpo_endprologue")
+    return parseDirectiveFPOEndPrologue(DirectiveID.getLoc());
+  else if (IDVal == ".cv_fpo_endproc")
+    return parseDirectiveFPOEndProc(DirectiveID.getLoc());
+
   return true;
 }
 
@@ -3123,6 +3271,71 @@ bool X86AsmParser::ParseDirectiveCode(StringRef IDVal, SMLoc L) {
   }
 
   return false;
+}
+
+// .cv_fpo_proc foo
+bool X86AsmParser::parseDirectiveFPOProc(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+  StringRef ProcName;
+  int64_t ParamsSize;
+  if (Parser.parseIdentifier(ProcName))
+    return Parser.TokError("expected symbol name");
+  if (Parser.parseIntToken(ParamsSize, "expected parameter byte count"))
+    return true;
+  if (!isUIntN(32, ParamsSize))
+    return Parser.TokError("parameters size out of range");
+  if (Parser.parseEOL("unexpected tokens"))
+    return addErrorSuffix(" in '.cv_fpo_proc' directive");
+  MCSymbol *ProcSym = getContext().getOrCreateSymbol(ProcName);
+  return getTargetStreamer().emitFPOProc(ProcSym, ParamsSize, L);
+}
+
+// .cv_fpo_setframe ebp
+bool X86AsmParser::parseDirectiveFPOSetFrame(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+  unsigned Reg;
+  SMLoc DummyLoc;
+  if (ParseRegister(Reg, DummyLoc, DummyLoc) ||
+      Parser.parseEOL("unexpected tokens"))
+    return addErrorSuffix(" in '.cv_fpo_setframe' directive");
+  return getTargetStreamer().emitFPOSetFrame(Reg, L);
+}
+
+// .cv_fpo_pushreg ebx
+bool X86AsmParser::parseDirectiveFPOPushReg(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+  unsigned Reg;
+  SMLoc DummyLoc;
+  if (ParseRegister(Reg, DummyLoc, DummyLoc) ||
+      Parser.parseEOL("unexpected tokens"))
+    return addErrorSuffix(" in '.cv_fpo_pushreg' directive");
+  return getTargetStreamer().emitFPOPushReg(Reg, L);
+}
+
+// .cv_fpo_stackalloc 20
+bool X86AsmParser::parseDirectiveFPOStackAlloc(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+  int64_t Offset;
+  if (Parser.parseIntToken(Offset, "expected offset") ||
+      Parser.parseEOL("unexpected tokens"))
+    return addErrorSuffix(" in '.cv_fpo_stackalloc' directive");
+  return getTargetStreamer().emitFPOStackAlloc(Offset, L);
+}
+
+// .cv_fpo_endprologue
+bool X86AsmParser::parseDirectiveFPOEndPrologue(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+  if (Parser.parseEOL("unexpected tokens"))
+    return addErrorSuffix(" in '.cv_fpo_endprologue' directive");
+  return getTargetStreamer().emitFPOEndPrologue(L);
+}
+
+// .cv_fpo_endproc
+bool X86AsmParser::parseDirectiveFPOEndProc(SMLoc L) {
+  MCAsmParser &Parser = getParser();
+  if (Parser.parseEOL("unexpected tokens"))
+    return addErrorSuffix(" in '.cv_fpo_endproc' directive");
+  return getTargetStreamer().emitFPOEndProc(L);
 }
 
 // Force static initialization.

@@ -254,7 +254,9 @@ namespace llvm {
       /// Note that these typically require refinement
       /// in order to obtain suitable precision.
       FRSQRT, FRCP,
-      FRSQRTS, FRCPS,
+
+      // AVX-512 reciprocal approximations with a little more precision.
+      RSQRT14, RSQRT14S, RCP14, RCP14S,
 
       // Thread Local Storage.
       TLSADDR,
@@ -424,7 +426,7 @@ namespace llvm {
       VFIXUPIMM,
       VFIXUPIMMS,
       // Range Restriction Calculation For Packed Pairs of Float32/64 values.
-      VRANGE,
+      VRANGE, VRANGES,
       // Reduce - Perform Reduction Transformation on scalar\packed FP.
       VREDUCE, VREDUCES,
       // RndScale - Round FP Values To Include A Given Number Of Fraction Bits.
@@ -486,6 +488,12 @@ namespace llvm {
       FNMSUB_RND,
       FMADDSUB_RND,
       FMSUBADD_RND,
+
+      // Scalar intrinsic FMA.
+      FMADDS1, FMADDS3,
+      FNMADDS1, FNMADDS3,
+      FMSUBS1, FMSUBS3,
+      FNMSUBS1, FNMSUBS3,
 
       // Scalar intrinsic FMA with rounding mode.
       // Two versions, passthru bits on op1 or op3.
@@ -555,7 +563,7 @@ namespace llvm {
       RSQRT28, RSQRT28S, RCP28, RCP28S, EXP2,
 
       // Conversions between float and half-float.
-      CVTPS2PH, CVTPH2PS,
+      CVTPS2PH, CVTPH2PS, CVTPH2PS_RND,
 
       // LWP insert record.
       LWPINS,
@@ -569,7 +577,7 @@ namespace llvm {
 
       /// LOCK-prefixed arithmetic read-modify-write instructions.
       /// EFLAGS, OUTCHAIN = LADD(INCHAIN, PTR, RHS)
-      LADD, LSUB, LOR, LXOR, LAND,
+      LADD, LSUB, LOR, LXOR, LAND, LINC, LDEC,
 
       // Load, scalar_to_vector, and zero extend.
       VZEXT_LOAD,
@@ -724,19 +732,6 @@ namespace llvm {
                             SelectionDAG &DAG) const override;
 
     SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
-
-    // Return true if it is profitable to combine a BUILD_VECTOR to a TRUNCATE
-    // for given operand and result types.
-    // Example of such a combine:
-    // v4i32 build_vector((extract_elt V, 0),
-    //                    (extract_elt V, 2),
-    //                    (extract_elt V, 4),
-    //                    (extract_elt V, 6))
-    //  -->
-    // v4i32 truncate (bitcast V to v4i64)
-    bool isDesirableToCombineBuildVectorToTruncate() const override {
-      return true;
-    }
 
     // Return true if it is profitable to combine a BUILD_VECTOR with a
     // stride-pattern to a shuffle and a truncate.
@@ -1409,13 +1404,21 @@ namespace llvm {
   };
 
   // X86 specific Gather node.
-  class X86MaskedGatherSDNode : public MaskedGatherScatterSDNode {
+  // The class has the same order of operands as MaskedGatherSDNode for
+  // convenience.
+  class X86MaskedGatherSDNode : public MemSDNode {
   public:
     X86MaskedGatherSDNode(unsigned Order,
                           const DebugLoc &dl, SDVTList VTs, EVT MemVT,
                           MachineMemOperand *MMO)
-      : MaskedGatherScatterSDNode(X86ISD::MGATHER, Order, dl, VTs, MemVT, MMO)
+      : MemSDNode(X86ISD::MGATHER, Order, dl, VTs, MemVT, MMO)
     {}
+
+    const SDValue &getBasePtr() const { return getOperand(3); }
+    const SDValue &getIndex()   const { return getOperand(4); }
+    const SDValue &getMask()    const { return getOperand(2); }
+    const SDValue &getValue()   const { return getOperand(1); }
+
     static bool classof(const SDNode *N) {
       return N->getOpcode() == X86ISD::MGATHER;
     }

@@ -30,7 +30,7 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MachineLocation.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Target/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 #include <cassert>
 #include <cstdint>
 #include <vector>
@@ -59,7 +59,6 @@ void Mips16FrameLowering::emitPrologue(MachineFunction &MF,
 
   MachineModuleInfo &MMI = MF.getMMI();
   const MCRegisterInfo *MRI = MMI.getContext().getRegisterInfo();
-  MachineLocation DstML, SrcML;
 
   // Adjust stack.
   TII.makeFrame(Mips::SP, StackSize, MBB, MBBI);

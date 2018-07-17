@@ -339,6 +339,12 @@ public:
     return clang::isExternallyVisible(getLinkageInternal());
   }
 
+  /// Determine whether this declaration can be redeclared in a
+  /// different translation unit.
+  bool isExternallyDeclarable() const {
+    return isExternallyVisible() && !getOwningModuleForLinkage();
+  }
+
   /// \brief Determines the visibility of this entity.
   Visibility getVisibility() const {
     return getLinkageAndVisibility().getVisibility();
@@ -378,10 +384,6 @@ public:
   bool hasLinkageBeenComputed() const {
     return hasCachedLinkage();
   }
-
-  /// Get the module that owns this declaration for linkage purposes.
-  /// There only ever is such a module under the C++ Modules TS.
-  Module *getOwningModuleForLinkage() const;
 
   /// \brief Looks through UsingDecls and ObjCCompatibleAliasDecls for
   /// the underlying named decl.
@@ -1684,6 +1686,14 @@ private:
   /// parsing it.
   unsigned WillHaveBody : 1;
 
+protected:
+  /// [C++17] Only used by CXXDeductionGuideDecl. Declared here to avoid
+  /// increasing the size of CXXDeductionGuideDecl by the size of an unsigned
+  /// int as opposed to adding a single bit to FunctionDecl.
+  /// Indicates that the Deduction Guide is the implicitly generated 'copy
+  /// deduction candidate' (is used during overload resolution).
+  unsigned IsCopyDeductionCandidate : 1;
+private:
   /// \brief End part of this FunctionDecl's source range.
   ///
   /// We could compute the full range in getSourceRange(). However, when we're
@@ -1761,15 +1771,14 @@ protected:
         DeclContext(DK), redeclarable_base(C), ParamInfo(nullptr), Body(),
         SClass(S), IsInline(isInlineSpecified),
         IsInlineSpecified(isInlineSpecified), IsExplicitSpecified(false),
-        IsVirtualAsWritten(false), IsPure(false),
-        HasInheritedPrototype(false), HasWrittenPrototype(true),
-        IsDeleted(false), IsTrivial(false), IsDefaulted(false),
-        IsExplicitlyDefaulted(false), HasImplicitReturnZero(false),
-        IsLateTemplateParsed(false), IsConstexpr(isConstexprSpecified),
-        InstantiationIsPending(false),
+        IsVirtualAsWritten(false), IsPure(false), HasInheritedPrototype(false),
+        HasWrittenPrototype(true), IsDeleted(false), IsTrivial(false),
+        IsDefaulted(false), IsExplicitlyDefaulted(false),
+        HasImplicitReturnZero(false), IsLateTemplateParsed(false),
+        IsConstexpr(isConstexprSpecified), InstantiationIsPending(false),
         UsesSEHTry(false), HasSkippedBody(false), WillHaveBody(false),
-        EndRangeLoc(NameInfo.getEndLoc()), TemplateOrSpecialization(),
-        DNLoc(NameInfo.getInfo()) {}
+        IsCopyDeductionCandidate(false), EndRangeLoc(NameInfo.getEndLoc()),
+        TemplateOrSpecialization(), DNLoc(NameInfo.getInfo()) {}
 
   typedef Redeclarable<FunctionDecl> redeclarable_base;
   FunctionDecl *getNextRedeclarationImpl() override {
@@ -2037,6 +2046,9 @@ public:
   /// If this function is an aligned allocation/deallocation function, return
   /// true through IsAligned.
   bool isReplaceableGlobalAllocationFunction(bool *IsAligned = nullptr) const;
+
+  /// \brief Determine whether this is a destroying operator delete.
+  bool isDestroyingOperatorDelete() const;
 
   /// Compute the language linkage.
   LanguageLinkage getLanguageLinkage() const;
@@ -3531,7 +3543,7 @@ public:
     return K >= firstRecord && K <= lastRecord;
   }
 
-  /// isMsStrust - Get whether or not this is an ms_struct which can
+  /// \brief Get whether or not this is an ms_struct which can
   /// be turned on with an attribute, pragma, or -mms-bitfields
   /// commandline option.
   bool isMsStruct(const ASTContext &C) const;

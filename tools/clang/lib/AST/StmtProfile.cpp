@@ -1418,7 +1418,7 @@ static Stmt::StmtClass DecodeOperatorCall(const CXXOperatorCallExpr *S,
   llvm_unreachable("Invalid overloaded operator expression");
 }
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 #if _MSC_VER == 1911
 // Work around https://developercommunity.visualstudio.com/content/problem/84002/clang-cl-when-built-with-vc-2017-crashes-cause-vc.html
 // MSVC 2017 update 3 miscompiles this function, and a clang built with it
@@ -1459,7 +1459,7 @@ void StmtProfiler::VisitCXXOperatorCallExpr(const CXXOperatorCallExpr *S) {
   ID.AddInteger(S->getOperator());
 }
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 #if _MSC_VER == 1911
 #pragma optimize("", on)
 #endif
@@ -1590,6 +1590,9 @@ StmtProfiler::VisitLambdaExpr(const LambdaExpr *S) {
   for (LambdaExpr::capture_iterator C = S->explicit_capture_begin(),
                                  CEnd = S->explicit_capture_end();
        C != CEnd; ++C) {
+    if (C->capturesVLAType())
+      continue;
+
     ID.AddInteger(C->getCaptureKind());
     switch (C->getCaptureKind()) {
     case LCK_StarThis:

@@ -36,6 +36,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInstrDesc.h"
@@ -47,7 +48,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -1405,6 +1405,31 @@ bool HexagonInstrInfo::isPredicable(const MachineInstr &MI) const {
     if (!Subtarget.usePredicatedCalls())
       return false;
   }
+
+  // HVX loads are not predicable on v60, but are on v62.
+  if (!Subtarget.hasV62TOps()) {
+    switch (MI.getOpcode()) {
+      case Hexagon::V6_vL32b_ai:
+      case Hexagon::V6_vL32b_pi:
+      case Hexagon::V6_vL32b_ppu:
+      case Hexagon::V6_vL32b_cur_ai:
+      case Hexagon::V6_vL32b_cur_pi:
+      case Hexagon::V6_vL32b_cur_ppu:
+      case Hexagon::V6_vL32b_nt_ai:
+      case Hexagon::V6_vL32b_nt_pi:
+      case Hexagon::V6_vL32b_nt_ppu:
+      case Hexagon::V6_vL32b_tmp_ai:
+      case Hexagon::V6_vL32b_tmp_pi:
+      case Hexagon::V6_vL32b_tmp_ppu:
+      case Hexagon::V6_vL32b_nt_cur_ai:
+      case Hexagon::V6_vL32b_nt_cur_pi:
+      case Hexagon::V6_vL32b_nt_cur_ppu:
+      case Hexagon::V6_vL32b_nt_tmp_ai:
+      case Hexagon::V6_vL32b_nt_tmp_pi:
+      case Hexagon::V6_vL32b_nt_tmp_ppu:
+        return false;
+    }
+  }
   return true;
 }
 
@@ -1565,10 +1590,14 @@ bool HexagonInstrInfo::analyzeCompare(const MachineInstr &MI, unsigned &SrcReg,
     case Hexagon::A4_cmpbgtui:
     case Hexagon::A4_cmpheqi:
     case Hexagon::A4_cmphgti:
-    case Hexagon::A4_cmphgtui:
+    case Hexagon::A4_cmphgtui: {
       SrcReg2 = 0;
+      const MachineOperand &Op2 = MI.getOperand(2);
+      if (!Op2.isImm())
+        return false;
       Value = MI.getOperand(2).getImm();
       return true;
+    }
   }
 
   return false;
@@ -1651,12 +1680,20 @@ bool HexagonInstrInfo::areMemAccessesTriviallyDisjoint(
 bool HexagonInstrInfo::getIncrementValue(const MachineInstr &MI,
       int &Value) const {
   if (isPostIncrement(MI)) {
-    unsigned AccessSize;
-    return getBaseAndOffset(MI, Value, AccessSize);
-  }
-  if (MI.getOpcode() == Hexagon::A2_addi) {
-    Value = MI.getOperand(2).getImm();
-    return true;
+    unsigned BasePos = 0, OffsetPos = 0;
+    if (!getBaseAndOffsetPosition(MI, BasePos, OffsetPos))
+      return false;
+    const MachineOperand &OffsetOp = MI.getOperand(OffsetPos);
+    if (OffsetOp.isImm()) {
+      Value = OffsetOp.getImm();
+      return true;
+    }
+  } else if (MI.getOpcode() == Hexagon::A2_addi) {
+    const MachineOperand &AddOp = MI.getOperand(2);
+    if (AddOp.isImm()) {
+      Value = AddOp.getImm();
+      return true;
+    }
   }
 
   return false;

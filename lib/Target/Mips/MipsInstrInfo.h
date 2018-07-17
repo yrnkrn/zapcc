@@ -25,7 +25,7 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineMemOperand.h"
-#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include <cstdint>
 
 #define GET_INSTRINFO_HEADER
@@ -151,6 +151,12 @@ public:
   /// Perform target specific instruction verification.
   bool verifyInstruction(const MachineInstr &MI,
                          StringRef &ErrInfo) const override;
+
+  std::pair<unsigned, unsigned>
+  decomposeMachineOperandsTargetFlags(unsigned TF) const override;
+
+  ArrayRef<std::pair<unsigned, const char *>>
+  getSerializableDirectMachineOperandTargetFlags() const override;
 
 protected:
   bool isZeroImm(const MachineOperand &op) const;

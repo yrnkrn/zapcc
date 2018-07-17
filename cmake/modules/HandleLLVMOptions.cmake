@@ -194,10 +194,13 @@ if( LLVM_ENABLE_LLD )
 endif()
 
 if( LLVM_USE_LINKER )
-  check_cxx_compiler_flag("-fuse-ld=${LLVM_USE_LINKER}" CXX_SUPPORTS_CUSTOM_LINKER)
+  set(OLD_CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS})
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -fuse-ld=${LLVM_USE_LINKER}")
+  check_cxx_source_compiles("int main() { return 0; }" CXX_SUPPORTS_CUSTOM_LINKER)
   if ( NOT CXX_SUPPORTS_CUSTOM_LINKER )
 	  message(FATAL_ERROR "Host compiler does not support '-fuse-ld=${LLVM_USE_LINKER}'")
   endif()
+  set(CMAKE_REQUIRED_FLAGS ${OLD_CMAKE_REQUIRED_FLAGS})
   append("-fuse-ld=${LLVM_USE_LINKER}"
     CMAKE_EXE_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS)
 endif()
@@ -229,6 +232,10 @@ if( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -m32")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -m32")
     set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -m32")
+
+    # FIXME: CMAKE_SIZEOF_VOID_P is still 8
+    add_definitions(-D_LARGEFILE_SOURCE)
+    add_definitions(-D_FILE_OFFSET_BITS=64)
   endif( LLVM_BUILD_32_BITS )
 endif( CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT WIN32 )
 
@@ -239,6 +246,7 @@ if (ANDROID AND (ANDROID_NATIVE_API_LEVEL LESS 24))
   set(LLVM_FORCE_SMALLFILE_FOR_ANDROID TRUE)
 endif()
 if( CMAKE_SIZEOF_VOID_P EQUAL 4 AND NOT LLVM_FORCE_SMALLFILE_FOR_ANDROID)
+  # FIXME: It isn't handled in LLVM_BUILD_32_BITS.
   add_definitions( -D_LARGEFILE_SOURCE )
   add_definitions( -D_FILE_OFFSET_BITS=64 )
 endif()
@@ -730,14 +738,15 @@ if(LLVM_ENABLE_EH AND NOT LLVM_ENABLE_RTTI)
   message(FATAL_ERROR "Exception handling requires RTTI. You must set LLVM_ENABLE_RTTI to ON")
 endif()
 
-option(LLVM_ENABLE_IR_PGO "Build LLVM and tools with IR PGO instrumentation (experimental)" Off)
+option(LLVM_ENABLE_IR_PGO "Build LLVM and tools with IR PGO instrumentation (deprecated)" Off)
 mark_as_advanced(LLVM_ENABLE_IR_PGO)
 
-option(LLVM_BUILD_INSTRUMENTED "Build LLVM and tools with PGO instrumentation" Off)
+set(LLVM_BUILD_INSTRUMENTED OFF CACHE STRING "Build LLVM and tools with PGO instrumentation. May be specified as IR or Frontend")
 mark_as_advanced(LLVM_BUILD_INSTRUMENTED)
+string(TOUPPER "${LLVM_BUILD_INSTRUMENTED}" uppercase_LLVM_BUILD_INSTRUMENTED)
 
 if (LLVM_BUILD_INSTRUMENTED)
-  if (LLVM_ENABLE_IR_PGO)
+  if (LLVM_ENABLE_IR_PGO OR uppercase_LLVM_BUILD_INSTRUMENTED STREQUAL "IR")
     append("-fprofile-generate='${LLVM_PROFILE_DATA_DIR}'"
       CMAKE_CXX_FLAGS
       CMAKE_C_FLAGS
@@ -759,6 +768,10 @@ append_if(LLVM_BUILD_INSTRUMENTED_COVERAGE "-fprofile-instr-generate='${LLVM_PRO
   CMAKE_C_FLAGS
   CMAKE_EXE_LINKER_FLAGS
   CMAKE_SHARED_LINKER_FLAGS)
+
+if (LLVM_BUILD_INSTRUMENTED AND LLVM_BUILD_INSTRUMENTED_COVERAGE)
+  message(FATAL_ERROR "LLVM_BUILD_INSTRUMENTED and LLVM_BUILD_INSTRUMENTED_COVERAGE cannot both be specified")
+endif()
 
 if(LLVM_ENABLE_LTO AND LLVM_ON_WIN32 AND NOT LINKER_IS_LLD_LINK)
   message(FATAL_ERROR "When compiling for Windows, LLVM_ENABLE_LTO requires using lld as the linker (point CMAKE_LINKER at lld-link.exe)")

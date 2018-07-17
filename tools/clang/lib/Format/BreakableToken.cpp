@@ -40,9 +40,15 @@ static bool IsBlank(char C) {
   }
 }
 
-static StringRef getLineCommentIndentPrefix(StringRef Comment) {
-  static const char *const KnownPrefixes[] = {"///<", "//!<", "///", "//",
-                                              "//!"};
+static StringRef getLineCommentIndentPrefix(StringRef Comment,
+                                            const FormatStyle &Style) {
+  static const char *const KnownCStylePrefixes[] = {"///<", "//!<", "///", "//",
+                                                    "//!"};
+  static const char *const KnownTextProtoPrefixes[] = {"//", "#"};
+  ArrayRef<const char *> KnownPrefixes(KnownCStylePrefixes);
+  if (Style.Language == FormatStyle::LK_TextProto)
+    KnownPrefixes = KnownTextProtoPrefixes;
+
   StringRef LongestPrefix;
   for (StringRef KnownPrefix : KnownPrefixes) {
     if (Comment.startswith(KnownPrefix)) {
@@ -599,6 +605,12 @@ unsigned BreakableBlockComment::getLineLengthAfterSplitBefore(
   }
 }
 
+bool BreakableBlockComment::introducesBreakBefore(unsigned LineIndex) const {
+  // A break is introduced when we want delimiters on newline.
+  return LineIndex == 0 && DelimitersOnNewline &&
+         Lines[0].substr(1).find_first_not_of(Blanks) != StringRef::npos;
+}
+
 void BreakableBlockComment::replaceWhitespaceBefore(
     unsigned LineIndex, unsigned PreviousEndColumn, unsigned ColumnLimit,
     Split SplitBefore, WhitespaceManager &Whitespaces) {
@@ -726,7 +738,8 @@ BreakableLineCommentSection::BreakableLineCommentSection(
        CurrentTok = CurrentTok->Next) {
     LastLineTok = LineTok;
     StringRef TokenText(CurrentTok->TokenText);
-    assert(TokenText.startswith("//"));
+    assert((TokenText.startswith("//") || TokenText.startswith("#")) &&
+           "unsupported line comment prefix, '//' and '#' are supported");
     size_t FirstLineIndex = Lines.size();
     TokenText.split(Lines, "\n");
     Content.resize(Lines.size());
@@ -739,8 +752,9 @@ BreakableLineCommentSection::BreakableLineCommentSection(
       // We need to trim the blanks in case this is not the first line in a
       // multiline comment. Then the indent is included in Lines[i].
       StringRef IndentPrefix =
-          getLineCommentIndentPrefix(Lines[i].ltrim(Blanks));
-      assert(IndentPrefix.startswith("//"));
+          getLineCommentIndentPrefix(Lines[i].ltrim(Blanks), Style);
+      assert((TokenText.startswith("//") || TokenText.startswith("#")) &&
+             "unsupported line comment prefix, '//' and '#' are supported");
       OriginalPrefix[i] = Prefix[i] = IndentPrefix;
       if (Lines[i].size() > Prefix[i].size() &&
           isAlphanumeric(Lines[i][Prefix[i].size()])) {
@@ -754,6 +768,9 @@ BreakableLineCommentSection::BreakableLineCommentSection(
           Prefix[i] = "///< ";
         else if (Prefix[i] == "//!<")
           Prefix[i] = "//!< ";
+        else if (Prefix[i] == "#" &&
+                 Style.Language == FormatStyle::LK_TextProto)
+          Prefix[i] = "# ";
       }
 
       Tokens[i] = LineTok;

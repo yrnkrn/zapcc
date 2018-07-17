@@ -85,6 +85,14 @@ public:
   MDNode *createRange(Constant *Lo, Constant *Hi);
 
   //===------------------------------------------------------------------===//
+  // Callees metadata.
+  //===------------------------------------------------------------------===//
+
+  /// \brief Return metadata indicating the possible callees of indirect
+  /// calls.
+  MDNode *createCallees(ArrayRef<Function *> Callees);
+
+  //===------------------------------------------------------------------===//
   // AA metadata.
   //===------------------------------------------------------------------===//
 
@@ -165,6 +173,9 @@ public:
   /// base type, access type and offset relative to the base type.
   MDNode *createTBAAStructTagNode(MDNode *BaseType, MDNode *AccessType,
                                   uint64_t Offset, bool IsConstant = false);
+
+  /// \brief Return metadata containing an irreducible loop header weight.
+  MDNode *createIrrLoopHeaderWeight(uint64_t Weight);
 };
 
 } // end namespace llvm

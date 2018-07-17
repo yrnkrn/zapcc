@@ -24,12 +24,23 @@ namespace internal {
 
 inline llvm::Error findError() { return llvm::Error::success(); }
 
+inline void ignoreError() {}
+
+template <typename FirstT, typename... RestT>
+void ignoreError(Expected<FirstT> &First, Expected<RestT> &... Rest) {
+  if (!First)
+    llvm::consumeError(First.takeError());
+  ignoreError(Rest...);
+}
+
 /// Scans the tuple and returns a valid \c Error if any of the values are
 /// invalid.
 template <typename FirstT, typename... RestT>
 llvm::Error findError(Expected<FirstT> &First, Expected<RestT> &... Rest) {
-  if (!First)
+  if (!First) {
+    ignoreError(Rest...);
     return First.takeError();
+  }
   return findError(Rest...);
 }
 
@@ -46,7 +57,39 @@ void invokeRuleAfterValidatingRequirements(
     return Consumer.handleError(std::move(Err));
   // Construct the target action rule by extracting the evaluated
   // requirements from Expected<> wrappers and then run it.
-  RuleType((*std::get<Is>(Values))...).invoke(Consumer, Context);
+  auto Rule =
+      RuleType::initiate(Context, std::move((*std::get<Is>(Values)))...);
+  if (!Rule)
+    return Consumer.handleError(Rule.takeError());
+  Rule->invoke(Consumer, Context);
+}
+
+inline void visitRefactoringOptionsImpl(RefactoringOptionVisitor &) {}
+
+/// Scans the list of requirements in a rule and visits all the refactoring
+/// options that are used by all the requirements.
+template <typename FirstT, typename... RestT>
+void visitRefactoringOptionsImpl(RefactoringOptionVisitor &Visitor,
+                                 const FirstT &First, const RestT &... Rest) {
+  struct OptionGatherer {
+    RefactoringOptionVisitor &Visitor;
+
+    void operator()(const RefactoringOptionsRequirement &Requirement) {
+      for (const auto &Option : Requirement.getRefactoringOptions())
+        Option->passToVisitor(Visitor);
+    }
+    void operator()(const RefactoringActionRuleRequirement &) {}
+  };
+  (OptionGatherer{Visitor})(First);
+  return visitRefactoringOptionsImpl(Visitor, Rest...);
+}
+
+template <typename... RequirementTypes, size_t... Is>
+void visitRefactoringOptions(
+    RefactoringOptionVisitor &Visitor,
+    const std::tuple<RequirementTypes...> &Requirements,
+    llvm::index_sequence<Is...>) {
+  visitRefactoringOptionsImpl(Visitor, std::get<Is>(Requirements)...);
 }
 
 /// A type trait that returns true when the given type list has at least one
@@ -97,6 +140,11 @@ createRefactoringActionRule(const RequirementTypes &... Requirements) {
                                  RequirementTypes...>::value;
     }
 
+    void visitRefactoringOptions(RefactoringOptionVisitor &Visitor) override {
+      internal::visitRefactoringOptions(
+          Visitor, Requirements,
+          llvm::index_sequence_for<RequirementTypes...>());
+    }
   private:
     std::tuple<RequirementTypes...> Requirements;
   };

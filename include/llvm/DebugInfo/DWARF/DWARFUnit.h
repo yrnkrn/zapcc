@@ -285,12 +285,21 @@ public:
 
   uint8_t getUnitType() const { return UnitType; }
 
-  static bool isValidUnitType(uint8_t UnitType) {
-    return UnitType == dwarf::DW_UT_compile || UnitType == dwarf::DW_UT_type ||
-           UnitType == dwarf::DW_UT_partial ||
-           UnitType == dwarf::DW_UT_skeleton ||
-           UnitType == dwarf::DW_UT_split_compile ||
-           UnitType == dwarf::DW_UT_split_type;
+  static bool isMatchingUnitTypeAndTag(uint8_t UnitType, dwarf::Tag Tag) {
+    switch (UnitType) {
+    case dwarf::DW_UT_compile:
+      return Tag == dwarf::DW_TAG_compile_unit;
+    case dwarf::DW_UT_type:
+      return Tag == dwarf::DW_TAG_type_unit;
+    case dwarf::DW_UT_partial:
+      return Tag == dwarf::DW_TAG_partial_unit;
+    case dwarf::DW_UT_skeleton:
+      return Tag == dwarf::DW_TAG_skeleton_unit;
+    case dwarf::DW_UT_split_compile:
+    case dwarf::DW_UT_split_type:
+      return dwarf::isUnitType(Tag);
+    }
+    return false;
   }
 
   /// \brief Return the number of bytes for the header of a unit of
@@ -329,6 +338,11 @@ public:
 
   void collectAddressRanges(DWARFAddressRangesVector &CURanges);
 
+  /// Returns subprogram DIE with address range encompassing the provided
+  /// address. The pointer is alive as long as parsed compile unit DIEs are not
+  /// cleared.
+  DWARFDie getSubroutineForAddress(uint64_t Address);
+
   /// getInlinedChainForAddress - fetches inlined chain for a given address.
   /// Returns empty chain if there is no subprogram containing address. The
   /// chain is valid as long as parsed compile unit DIEs are not cleared.
@@ -363,6 +377,7 @@ public:
 
   DWARFDie getParent(const DWARFDebugInfoEntry *Die);
   DWARFDie getSibling(const DWARFDebugInfoEntry *Die);
+  DWARFDie getFirstChild(const DWARFDebugInfoEntry *Die);
 
   /// \brief Return the DIE object for a given offset inside the
   /// unit's DIE vector.
@@ -411,11 +426,6 @@ private:
   /// parseDWO - Parses .dwo file for current compile unit. Returns true if
   /// it was actually constructed.
   bool parseDWO();
-
-  /// getSubroutineForAddress - Returns subprogram DIE with address range
-  /// encompassing the provided address. The pointer is alive as long as parsed
-  /// compile unit DIEs are not cleared.
-  DWARFDie getSubroutineForAddress(uint64_t Address);
 };
 
 } // end namespace llvm

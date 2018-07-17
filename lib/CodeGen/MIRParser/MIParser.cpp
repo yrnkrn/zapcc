@@ -11,8 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MILexer.h"
 #include "MIParser.h"
+#include "MILexer.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -21,8 +21,8 @@
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/AsmParser/SlotMapping.h"
@@ -36,6 +36,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -64,7 +65,6 @@
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -1634,6 +1634,12 @@ bool MIParser::parseCFIOperand(MachineOperand &Dest) {
     CFIIndex =
         MF.addFrameInst(MCCFIInstruction::createDefCfa(nullptr, Reg, -Offset));
     break;
+  case MIToken::kw_cfi_restore:
+    if (parseCFIRegister(Reg))
+      return true;
+    CFIIndex = MF.addFrameInst(MCCFIInstruction::createRestore(nullptr, Reg));
+    break;
+
   default:
     // TODO: Parse the other CFI operands.
     llvm_unreachable("The current token should be a cfi operand");
@@ -1912,6 +1918,7 @@ bool MIParser::parseMachineOperand(MachineOperand &Dest,
   case MIToken::kw_cfi_def_cfa_register:
   case MIToken::kw_cfi_def_cfa_offset:
   case MIToken::kw_cfi_def_cfa:
+  case MIToken::kw_cfi_restore:
     return parseCFIOperand(Dest);
   case MIToken::kw_blockaddress:
     return parseBlockAddressOperand(Dest);

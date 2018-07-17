@@ -40,7 +40,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
@@ -971,7 +971,9 @@ getStrictFPOpcodeAction(const TargetLowering &TLI, unsigned Opcode, EVT VT) {
 void SelectionDAGLegalize::LegalizeOp(SDNode *Node) {
   DEBUG(dbgs() << "\nLegalizing: "; Node->dump(&DAG));
 
-  if (Node->getOpcode() == ISD::TargetConstant) // Allow illegal target nodes.
+  // Allow illegal target nodes and illegal registers.
+  if (Node->getOpcode() == ISD::TargetConstant ||
+      Node->getOpcode() == ISD::Register)
     return;
 
 #ifndef NDEBUG
@@ -985,7 +987,8 @@ void SelectionDAGLegalize::LegalizeOp(SDNode *Node) {
     assert((TLI.getTypeAction(*DAG.getContext(), Op.getValueType()) ==
               TargetLowering::TypeLegal ||
             TLI.isTypeLegal(Op.getValueType()) ||
-            Op.getOpcode() == ISD::TargetConstant) &&
+            Op.getOpcode() == ISD::TargetConstant ||
+            Op.getOpcode() == ISD::Register) &&
             "Unexpected illegal type!");
 #endif
 
@@ -2773,7 +2776,7 @@ SDValue SelectionDAGLegalize::ExpandBitCount(unsigned Opc, SDValue Op,
     return DAG.getNode(ISD::CTLZ, dl, Op.getValueType(), Op);
   case ISD::CTLZ: {
     EVT VT = Op.getValueType();
-    unsigned len = VT.getSizeInBits();
+    unsigned Len = VT.getSizeInBits();
 
     if (TLI.isOperationLegalOrCustom(ISD::CTLZ_ZERO_UNDEF, VT)) {
       EVT SetCCVT = getSetCCResultType(VT);
@@ -2781,7 +2784,7 @@ SDValue SelectionDAGLegalize::ExpandBitCount(unsigned Opc, SDValue Op,
       SDValue Zero = DAG.getConstant(0, dl, VT);
       SDValue SrcIsZero = DAG.getSetCC(dl, SetCCVT, Op, Zero, ISD::SETEQ);
       return DAG.getNode(ISD::SELECT, dl, VT, SrcIsZero,
-                         DAG.getConstant(len, dl, VT), CTLZ);
+                         DAG.getConstant(Len, dl, VT), CTLZ);
     }
 
     // for now, we do this:
@@ -2794,7 +2797,7 @@ SDValue SelectionDAGLegalize::ExpandBitCount(unsigned Opc, SDValue Op,
     //
     // Ref: "Hacker's Delight" by Henry Warren
     EVT ShVT = TLI.getShiftAmountTy(VT, DAG.getDataLayout());
-    for (unsigned i = 0; (1U << i) <= (len / 2); ++i) {
+    for (unsigned i = 0; (1U << i) <= (Len / 2); ++i) {
       SDValue Tmp3 = DAG.getConstant(1ULL << i, dl, ShVT);
       Op = DAG.getNode(ISD::OR, dl, VT, Op,
                        DAG.getNode(ISD::SRL, dl, VT, Op, Tmp3));
@@ -2806,11 +2809,22 @@ SDValue SelectionDAGLegalize::ExpandBitCount(unsigned Opc, SDValue Op,
     // This trivially expands to CTTZ.
     return DAG.getNode(ISD::CTTZ, dl, Op.getValueType(), Op);
   case ISD::CTTZ: {
+    EVT VT = Op.getValueType();
+    unsigned Len = VT.getSizeInBits();
+
+    if (TLI.isOperationLegalOrCustom(ISD::CTTZ_ZERO_UNDEF, VT)) {
+      EVT SetCCVT = getSetCCResultType(VT);
+      SDValue CTTZ = DAG.getNode(ISD::CTTZ_ZERO_UNDEF, dl, VT, Op);
+      SDValue Zero = DAG.getConstant(0, dl, VT);
+      SDValue SrcIsZero = DAG.getSetCC(dl, SetCCVT, Op, Zero, ISD::SETEQ);
+      return DAG.getNode(ISD::SELECT, dl, VT, SrcIsZero,
+                         DAG.getConstant(Len, dl, VT), CTTZ);
+    }
+
     // for now, we use: { return popcount(~x & (x - 1)); }
     // unless the target has ctlz but not ctpop, in which case we use:
     // { return 32 - nlz(~x & (x-1)); }
     // Ref: "Hacker's Delight" by Henry Warren
-    EVT VT = Op.getValueType();
     SDValue Tmp3 = DAG.getNode(ISD::AND, dl, VT,
                                DAG.getNOT(dl, Op, VT),
                                DAG.getNode(ISD::SUB, dl, VT, Op,
@@ -3908,7 +3922,6 @@ void SelectionDAGLegalize::ConvertNodeToLibcall(SDNode *Node) {
   DEBUG(dbgs() << "Trying to convert node to libcall\n");
   SmallVector<SDValue, 8> Results;
   SDLoc dl(Node);
-  SDValue Tmp1, Tmp2, Tmp3, Tmp4;
   unsigned Opc = Node->getOpcode();
   switch (Opc) {
   case ISD::ATOMIC_FENCE: {

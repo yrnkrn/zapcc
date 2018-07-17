@@ -34,6 +34,7 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/DebugLoc.h"
@@ -49,7 +50,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetOptions.h"
@@ -1610,14 +1610,14 @@ void ARMFrameLowering::determineCalleeSaves(MachineFunction &MF,
     if (AFI->getArgRegsSaveSize() > 0)
       SavedRegs.set(ARM::LR);
 
-    // Spill R4 if Thumb1 epilogue has to restore SP from FP. We don't know
-    // for sure what the stack size will be, but for this, an estimate is good
-    // enough. If there anything changes it, it'll be a spill, which implies
-    // we've used all the registers and so R4 is already used, so not marking
-    // it here will be OK.
+    // Spill R4 if Thumb1 epilogue has to restore SP from FP or the function
+    // requires stack alignment.  We don't know for sure what the stack size
+    // will be, but for this, an estimate is good enough. If there anything
+    // changes it, it'll be a spill, which implies we've used all the registers
+    // and so R4 is already used, so not marking it here will be OK.
     // FIXME: It will be better just to find spare register here.
-    unsigned StackSize = MFI.estimateStackSize(MF);
-    if (MFI.hasVarSizedObjects() || StackSize > 508)
+    if (MFI.hasVarSizedObjects() || RegInfo->needsStackRealignment(MF) ||
+        MFI.estimateStackSize(MF) > 508)
       SavedRegs.set(ARM::R4);
   }
 

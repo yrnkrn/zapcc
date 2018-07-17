@@ -78,6 +78,7 @@ static bool ShouldUpgradeX86Intrinsic(Function *F, StringRef Name) {
       Name=="ssse3.pabs.d.128" || // Added in 6.0
       Name.startswith("avx2.pabs.") || // Added in 6.0
       Name.startswith("avx512.mask.pabs.") || // Added in 6.0
+      Name.startswith("avx512.broadcastm") || // Added in 6.0
       Name.startswith("avx512.mask.pbroadcast") || // Added in 6.0
       Name.startswith("sse2.pcmpeq.") || // Added in 3.1
       Name.startswith("sse2.pcmpgt.") || // Added in 3.1
@@ -1027,7 +1028,15 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       Rep = Builder.CreateICmp(CmpEq ? ICmpInst::ICMP_EQ : ICmpInst::ICMP_SGT,
                                CI->getArgOperand(0), CI->getArgOperand(1));
       Rep = Builder.CreateSExt(Rep, CI->getType(), "");
-    } else if (IsX86 && (Name.startswith("avx512.mask.pbroadcast"))){
+    } else if (IsX86 && (Name.startswith("avx512.broadcastm"))) {
+      Type *ExtTy = Type::getInt32Ty(C);
+      if (CI->getOperand(0)->getType()->isIntegerTy(8))
+        ExtTy = Type::getInt64Ty(C);
+      unsigned NumElts = CI->getType()->getPrimitiveSizeInBits() /
+                         ExtTy->getPrimitiveSizeInBits();
+      Rep = Builder.CreateZExt(CI->getArgOperand(0), ExtTy);
+      Rep = Builder.CreateVectorSplat(NumElts, Rep);
+    } else if (IsX86 && (Name.startswith("avx512.mask.pbroadcast"))) {
       unsigned NumElts =
           CI->getArgOperand(1)->getType()->getVectorNumElements();
       Rep = Builder.CreateVectorSplat(NumElts, CI->getArgOperand(0));
@@ -2446,6 +2455,35 @@ bool llvm::UpgradeModuleFlags(Module &M) {
   }
 
   return Changed;
+}
+
+void llvm::UpgradeSectionAttributes(Module &M) {
+  auto TrimSpaces = [](StringRef Section) -> std::string {
+    SmallVector<StringRef, 5> Components;
+    Section.split(Components, ',');
+
+    SmallString<32> Buffer;
+    raw_svector_ostream OS(Buffer);
+
+    for (auto Component : Components)
+      OS << ',' << Component.trim();
+
+    return OS.str().substr(1);
+  };
+
+  for (auto &GV : M.globals()) {
+    if (!GV.hasSection())
+      continue;
+
+    StringRef Section = GV.getSection();
+
+    if (!Section.startswith("__DATA, __objc_catlist"))
+      continue;
+
+    // __DATA, __objc_catlist, regular, no_dead_strip
+    // __DATA,__objc_catlist,regular,no_dead_strip
+    GV.setSection(TrimSpaces(Section));
+  }
 }
 
 static bool isOldLoopArgument(Metadata *MD) {

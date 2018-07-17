@@ -1993,7 +1993,8 @@ public:
   bool isExtFree(const Instruction *I) const {
     switch (I->getOpcode()) {
     case Instruction::FPExt:
-      if (isFPExtFree(EVT::getEVT(I->getType())))
+      if (isFPExtFree(EVT::getEVT(I->getType()),
+                      EVT::getEVT(I->getOperand(0)->getType())))
         return true;
       break;
     case Instruction::ZExt:
@@ -2120,9 +2121,19 @@ public:
   /// Return true if an fpext operation is free (for instance, because
   /// single-precision floating-point numbers are implicitly extended to
   /// double-precision).
-  virtual bool isFPExtFree(EVT VT) const {
-    assert(VT.isFloatingPoint());
+  virtual bool isFPExtFree(EVT DestVT, EVT SrcVT) const {
+    assert(SrcVT.isFloatingPoint() && DestVT.isFloatingPoint() &&
+           "invalid fpext types");
     return false;
+  }
+
+  /// Return true if an fpext operation input to an \p Opcode operation is free
+  /// (for instance, because half-precision floating-point numbers are
+  /// implicitly extended to float-precision) for an FMA instruction.
+  virtual bool isFPExtFoldable(unsigned Opcode, EVT DestVT, EVT SrcVT) const {
+    assert(DestVT.isFloatingPoint() && SrcVT.isFloatingPoint() &&
+           "invalid fpext types");
+    return isFPExtFree(DestVT, SrcVT);
   }
 
   /// Return true if folding a vector load into ExtVal (a sign, zero, or any
@@ -2654,7 +2665,7 @@ public:
                             bool AssumeSingleUse = false) const;
 
   /// Helper wrapper around SimplifyDemandedBits
-  bool SimplifyDemandedBits(SDValue Op, APInt &DemandedMask,
+  bool SimplifyDemandedBits(SDValue Op, const APInt &DemandedMask,
                             DAGCombinerInfo &DCI) const;
 
   /// Determine which of the bits specified in Mask are known to be either zero
@@ -2662,6 +2673,15 @@ public:
   /// argument allows us to only collect the known bits that are shared by the
   /// requested vector elements.
   virtual void computeKnownBitsForTargetNode(const SDValue Op,
+                                             KnownBits &Known,
+                                             const APInt &DemandedElts,
+                                             const SelectionDAG &DAG,
+                                             unsigned Depth = 0) const;
+
+  /// Determine which of the bits of FrameIndex \p FIOp are known to be 0.
+  /// Default implementation computes low bits based on alignment
+  /// information. This should preserve known bits passed into it.
+  virtual void computeKnownBitsForFrameIndex(const SDValue FIOp,
                                              KnownBits &Known,
                                              const APInt &DemandedElts,
                                              const SelectionDAG &DAG,
@@ -2754,18 +2774,6 @@ public:
   //  By default, it returns true.
   virtual bool isDesirableToCommuteWithShift(const SDNode *N) const {
     return true;
-  }
-
-  // Return true if it is profitable to combine a BUILD_VECTOR to a TRUNCATE.
-  // Example of such a combine:
-  // v4i32 build_vector((extract_elt V, 0),
-  //                    (extract_elt V, 2),
-  //                    (extract_elt V, 4),
-  //                    (extract_elt V, 6))
-  //  -->
-  // v4i32 truncate (bitcast V to v4i64)
-  virtual bool isDesirableToCombineBuildVectorToTruncate() const {
-    return false;
   }
 
   // Return true if it is profitable to combine a BUILD_VECTOR with a stride-pattern
@@ -2907,7 +2915,7 @@ public:
       RetTy = ResultType;
       Callee = Target;
       CallConv = CC;
-      NumFixedArgs = Args.size();
+      NumFixedArgs = ArgsList.size();
       Args = std::move(ArgsList);
 
       DAG.getTargetLoweringInfo().markLibCallAttributes(
@@ -2920,7 +2928,7 @@ public:
       RetTy = ResultType;
       Callee = Target;
       CallConv = CC;
-      NumFixedArgs = Args.size();
+      NumFixedArgs = ArgsList.size();
       Args = std::move(ArgsList);
       return *this;
     }

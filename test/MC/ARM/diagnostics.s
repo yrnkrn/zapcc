@@ -60,6 +60,7 @@
         ldr r4, [r5, r6, ror #-1]
         pld r4, [r5, r6, ror #32]
         pld r4, [r5, r6, rrx #0]
+        ldr r4, [r5, r6, not_a_shift]
 
 @ CHECK-ERRORS: error: shift amount must be an immediate
 @ CHECK-ERRORS:         str r1, [r2, r3, lsl #invalid]
@@ -89,6 +90,8 @@
 @ CHECK-ERRORS:         pld r4, [r5, r6, ror #32]
 @ CHECK-ERRORS: error: ']' expected
 @ CHECK-ERRORS:         pld r4, [r5, r6, rrx #0]
+@ CHECK-ERRORS: error: illegal shift operator
+@ CHECK-ERRORS:         ldr r4, [r5, r6, not_a_shift]
         
         @ Out of range 16-bit immediate on BKPT
         bkpt #65536
@@ -182,8 +185,12 @@
         @ Invalid 's' bit usage for MOVW
         movs r6, #0xffff
         movwseq r9, #0xffff
-@ CHECK-ERRORS: error: invalid operand for instruction
+@ CHECK-ERRORS: error: invalid instruction, any one of the following would fix this:
+@ CHECK-ERRORS-NEXT: movs r6, #0xffff
+@ CHECK-ERRORS: note: invalid operand for instruction
+@ CHECK-ERRORS: note: operand must be a register in range [r0, r15]
 @ CHECK-ERRORS: error: instruction 'movw' can not set flags, but 's' suffix specified
+@ CHECK-ERRORS-NEXT: movwseq r9, #0xffff
 
         @ Out of range immediate for MOVT
         movt r9, 0x10000
@@ -359,7 +366,7 @@
 @ CHECK-ERRORS: error: 'ror' rotate amount must be 8, 16, or 24
 @ CHECK-ERRORS:         sxtah r9, r3, r3, ror #-8
 @ CHECK-ERRORS:                                ^
-@ CHECK-ERRORS: error: invalid operand for instruction
+@ CHECK-ERRORS: error: operand must be a register in range [r0, r14]
 @ CHECK-ERRORS:         sxtb16ge r2, r3, lsr #24
 @ CHECK-ERRORS:                          ^
 
@@ -379,16 +386,16 @@
         sbfx sp, pc, #4, #5
         ubfx pc, r0, #0, #31
         ubfx r14, pc, #1, #2
-@ CHECK-ERRORS: error: invalid operand for instruction
+@ CHECK-ERRORS: error: operand must be a register in range [r0, r14]
 @ CHECK-ERRORS:         sbfx pc, r2, #1, #3
 @ CHECK-ERRORS:              ^
-@ CHECK-ERRORS: error: invalid operand for instruction
+@ CHECK-ERRORS: error: operand must be a register in range [r0, r14]
 @ CHECK-ERRORS:         sbfx sp, pc, #4, #5
 @ CHECK-ERRORS:                  ^
-@ CHECK-ERRORS: error: invalid operand for instruction
+@ CHECK-ERRORS: error: operand must be a register in range [r0, r14]
 @ CHECK-ERRORS:         ubfx pc, r0, #0, #31
 @ CHECK-ERRORS:              ^
-@ CHECK-ERRORS: error: invalid operand for instruction
+@ CHECK-ERRORS: error: operand must be a register in range [r0, r14]
 @ CHECK-ERRORS:         ubfx r14, pc, #1, #2
 @ CHECK-ERRORS:                   ^
 

@@ -457,12 +457,24 @@ void Sema::diagnoseNullableToNonnullConversion(QualType DstType,
 }
 
 void Sema::diagnoseZeroToNullptrConversion(CastKind Kind, const Expr* E) {
-  if (Kind != CK_NullToPointer && Kind != CK_NullToMemberPointer)
-    return;
-  if (E->getType()->isNullPtrType())
+  if (Diags.isIgnored(diag::warn_zero_as_null_pointer_constant,
+                      E->getLocStart()))
     return;
   // nullptr only exists from C++11 on, so don't warn on its absence earlier.
   if (!getLangOpts().CPlusPlus11)
+    return;
+
+  if (Kind != CK_NullToPointer && Kind != CK_NullToMemberPointer)
+    return;
+  if (E->IgnoreParenImpCasts()->getType()->isNullPtrType())
+    return;
+
+  // If it is a macro from system header, and if the macro name is not "NULL",
+  // do not warn.
+  SourceLocation MaybeMacroLoc = E->getLocStart();
+  if (Diags.getSuppressSystemWarnings() &&
+      SourceMgr.isInSystemMacro(MaybeMacroLoc) &&
+      !findMacroSpelling(MaybeMacroLoc, "NULL"))
     return;
 
   Diag(E->getLocStart(), diag::warn_zero_as_null_pointer_constant)
@@ -746,7 +758,8 @@ static bool MethodsAndNestedClassesComplete(const CXXRecordDecl *RD,
                                   E = RD->decls_end();
        I != E && Complete; ++I) {
     if (const CXXMethodDecl *M = dyn_cast<CXXMethodDecl>(*I))
-      Complete = M->isDefined() || (M->isPure() && !isa<CXXDestructorDecl>(M));
+      Complete = M->isDefined() || M->isDefaulted() ||
+                 (M->isPure() && !isa<CXXDestructorDecl>(M));
     else if (const FunctionTemplateDecl *F = dyn_cast<FunctionTemplateDecl>(*I))
       // If the template function is marked as late template parsed at this
       // point, it has not been instantiated and therefore we have not
@@ -951,6 +964,17 @@ void Sema::ActOnEndOfTranslationUnit() {
   }
 
   if (TUKind == TU_Module) {
+    // If we are building a module interface unit, we need to have seen the
+    // module declaration by now.
+    if (getLangOpts().getCompilingModule() ==
+            LangOptions::CMK_ModuleInterface &&
+        ModuleScopes.back().Module->Kind != Module::ModuleInterfaceUnit) {
+      // FIXME: Make a better guess as to where to put the module declaration.
+      Diag(getSourceManager().getLocForStartOfFile(
+               getSourceManager().getMainFileID()),
+           diag::err_module_declaration_missing);
+    }
+
     // If we are building a module, resolve all of the exported declarations
     // now.
     if (Module *CurrentModule = PP.getCurrentModule()) {

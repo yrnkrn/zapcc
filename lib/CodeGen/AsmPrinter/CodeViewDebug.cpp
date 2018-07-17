@@ -68,7 +68,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/SMLoc.h"
-#include "llvm/Target/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -154,11 +154,11 @@ StringRef CodeViewDebug::getFullFilepath(const DIFile *File) {
 }
 
 unsigned CodeViewDebug::maybeRecordFile(const DIFile *F) {
+  StringRef FullPath = getFullFilepath(F);
   unsigned NextId = FileIdMap.size() + 1;
-  auto Insertion = FileIdMap.insert(std::make_pair(F, NextId));
+  auto Insertion = FileIdMap.insert(std::make_pair(FullPath, NextId));
   if (Insertion.second) {
     // We have to compute the full filepath and emit a .cv_file directive.
-    StringRef FullPath = getFullFilepath(F);
     std::string Checksum = fromHex(F->getChecksum());
     void *CKMem = OS.getContext().allocate(Checksum.size(), 1);
     memcpy(CKMem, Checksum.data(), Checksum.size());
@@ -807,6 +807,10 @@ void CodeViewDebug::emitDebugInfoForFunction(const Function *GV,
   // If our DISubprogram name is empty, use the mangled name.
   if (FuncName.empty())
     FuncName = GlobalValue::dropLLVMManglingEscape(GV->getName());
+
+  // Emit FPO data, but only on 32-bit x86. No other platforms use it.
+  if (Triple(MMI->getModule()->getTargetTriple()).getArch() == Triple::x86)
+    OS.EmitCVFPOData(Fn);
 
   // Emit a symbol subsection, required by VS2012+ to find function boundaries.
   OS.AddComment("Symbol subsection for " + Twine(FuncName));

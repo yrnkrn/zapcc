@@ -515,6 +515,7 @@ static bool isSingleLineLanguageLinkage(const Decl &D) {
 }
 
 static bool isExportedFromModuleIntefaceUnit(const NamedDecl *D) {
+  // FIXME: Handle isModulePrivate.
   switch (D->getModuleOwnershipKind()) {
   case Decl::ModuleOwnershipKind::Unowned:
   case Decl::ModuleOwnershipKind::ModulePrivate:
@@ -546,7 +547,8 @@ static LinkageInfo getExternalLinkageFor(const NamedDecl *D) {
   //     declaration has module linkage.
   if (auto *M = D->getOwningModule())
     if (M->Kind == Module::ModuleInterfaceUnit)
-      if (!isExportedFromModuleIntefaceUnit(D))
+      if (!isExportedFromModuleIntefaceUnit(
+              cast<NamedDecl>(D->getCanonicalDecl())))
         return LinkageInfo(ModuleLinkage, DefaultVisibility, false);
 
   return LinkageInfo::external();
@@ -1393,7 +1395,7 @@ LinkageInfo LinkageComputer::getDeclLinkageAndVisibility(const NamedDecl *D) {
                                             : NamedDecl::VisibilityForValue));
 }
 
-Module *NamedDecl::getOwningModuleForLinkage() const {
+Module *Decl::getOwningModuleForLinkage(bool IgnoreLinkage) const {
   Module *M = getOwningModule();
   if (!M)
     return nullptr;
@@ -1411,7 +1413,17 @@ Module *NamedDecl::getOwningModuleForLinkage() const {
     // for linkage purposes. But internal linkage declarations in the global
     // module fragment of a particular module are owned by that module for
     // linkage purposes.
-    return hasExternalFormalLinkage() ? nullptr : M->Parent;
+    if (IgnoreLinkage)
+      return nullptr;
+    bool InternalLinkage;
+    if (auto *ND = dyn_cast<NamedDecl>(this))
+      InternalLinkage = !ND->hasExternalFormalLinkage();
+    else {
+      auto *NSD = dyn_cast<NamespaceDecl>(this);
+      InternalLinkage = (NSD && NSD->isAnonymousNamespace()) ||
+                        isInAnonymousNamespace();
+    }
+    return InternalLinkage ? M->Parent : nullptr;
   }
 
   llvm_unreachable("unknown module kind");
@@ -1589,19 +1601,9 @@ bool NamedDecl::declarationReplaces(NamedDecl *OldD, bool IsKnownNewer) const {
                         cast<UnresolvedUsingValueDecl>(OldD)->getQualifier());
   }
 
-  // UsingDirectiveDecl's are not really NamedDecl's, and all have same name.
-  // They can be replaced if they nominate the same namespace.
-  // FIXME: Is this true even if they have different module visibility?
-#if 1
   if (isa<UsingDirectiveDecl>(this))
     // zapcc must have all UsingDirectiveDecl to unload the newer ones.
     return false;
-#else
-  if (auto *UD = dyn_cast<UsingDirectiveDecl>(this))
-    return UD->getNominatedNamespace()->getOriginalNamespace() ==
-           cast<UsingDirectiveDecl>(OldD)->getNominatedNamespace()
-               ->getOriginalNamespace();
-#endif
 
   if (isRedeclarable(getKind())) {
     if (getCanonicalDecl() != OldD->getCanonicalDecl())
@@ -2730,6 +2732,20 @@ bool FunctionDecl::isReplaceableGlobalAllocationFunction(bool *IsAligned) const 
   return Params == FPT->getNumParams();
 }
 
+bool FunctionDecl::isDestroyingOperatorDelete() const {
+  // C++ P0722:
+  //   Within a class C, a single object deallocation function with signature
+  //     (T, std::destroying_delete_t, <more params>)
+  //   is a destroying operator delete.
+  if (!isa<CXXMethodDecl>(this) || getOverloadedOperator() != OO_Delete ||
+      getNumParams() < 2)
+    return false;
+
+  auto *RD = getParamDecl(1)->getType()->getAsCXXRecordDecl();
+  return RD && RD->isInStdNamespace() && RD->getIdentifier() &&
+         RD->getIdentifier()->isStr("destroying_delete_t");
+}
+
 LanguageLinkage FunctionDecl::getLanguageLinkage() const {
   return getDeclLanguageLinkage(*this);
 }
@@ -3040,7 +3056,8 @@ SourceRange FunctionDecl::getExceptionSpecSourceRange() const {
 const Attr *FunctionDecl::getUnusedResultAttr() const {
   QualType RetType = getReturnType();
   if (RetType->isRecordType()) {
-    if (const CXXRecordDecl *Ret = RetType->getAsCXXRecordDecl()) {
+    if (const auto *Ret =
+            dyn_cast_or_null<RecordDecl>(RetType->getAsTagDecl())) {
       if (const auto *R = Ret->getAttr<WarnUnusedResultAttr>())
         return R;
     }

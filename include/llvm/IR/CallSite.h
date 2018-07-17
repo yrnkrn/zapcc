@@ -62,7 +62,7 @@ class CallSiteBase {
 protected:
   PointerIntPair<InstrTy*, 1, bool> I;
 
-  CallSiteBase() : I(nullptr, false) {}
+  CallSiteBase() = default;
   CallSiteBase(CallTy *CI) : I(CI, true) { assert(CI); }
   CallSiteBase(InvokeTy *II) : I(II, false) { assert(II); }
   explicit CallSiteBase(ValTy *II) { *this = get(II); }
@@ -473,6 +473,24 @@ public:
   }
   void setOnlyAccessesArgMemory() {
     CALLSITE_DELEGATE_SETTER(setOnlyAccessesArgMemory());
+  }
+
+  /// Determine if the function may only access memory that is
+  /// inaccessible from the IR.
+  bool onlyAccessesInaccessibleMemory() const {
+    CALLSITE_DELEGATE_GETTER(onlyAccessesInaccessibleMemory());
+  }
+  void setOnlyAccessesInaccessibleMemory() {
+    CALLSITE_DELEGATE_SETTER(setOnlyAccessesInaccessibleMemory());
+  }
+
+  /// Determine if the function may only access memory that is
+  /// either inaccessible from the IR or pointed to by its arguments.
+  bool onlyAccessesInaccessibleMemOrArgMem() const {
+    CALLSITE_DELEGATE_GETTER(onlyAccessesInaccessibleMemOrArgMem());
+  }
+  void setOnlyAccessesInaccessibleMemOrArgMem() {
+    CALLSITE_DELEGATE_SETTER(setOnlyAccessesInaccessibleMemOrArgMem());
   }
 
   /// Determine if the call cannot return.

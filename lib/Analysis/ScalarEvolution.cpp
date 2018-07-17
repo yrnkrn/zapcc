@@ -1290,6 +1290,7 @@ const SCEV *ScalarEvolution::getTruncateExpr(const SCEV *Op,
   SCEV *S = new (SCEVAllocator) SCEVTruncateExpr(ID.Intern(SCEVAllocator),
                                                  Op, Ty);
   UniqueSCEVs.InsertNode(S, IP);
+  addToLoopUseLists(S);
   return S;
 }
 
@@ -1580,6 +1581,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
     SCEV *S = new (SCEVAllocator) SCEVZeroExtendExpr(ID.Intern(SCEVAllocator),
                                                      Op, Ty);
     UniqueSCEVs.InsertNode(S, IP);
+    addToLoopUseLists(S);
     return S;
   }
 
@@ -1766,6 +1768,7 @@ ScalarEvolution::getZeroExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
   SCEV *S = new (SCEVAllocator) SCEVZeroExtendExpr(ID.Intern(SCEVAllocator),
                                                    Op, Ty);
   UniqueSCEVs.InsertNode(S, IP);
+  addToLoopUseLists(S);
   return S;
 }
 
@@ -1803,6 +1806,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
     SCEV *S = new (SCEVAllocator) SCEVSignExtendExpr(ID.Intern(SCEVAllocator),
                                                      Op, Ty);
     UniqueSCEVs.InsertNode(S, IP);
+    addToLoopUseLists(S);
     return S;
   }
 
@@ -2014,6 +2018,7 @@ ScalarEvolution::getSignExtendExpr(const SCEV *Op, Type *Ty, unsigned Depth) {
   SCEV *S = new (SCEVAllocator) SCEVSignExtendExpr(ID.Intern(SCEVAllocator),
                                                    Op, Ty);
   UniqueSCEVs.InsertNode(S, IP);
+  addToLoopUseLists(S);
   return S;
 }
 
@@ -2662,6 +2667,7 @@ ScalarEvolution::getOrCreateAddExpr(SmallVectorImpl<const SCEV *> &Ops,
     S = new (SCEVAllocator)
         SCEVAddExpr(ID.Intern(SCEVAllocator), O, Ops.size());
     UniqueSCEVs.InsertNode(S, IP);
+    addToLoopUseLists(S);
   }
   S->setNoWrapFlags(Flags);
   return S;
@@ -2683,6 +2689,7 @@ ScalarEvolution::getOrCreateMulExpr(SmallVectorImpl<const SCEV *> &Ops,
     S = new (SCEVAllocator) SCEVMulExpr(ID.Intern(SCEVAllocator),
                                         O, Ops.size());
     UniqueSCEVs.InsertNode(S, IP);
+    addToLoopUseLists(S);
   }
   S->setNoWrapFlags(Flags);
   return S;
@@ -3135,6 +3142,7 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
   SCEV *S = new (SCEVAllocator) SCEVUDivExpr(ID.Intern(SCEVAllocator),
                                              LHS, RHS);
   UniqueSCEVs.InsertNode(S, IP);
+  addToLoopUseLists(S);
   return S;
 }
 
@@ -3315,6 +3323,7 @@ ScalarEvolution::getAddRecExpr(SmallVectorImpl<const SCEV *> &Operands,
     S = new (SCEVAllocator) SCEVAddRecExpr(ID.Intern(SCEVAllocator),
                                            O, Operands.size(), L);
     UniqueSCEVs.InsertNode(S, IP);
+    addToLoopUseLists(S);
   }
   S->setNoWrapFlags(Flags);
   return S;
@@ -3470,6 +3479,7 @@ ScalarEvolution::getSMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   SCEV *S = new (SCEVAllocator) SCEVSMaxExpr(ID.Intern(SCEVAllocator),
                                              O, Ops.size());
   UniqueSCEVs.InsertNode(S, IP);
+  addToLoopUseLists(S);
   return S;
 }
 
@@ -3571,6 +3581,7 @@ ScalarEvolution::getUMaxExpr(SmallVectorImpl<const SCEV *> &Ops) {
   SCEV *S = new (SCEVAllocator) SCEVUMaxExpr(ID.Intern(SCEVAllocator),
                                              O, Ops.size());
   UniqueSCEVs.InsertNode(S, IP);
+  addToLoopUseLists(S);
   return S;
 }
 
@@ -4523,8 +4534,7 @@ ScalarEvolution::createAddRecFromPHIWithCastsImpl(const SCEVUnknown *SymbolicPHI
                : SCEVWrapPredicate::IncrementNUSW;
     const SCEVPredicate *AddRecPred = getWrapPredicate(AR, AddedFlags);
     Predicates.push_back(AddRecPred);
-  } else
-    assert(isa<SCEVConstant>(PHISCEV) && "Expected constant SCEV");
+  }
 
   // Create the Equal Predicates P2,P3:
 
@@ -6391,6 +6401,13 @@ void ScalarEvolution::forgetLoop(const Loop *L) {
         PredicatedSCEVRewrites.erase(I++);
       else
         ++I;
+    }
+
+    auto LoopUsersItr = LoopUsers.find(CurrL);
+    if (LoopUsersItr != LoopUsers.end()) {
+      for (auto *S : LoopUsersItr->second)
+        forgetMemoizedResults(S);
+      LoopUsers.erase(LoopUsersItr);
     }
 
     // Drop information about expressions based on loop-header PHIs.
@@ -9672,14 +9689,54 @@ const SCEV *ScalarEvolution::computeBECount(const SCEV *Delta, const SCEV *Step,
   return getUDivExpr(Delta, Step);
 }
 
+const SCEV *ScalarEvolution::computeMaxBECountForLT(const SCEV *Start,
+                                                    const SCEV *Stride,
+                                                    const SCEV *End,
+                                                    unsigned BitWidth,
+                                                    bool IsSigned) {
+
+  assert(!isKnownNonPositive(Stride) &&
+         "Stride is expected strictly positive!");
+  // Calculate the maximum backedge count based on the range of values
+  // permitted by Start, End, and Stride.
+  const SCEV *MaxBECount;
+  APInt MinStart =
+      IsSigned ? getSignedRangeMin(Start) : getUnsignedRangeMin(Start);
+
+  APInt StrideForMaxBECount =
+      IsSigned ? getSignedRangeMin(Stride) : getUnsignedRangeMin(Stride);
+
+  // We already know that the stride is positive, so we paper over conservatism
+  // in our range computation by forcing StrideForMaxBECount to be at least one.
+  // In theory this is unnecessary, but we expect MaxBECount to be a
+  // SCEVConstant, and (udiv <constant> 0) is not constant folded by SCEV (there
+  // is nothing to constant fold it to).
+  APInt One(BitWidth, 1, IsSigned);
+  StrideForMaxBECount = APIntOps::smax(One, StrideForMaxBECount);
+
+  APInt MaxValue = IsSigned ? APInt::getSignedMaxValue(BitWidth)
+                            : APInt::getMaxValue(BitWidth);
+  APInt Limit = MaxValue - (StrideForMaxBECount - 1);
+
+  // Although End can be a MAX expression we estimate MaxEnd considering only
+  // the case End = RHS of the loop termination condition. This is safe because
+  // in the other case (End - Start) is zero, leading to a zero maximum backedge
+  // taken count.
+  APInt MaxEnd = IsSigned ? APIntOps::smin(getSignedRangeMax(End), Limit)
+                          : APIntOps::umin(getUnsignedRangeMax(End), Limit);
+
+  MaxBECount = computeBECount(getConstant(MaxEnd - MinStart) /* Delta */,
+                              getConstant(StrideForMaxBECount) /* Step */,
+                              false /* Equality */);
+
+  return MaxBECount;
+}
+
 ScalarEvolution::ExitLimit
 ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
                                   const Loop *L, bool IsSigned,
                                   bool ControlsExit, bool AllowPredicates) {
   SmallPtrSet<const SCEVPredicate *, 4> Predicates;
-  // We handle only IV < Invariant
-  if (!isLoopInvariant(RHS, L))
-    return getCouldNotCompute();
 
   const SCEVAddRecExpr *IV = dyn_cast<SCEVAddRecExpr>(LHS);
   bool PredicatedIV = false;
@@ -9762,6 +9819,17 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
                                       : ICmpInst::ICMP_ULT;
   const SCEV *Start = IV->getStart();
   const SCEV *End = RHS;
+  // When the RHS is not invariant, we do not know the end bound of the loop and
+  // cannot calculate the ExactBECount needed by ExitLimit. However, we can
+  // calculate the MaxBECount, given the start, stride and max value for the end
+  // bound of the loop (RHS), and the fact that IV does not overflow (which is
+  // checked above).
+  if (!isLoopInvariant(RHS, L)) {
+    const SCEV *MaxBECount = computeMaxBECountForLT(
+        Start, Stride, RHS, getTypeSizeInBits(LHS->getType()), IsSigned);
+    return ExitLimit(getCouldNotCompute() /* ExactNotTaken */, MaxBECount,
+                     false /*MaxOrZero*/, Predicates);
+  }
   // If the backedge is taken at least once, then it will be taken
   // (End-Start)/Stride times (rounded up to a multiple of Stride), where Start
   // is the LHS value of the less-than comparison the first time it is evaluated
@@ -9794,37 +9862,8 @@ ScalarEvolution::howManyLessThans(const SCEV *LHS, const SCEV *RHS,
     MaxBECount = BECountIfBackedgeTaken;
     MaxOrZero = true;
   } else {
-    // Calculate the maximum backedge count based on the range of values
-    // permitted by Start, End, and Stride.
-    APInt MinStart = IsSigned ? getSignedRangeMin(Start)
-                              : getUnsignedRangeMin(Start);
-
-    unsigned BitWidth = getTypeSizeInBits(LHS->getType());
-
-    APInt StrideForMaxBECount;
-
-    if (PositiveStride)
-      StrideForMaxBECount =
-        IsSigned ? getSignedRangeMin(Stride)
-                 : getUnsignedRangeMin(Stride);
-    else
-      // Using a stride of 1 is safe when computing max backedge taken count for
-      // a loop with unknown stride.
-      StrideForMaxBECount = APInt(BitWidth, 1, IsSigned);
-
-    APInt Limit =
-      IsSigned ? APInt::getSignedMaxValue(BitWidth) - (StrideForMaxBECount - 1)
-               : APInt::getMaxValue(BitWidth) - (StrideForMaxBECount - 1);
-
-    // Although End can be a MAX expression we estimate MaxEnd considering only
-    // the case End = RHS. This is safe because in the other case (End - Start)
-    // is zero, leading to a zero maximum backedge taken count.
-    APInt MaxEnd =
-      IsSigned ? APIntOps::smin(getSignedRangeMax(RHS), Limit)
-               : APIntOps::umin(getUnsignedRangeMax(RHS), Limit);
-
-    MaxBECount = computeBECount(getConstant(MaxEnd - MinStart),
-                                getConstant(StrideForMaxBECount), false);
+    MaxBECount = computeMaxBECountForLT(
+        Start, Stride, RHS, getTypeSizeInBits(LHS->getType()), IsSigned);
   }
 
   if (isa<SCEVCouldNotCompute>(MaxBECount) &&
@@ -10575,6 +10614,7 @@ ScalarEvolution::ScalarEvolution(ScalarEvolution &&Arg)
       UniqueSCEVs(std::move(Arg.UniqueSCEVs)),
       UniquePreds(std::move(Arg.UniquePreds)),
       SCEVAllocator(std::move(Arg.SCEVAllocator)),
+      LoopUsers(std::move(Arg.LoopUsers)),
       PredicatedSCEVRewrites(std::move(Arg.PredicatedSCEVRewrites)),
       FirstUnknown(Arg.FirstUnknown) {
   Arg.FirstUnknown = nullptr;
@@ -11015,6 +11055,25 @@ ScalarEvolution::forgetMemoizedResults(const SCEV *S, bool EraseExitLimit) {
     for (auto I = ExitLimits.begin(), E = ExitLimits.end(); I != E; ++I)
       if (I->second.hasOperand(S))
         ExitLimits.erase(I);
+}
+
+void ScalarEvolution::addToLoopUseLists(const SCEV *S) {
+  struct FindUsedLoops {
+    SmallPtrSet<const Loop *, 8> LoopsUsed;
+    bool follow(const SCEV *S) {
+      if (auto *AR = dyn_cast<SCEVAddRecExpr>(S))
+        LoopsUsed.insert(AR->getLoop());
+      return true;
+    }
+
+    bool isDone() const { return false; }
+  };
+
+  FindUsedLoops F;
+  SCEVTraversal<FindUsedLoops>(F).visitAll(S);
+
+  for (auto *L : F.LoopsUsed)
+    LoopUsers[L].push_back(S);
 }
 
 void ScalarEvolution::verify() const {

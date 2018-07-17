@@ -22,7 +22,7 @@
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopIterator.h"
 #include "llvm/Analysis/LoopPass.h"
-#include "llvm/Analysis/OptimizationDiagnosticInfo.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
@@ -68,9 +68,23 @@ static inline void remapInstruction(Instruction *I,
                                     ValueToValueMapTy &VMap) {
   for (unsigned op = 0, E = I->getNumOperands(); op != E; ++op) {
     Value *Op = I->getOperand(op);
+
+    // Unwrap arguments of dbg.value intrinsics.
+    bool Wrapped = false;
+    if (auto *V = dyn_cast<MetadataAsValue>(Op))
+      if (auto *Unwrapped = dyn_cast<ValueAsMetadata>(V->getMetadata())) {
+        Op = Unwrapped->getValue();
+        Wrapped = true;
+      }
+
+    auto wrap = [&](Value *V) {
+      auto &C = I->getContext();
+      return Wrapped ? MetadataAsValue::get(C, ValueAsMetadata::get(V)) : V;
+    };
+
     ValueToValueMapTy::iterator It = VMap.find(Op);
     if (It != VMap.end())
-      I->setOperand(op, It->second);
+      I->setOperand(op, wrap(It->second));
   }
 
   if (PHINode *PN = dyn_cast<PHINode>(I)) {
@@ -427,9 +441,8 @@ LoopUnrollResult llvm::UnrollLoop(
 
   if (RuntimeTripCount && TripMultiple % Count != 0 &&
       !UnrollRuntimeLoopRemainder(L, Count, AllowExpensiveTripCount,
-                                  EpilogProfitability, UnrollRemainder,
-                                  LI, SE, DT, AC, ORE,
-                                  PreserveLCSSA)) {
+                                  EpilogProfitability, UnrollRemainder, LI, SE,
+                                  DT, AC, PreserveLCSSA)) {
     if (Force)
       RuntimeTripCount = false;
     else {
@@ -460,18 +473,24 @@ LoopUnrollResult llvm::UnrollLoop(
   // Report the unrolling decision.
   if (CompletelyUnroll) {
     DEBUG(dbgs() << "COMPLETELY UNROLLING loop %" << Header->getName()
-          << " with trip count " << TripCount << "!\n");
-    ORE->emit(OptimizationRemark(DEBUG_TYPE, "FullyUnrolled", L->getStartLoc(),
-                                 L->getHeader())
-              << "completely unrolled loop with "
-              << NV("UnrollCount", TripCount) << " iterations");
+                 << " with trip count " << TripCount << "!\n");
+    if (ORE)
+      ORE->emit([&]() {
+        return OptimizationRemark(DEBUG_TYPE, "FullyUnrolled", L->getStartLoc(),
+                                  L->getHeader())
+               << "completely unrolled loop with "
+               << NV("UnrollCount", TripCount) << " iterations";
+      });
   } else if (PeelCount) {
     DEBUG(dbgs() << "PEELING loop %" << Header->getName()
                  << " with iteration count " << PeelCount << "!\n");
-    ORE->emit(OptimizationRemark(DEBUG_TYPE, "Peeled", L->getStartLoc(),
-                                 L->getHeader())
-              << " peeled loop by " << NV("PeelCount", PeelCount)
-              << " iterations");
+    if (ORE)
+      ORE->emit([&]() {
+        return OptimizationRemark(DEBUG_TYPE, "Peeled", L->getStartLoc(),
+                                  L->getHeader())
+               << " peeled loop by " << NV("PeelCount", PeelCount)
+               << " iterations";
+      });
   } else {
     auto DiagBuilder = [&]() {
       OptimizationRemark Diag(DEBUG_TYPE, "PartialUnrolled", L->getStartLoc(),
@@ -484,19 +503,23 @@ LoopUnrollResult llvm::UnrollLoop(
           << " by " << Count);
     if (TripMultiple == 0 || BreakoutTrip != TripMultiple) {
       DEBUG(dbgs() << " with a breakout at trip " << BreakoutTrip);
-      ORE->emit([&]() {
-        return DiagBuilder() << " with a breakout at trip "
-                             << NV("BreakoutTrip", BreakoutTrip);
-      });
+      if (ORE)
+        ORE->emit([&]() {
+          return DiagBuilder() << " with a breakout at trip "
+                               << NV("BreakoutTrip", BreakoutTrip);
+        });
     } else if (TripMultiple != 1) {
       DEBUG(dbgs() << " with " << TripMultiple << " trips per branch");
-      ORE->emit([&]() {
-        return DiagBuilder() << " with " << NV("TripMultiple", TripMultiple)
-                             << " trips per branch";
-      });
+      if (ORE)
+        ORE->emit([&]() {
+          return DiagBuilder() << " with " << NV("TripMultiple", TripMultiple)
+                               << " trips per branch";
+        });
     } else if (RuntimeTripCount) {
       DEBUG(dbgs() << " with run-time trip count");
-      ORE->emit([&]() { return DiagBuilder() << " with run-time trip count"; });
+      if (ORE)
+        ORE->emit(
+            [&]() { return DiagBuilder() << " with run-time trip count"; });
     }
     DEBUG(dbgs() << "!\n");
   }
@@ -540,8 +563,9 @@ LoopUnrollResult llvm::UnrollLoop(
   if (Header->getParent()->isDebugInfoForProfiling())
     for (BasicBlock *BB : L->getBlocks())
       for (Instruction &I : *BB)
-        if (const DILocation *DIL = I.getDebugLoc())
-          I.setDebugLoc(DIL->cloneWithDuplicationFactor(Count));
+        if (!isa<DbgInfoIntrinsic>(&I))
+          if (const DILocation *DIL = I.getDebugLoc())
+            I.setDebugLoc(DIL->cloneWithDuplicationFactor(Count));
 
   for (unsigned It = 1; It != Count; ++It) {
     std::vector<BasicBlock*> NewBlocks;

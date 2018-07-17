@@ -44,6 +44,7 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/LLVMContext.h"
@@ -51,7 +52,6 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -369,7 +369,7 @@ ImplicitNullChecks::isSuitableMemoryOp(MachineInstr &MI, unsigned PointerReg,
   // We want the mem access to be issued at a sane offset from PointerReg,
   // so that if PointerReg is null then the access reliably page faults.
   if (!((MI.mayLoad() || MI.mayStore()) && !MI.isPredicable() &&
-        Offset < PageSize))
+        -PageSize < Offset && Offset < PageSize))
     return SR_Unsuitable;
 
   // Finally, check whether the current memory access aliases with previous one.

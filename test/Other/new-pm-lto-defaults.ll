@@ -29,11 +29,17 @@
 ; CHECK-O-NEXT: Running pass: ForceFunctionAttrsPass
 ; CHECK-O-NEXT: Running pass: InferFunctionAttrsPass
 ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis
+; CHECK-O2-NEXT: Running pass: ModuleToFunctionPassAdaptor<{{.*}}PassManager{{.*}}>
+; CHECK-O2-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Module
+; CHECK-O2-NEXT: Starting llvm::Function pass manager run.
+; CHECK-O2-NEXT: Running pass: CallSiteSplittingPass on foo
+; CHECK-O2-NEXT: Running analysis: TargetLibraryAnalysis on foo
+; CHECK-O2-NEXT: Finished llvm::Function pass manager run.
 ; CHECK-O2-NEXT: PGOIndirectCallPromotion
 ; CHECK-O2-NEXT: Running analysis: ProfileSummaryAnalysis
-; CHECK-O2-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
 ; CHECK-O2-NEXT: Running analysis: OptimizationRemarkEmitterAnalysis
 ; CHECK-O2-NEXT: Running pass: IPSCCPPass
+; CHECK-O2-NEXT: Running pass: CalledValuePropagationPass
 ; CHECK-O-NEXT: Running pass: ModuleToPostOrderCGSCCPassAdaptor<{{.*}}PostOrderFunctionAttrsPass>
 ; CHECK-O-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}SCC
 ; CHECK-O1-NEXT: Running analysis: InnerAnalysisManagerProxy<{{.*}}Function
@@ -41,7 +47,7 @@
 ; CHECK-O-NEXT: Running analysis: FunctionAnalysisManagerCGSCCProxy
 ; CHECK-O-NEXT: Running analysis: OuterAnalysisManagerProxy<{{.*}}LazyCallGraph{{.*}}>
 ; CHECK-O-NEXT: Running analysis: AAManager
-; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis
+; CHECK-O1-NEXT: Running analysis: TargetLibraryAnalysis
 ; CHECK-O-NEXT: Running pass: ReversePostOrderFunctionAttrsPass
 ; CHECK-O-NEXT: Running analysis: CallGraphAnalysis
 ; CHECK-O-NEXT: Running pass: GlobalSplitPass

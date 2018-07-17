@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/GlobalISel/Legalizer.h"
+#include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
 #include "llvm/CodeGen/GlobalISel/Utils.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -24,10 +25,12 @@ namespace llvm {
 class LegalizerCombiner {
   MachineIRBuilder &Builder;
   MachineRegisterInfo &MRI;
+  const LegalizerInfo &LI;
 
 public:
-  LegalizerCombiner(MachineIRBuilder &B, MachineRegisterInfo &MRI)
-      : Builder(B), MRI(MRI) {}
+  LegalizerCombiner(MachineIRBuilder &B, MachineRegisterInfo &MRI,
+                    const LegalizerInfo &LI)
+      : Builder(B), MRI(MRI), LI(LI) {}
 
   bool tryCombineAnyExt(MachineInstr &MI,
                         SmallVectorImpl<MachineInstr *> &DeadInsts) {
@@ -41,9 +44,7 @@ public:
       Builder.setInstr(MI);
       // We get a copy/trunc/extend depending on the sizes
       Builder.buildAnyExtOrTrunc(DstReg, SrcReg);
-      MI.eraseFromParent();
-      if (MRI.use_empty(DefMI->getOperand(0).getReg()))
-        DeadInsts.push_back(DefMI);
+      markInstAndDefDead(MI, *DefMI, DeadInsts);
       return true;
     }
     return false;
@@ -56,21 +57,22 @@ public:
       return false;
     MachineInstr *DefMI = MRI.getVRegDef(MI.getOperand(1).getReg());
     if (DefMI->getOpcode() == TargetOpcode::G_TRUNC) {
+      unsigned DstReg = MI.getOperand(0).getReg();
+      LLT DstTy = MRI.getType(DstReg);
+      if (isInstUnsupported(TargetOpcode::G_AND, DstTy) ||
+          isInstUnsupported(TargetOpcode::G_CONSTANT, DstTy))
+        return false;
       DEBUG(dbgs() << ".. Combine MI: " << MI;);
       Builder.setInstr(MI);
-      unsigned DstReg = MI.getOperand(0).getReg();
       unsigned ZExtSrc = MI.getOperand(1).getReg();
       LLT ZExtSrcTy = MRI.getType(ZExtSrc);
-      LLT DstTy = MRI.getType(DstReg);
       APInt Mask = APInt::getAllOnesValue(ZExtSrcTy.getSizeInBits());
       auto MaskCstMIB = Builder.buildConstant(DstTy, Mask.getZExtValue());
       unsigned TruncSrc = DefMI->getOperand(1).getReg();
       // We get a copy/trunc/extend depending on the sizes
       auto SrcCopyOrTrunc = Builder.buildAnyExtOrTrunc(DstTy, TruncSrc);
       Builder.buildAnd(DstReg, SrcCopyOrTrunc, MaskCstMIB);
-      MI.eraseFromParent();
-      if (MRI.use_empty(DefMI->getOperand(0).getReg()))
-        DeadInsts.push_back(DefMI);
+      markInstAndDefDead(MI, *DefMI, DeadInsts);
       return true;
     }
     return false;
@@ -83,10 +85,14 @@ public:
       return false;
     MachineInstr *DefMI = MRI.getVRegDef(MI.getOperand(1).getReg());
     if (DefMI->getOpcode() == TargetOpcode::G_TRUNC) {
-      DEBUG(dbgs() << ".. Combine MI: " << MI;);
-      Builder.setInstr(MI);
       unsigned DstReg = MI.getOperand(0).getReg();
       LLT DstTy = MRI.getType(DstReg);
+      if (isInstUnsupported(TargetOpcode::G_SHL, DstTy) ||
+          isInstUnsupported(TargetOpcode::G_ASHR, DstTy) ||
+          isInstUnsupported(TargetOpcode::G_CONSTANT, DstTy))
+        return false;
+      DEBUG(dbgs() << ".. Combine MI: " << MI;);
+      Builder.setInstr(MI);
       unsigned SExtSrc = MI.getOperand(1).getReg();
       LLT SExtSrcTy = MRI.getType(SExtSrc);
       unsigned SizeDiff = DstTy.getSizeInBits() - SExtSrcTy.getSizeInBits();
@@ -97,9 +103,7 @@ public:
       auto ShlMIB = Builder.buildInstr(TargetOpcode::G_SHL, DstTy,
                                        SrcCopyExtOrTrunc, SizeDiffMIB);
       Builder.buildInstr(TargetOpcode::G_ASHR, DstReg, ShlMIB, SizeDiffMIB);
-      MI.eraseFromParent();
-      if (MRI.use_empty(DefMI->getOperand(0).getReg()))
-        DeadInsts.push_back(DefMI);
+      markInstAndDefDead(MI, *DefMI, DeadInsts);
       return true;
     }
     return false;
@@ -175,17 +179,14 @@ public:
                            MergeI->getOperand(Idx + 1).getReg());
     }
 
-    MI.eraseFromParent();
-    if (MRI.use_empty(MergeI->getOperand(0).getReg()))
-      DeadInsts.push_back(MergeI);
+    markInstAndDefDead(MI, *MergeI, DeadInsts);
     return true;
   }
 
   /// Try to combine away MI.
   /// Returns true if it combined away the MI.
-  /// Caller should not rely in MI existing as it may be deleted.
   /// Adds instructions that are dead as a result of the combine
-  // into DeadInsts
+  /// into DeadInsts, which can include MI.
   bool tryCombineInstruction(MachineInstr &MI,
                              SmallVectorImpl<MachineInstr *> &DeadInsts) {
     switch (MI.getOpcode()) {
@@ -200,6 +201,23 @@ public:
     case TargetOpcode::G_UNMERGE_VALUES:
       return tryCombineMerges(MI, DeadInsts);
     }
+  }
+
+private:
+  /// Mark MI as dead. If a def of one of MI's operands, DefMI, would also be
+  /// dead due to MI being killed, then mark DefMI as dead too.
+  void markInstAndDefDead(MachineInstr &MI, MachineInstr &DefMI,
+                          SmallVectorImpl<MachineInstr *> &DeadInsts) {
+    DeadInsts.push_back(&MI);
+    if (MRI.hasOneUse(DefMI.getOperand(0).getReg()))
+      DeadInsts.push_back(&DefMI);
+  }
+  /// Checks if the target legalizer info has specified anything about the
+  /// instruction, or if unsupported.
+  bool isInstUnsupported(unsigned Opcode, const LLT &DstTy) const {
+    auto Action = LI.getAction({Opcode, 0, DstTy});
+    return Action.first == LegalizerInfo::LegalizeAction::Unsupported ||
+           Action.first == LegalizerInfo::LegalizeAction::NotFound;
   }
 };
 

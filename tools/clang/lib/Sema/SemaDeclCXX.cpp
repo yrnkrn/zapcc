@@ -793,7 +793,7 @@ Sema::ActOnDecompositionDeclarator(Scope *S, Declarator &D,
     // Check for name conflicts.
     DeclarationNameInfo NameInfo(B.Name, B.NameLoc);
     LookupResult Previous(*this, NameInfo, LookupOrdinaryName,
-                          ForRedeclaration);
+                          ForVisibleRedeclaration);
     LookupName(Previous, S,
                /*CreateBuiltins*/DC->getRedeclContext()->isTranslationUnit());
 
@@ -825,7 +825,8 @@ Sema::ActOnDecompositionDeclarator(Scope *S, Declarator &D,
   // is unnamed.
   DeclarationNameInfo NameInfo((IdentifierInfo *)nullptr,
                                Decomp.getLSquareLoc());
-  LookupResult Previous(*this, NameInfo, LookupOrdinaryName, ForRedeclaration);
+  LookupResult Previous(*this, NameInfo, LookupOrdinaryName,
+                        ForVisibleRedeclaration);
 
   // Build the variable that holds the non-decomposed object.
   bool AddToScope = true;
@@ -2505,13 +2506,8 @@ bool Sema::IsDerivedFrom(SourceLocation Loc, QualType Derived, QualType Base,
   return DerivedRD->isDerivedFrom(BaseRD, Paths);
 }
 
-void Sema::BuildBasePathArray(const CXXBasePaths &Paths,
-                              CXXCastPath &BasePathArray) {
-  assert(BasePathArray.empty() && "Base path array must be empty!");
-  assert(Paths.isRecordingPaths() && "Must record paths!");
-
-  const CXXBasePath &Path = Paths.front();
-
+static void BuildBasePathArray(const CXXBasePath &Path,
+                               CXXCastPath &BasePathArray) {
   // We first go backward and check if we have a virtual base.
   // FIXME: It would be better if CXXBasePath had the base specifier for
   // the nearest virtual base.
@@ -2528,6 +2524,13 @@ void Sema::BuildBasePathArray(const CXXBasePaths &Paths,
     BasePathArray.push_back(const_cast<CXXBaseSpecifier*>(Path[I].Base));
 }
 
+
+void Sema::BuildBasePathArray(const CXXBasePaths &Paths,
+                              CXXCastPath &BasePathArray) {
+  assert(BasePathArray.empty() && "Base path array must be empty!");
+  assert(Paths.isRecordingPaths() && "Must record paths!");
+  return ::BuildBasePathArray(Paths.front(), BasePathArray);
+}
 /// CheckDerivedToBaseConversion - Check whether the Derived-to-Base
 /// conversion (where Derived and Base are class types) is
 /// well-formed, meaning that the conversion is unambiguous (and
@@ -2555,27 +2558,45 @@ Sema::CheckDerivedToBaseConversion(QualType Derived, QualType Base,
   CXXBasePaths Paths(/*FindAmbiguities=*/true, /*RecordPaths=*/true,
                      /*DetectVirtual=*/false);
   bool DerivationOkay = IsDerivedFrom(Loc, Derived, Base, Paths);
-  assert(DerivationOkay &&
-         "Can only be used with a derived-to-base conversion");
-  (void)DerivationOkay;
+  if (!DerivationOkay)
+    return true;
 
-  if (!Paths.isAmbiguous(Context.getCanonicalType(Base).getUnqualifiedType())) {
+  const CXXBasePath *Path = nullptr;
+  if (!Paths.isAmbiguous(Context.getCanonicalType(Base).getUnqualifiedType()))
+    Path = &Paths.front();
+
+  // For MSVC compatibility, check if Derived directly inherits from Base. Clang
+  // warns about this hierarchy under -Winaccessible-base, but MSVC allows the
+  // user to access such bases.
+  if (!Path && getLangOpts().MSVCCompat) {
+    for (const CXXBasePath &PossiblePath : Paths) {
+      if (PossiblePath.size() == 1) {
+        Path = &PossiblePath;
+        if (AmbigiousBaseConvID)
+          Diag(Loc, diag::ext_ms_ambiguous_direct_base)
+              << Base << Derived << Range;
+        break;
+      }
+    }
+  }
+
+  if (Path) {
     if (!IgnoreAccess) {
       // Check that the base class can be accessed.
-      switch (CheckBaseClassAccess(Loc, Base, Derived, Paths.front(),
-                                   InaccessibleBaseID)) {
-        case AR_inaccessible:
-          return true;
-        case AR_accessible:
-        case AR_dependent:
-        case AR_delayed:
-          break;
+      switch (
+          CheckBaseClassAccess(Loc, Base, Derived, *Path, InaccessibleBaseID)) {
+      case AR_inaccessible:
+        return true;
+      case AR_accessible:
+      case AR_dependent:
+      case AR_delayed:
+        break;
       }
     }
 
     // Build a base path if necessary.
     if (BasePath)
-      BuildBasePathArray(Paths, *BasePath);
+      ::BuildBasePathArray(*Path, *BasePath);
     return false;
   }
 
@@ -7909,8 +7930,34 @@ bool Sema::CheckDestructor(CXXDestructorDecl *Destructor) {
     // If we have a virtual destructor, look up the deallocation function
     if (FunctionDecl *OperatorDelete =
             FindDeallocationFunctionForDestructor(Loc, RD)) {
+      Expr *ThisArg = nullptr;
+
+      // If the notional 'delete this' expression requires a non-trivial
+      // conversion from 'this' to the type of a destroying operator delete's
+      // first parameter, perform that conversion now.
+      if (OperatorDelete->isDestroyingOperatorDelete()) {
+        QualType ParamType = OperatorDelete->getParamDecl(0)->getType();
+        if (!declaresSameEntity(ParamType->getAsCXXRecordDecl(), RD)) {
+          // C++ [class.dtor]p13:
+          //   ... as if for the expression 'delete this' appearing in a
+          //   non-virtual destructor of the destructor's class.
+          ContextRAII SwitchContext(*this, Destructor);
+          ExprResult This =
+              ActOnCXXThis(OperatorDelete->getParamDecl(0)->getLocation());
+          assert(!This.isInvalid() && "couldn't form 'this' expr in dtor?");
+          This = PerformImplicitConversion(This.get(), ParamType, AA_Passing);
+          if (This.isInvalid()) {
+            // FIXME: Register this as a context note so that it comes out
+            // in the right order.
+            Diag(Loc, diag::note_implicit_delete_this_in_destructor_here);
+            return true;
+          }
+          ThisArg = This.get();
+        }
+      }
+
       MarkFunctionReferenced(Loc, OperatorDelete);
-      Destructor->setOperatorDelete(OperatorDelete);
+      Destructor->setOperatorDelete(OperatorDelete, ThisArg);
     }
   }
 
@@ -8479,7 +8526,8 @@ Decl *Sema::ActOnStartNamespaceDef(Scope *NamespcScope,
     // Since namespace names are unique in their scope, and we don't
     // look through using directives, just look for any ordinary names
     // as if by qualified name lookup.
-    LookupResult R(*this, II, IdentLoc, LookupOrdinaryName, ForRedeclaration);
+    LookupResult R(*this, II, IdentLoc, LookupOrdinaryName,
+                   ForExternalRedeclaration);
     LookupQualifiedName(R, CurContext->getRedeclContext());
     NamedDecl *PrevDecl =
         R.isSingleResult() ? R.getRepresentativeDecl() : nullptr;
@@ -9424,7 +9472,7 @@ NamedDecl *Sema::BuildUsingDeclaration(Scope *S, AccessSpecifier AS,
 
   // Do the redeclaration lookup in the current scope.
   LookupResult Previous(*this, UsingName, LookupUsingDeclName,
-                        ForRedeclaration);
+                        ForVisibleRedeclaration);
   Previous.setHideTags(false);
   if (S) {
     LookupName(Previous, S);
@@ -10004,7 +10052,10 @@ Decl *Sema::ActOnAliasDeclaration(Scope *S,
                                              TInfo->getTypeLoc().getBeginLoc());
   }
 
-  LookupResult Previous(*this, NameInfo, LookupOrdinaryName, ForRedeclaration);
+  LookupResult Previous(*this, NameInfo, LookupOrdinaryName,
+                        TemplateParamLists.size()
+                            ? forRedeclarationInCurContext()
+                            : ForVisibleRedeclaration);
   LookupName(Previous, S);
 
   // Warn about shadowing the name of a template parameter.
@@ -10107,8 +10158,10 @@ Decl *Sema::ActOnAliasDeclaration(Scope *S,
 
     if (Invalid)
       NewDecl->setInvalidDecl();
-    else if (OldDecl)
+    else if (OldDecl) {
       NewDecl->setPreviousDecl(OldDecl);
+      CheckRedeclarationModuleOwnership(NewDecl, OldDecl);
+    }
 
     NewND = NewDecl;
   } else {
@@ -10149,7 +10202,7 @@ Decl *Sema::ActOnNamespaceAliasDef(Scope *S, SourceLocation NamespaceLoc,
 
   // Check if we have a previous declaration with the same name.
   LookupResult PrevR(*this, Alias, AliasLoc, LookupOrdinaryName,
-                     ForRedeclaration);
+                     ForVisibleRedeclaration);
   LookupName(PrevR, S);
 
   // Check we're not shadowing a template parameter.
@@ -10362,7 +10415,7 @@ void Sema::CheckImplicitSpecialMemberDeclaration(Scope *S, FunctionDecl *FD) {
   // implicit special members with this name.
   DeclarationName Name = FD->getDeclName();
   LookupResult R(*this, Name, SourceLocation(), LookupOrdinaryName,
-                 ForRedeclaration);
+                 ForExternalRedeclaration);
   for (auto *D : FD->getParent()->lookup(Name))
     if (auto *Acceptable = R.getAcceptableDecl(D))
       R.addDecl(Acceptable);
@@ -12679,14 +12732,34 @@ CheckOperatorDeleteDeclaration(Sema &SemaRef, FunctionDecl *FnDecl) {
   if (CheckOperatorNewDeleteDeclarationScope(SemaRef, FnDecl))
     return true;
 
+  auto *MD = dyn_cast<CXXMethodDecl>(FnDecl);
+
+  // C++ P0722:
+  //   Within a class C, the first parameter of a destroying operator delete
+  //   shall be of type C *. The first parameter of any other deallocation
+  //   function shall be of type void *.
+  CanQualType ExpectedFirstParamType =
+      MD && MD->isDestroyingOperatorDelete()
+          ? SemaRef.Context.getCanonicalType(SemaRef.Context.getPointerType(
+                SemaRef.Context.getRecordType(MD->getParent())))
+          : SemaRef.Context.VoidPtrTy;
+
   // C++ [basic.stc.dynamic.deallocation]p2:
-  //   Each deallocation function shall return void and its first parameter
-  //   shall be void*.
-  if (CheckOperatorNewDeleteTypes(SemaRef, FnDecl, SemaRef.Context.VoidTy,
-                                  SemaRef.Context.VoidPtrTy,
-                                 diag::err_operator_delete_dependent_param_type,
-                                 diag::err_operator_delete_param_type))
+  //   Each deallocation function shall return void
+  if (CheckOperatorNewDeleteTypes(
+          SemaRef, FnDecl, SemaRef.Context.VoidTy, ExpectedFirstParamType,
+          diag::err_operator_delete_dependent_param_type,
+          diag::err_operator_delete_param_type))
     return true;
+
+  // C++ P0722:
+  //   A destroying operator delete shall be a usual deallocation function.
+  if (MD && !MD->getParent()->isDependentContext() &&
+      MD->isDestroyingOperatorDelete() && !MD->isUsualDeallocationFunction()) {
+    SemaRef.Diag(MD->getLocation(),
+                 diag::err_destroying_operator_delete_not_usual);
+    return true;
+  }
 
   return false;
 }
@@ -13246,7 +13319,7 @@ Decl *Sema::ActOnExceptionDeclarator(Scope *S, Declarator &D) {
   IdentifierInfo *II = D.getIdentifier();
   if (NamedDecl *PrevDecl = LookupSingleName(S, II, D.getIdentifierLoc(),
                                              LookupOrdinaryName,
-                                             ForRedeclaration)) {
+                                             ForVisibleRedeclaration)) {
     // The scope should be freshly made just for us. There is just no way
     // it contains any previous declaration, except for function parameters in
     // a function-try-block's catch statement.
@@ -13695,7 +13768,7 @@ NamedDecl *Sema::ActOnFriendFunctionDecl(Scope *S, Declarator &D,
   DeclContext *DC;
   Scope *DCScope = S;
   LookupResult Previous(*this, NameInfo, LookupOrdinaryName,
-                        ForRedeclaration);
+                        ForExternalRedeclaration);
 
   // There are five cases here.
   //   - There's no scope specifier and we're in a local class. Only look
@@ -14880,10 +14953,16 @@ void Sema::checkExceptionSpecification(
         return;
       }
 
-      if (!NoexceptExpr->isValueDependent())
-        NoexceptExpr = VerifyIntegerConstantExpression(NoexceptExpr, nullptr,
-                         diag::err_noexcept_needs_constant_expression,
-                         /*AllowFold*/ false).get();
+      if (!NoexceptExpr->isValueDependent()) {
+        ExprResult Result = VerifyIntegerConstantExpression(
+            NoexceptExpr, nullptr, diag::err_noexcept_needs_constant_expression,
+            /*AllowFold*/ false);
+        if (Result.isInvalid()) {
+          ESI.Type = EST_BasicNoexcept;
+          return;
+        }
+        NoexceptExpr = Result.get();
+      }
       ESI.NoexceptExpr = NoexceptExpr;
     }
     return;
@@ -14969,7 +15048,8 @@ MSPropertyDecl *Sema::HandleMSProperty(Scope *S, RecordDecl *Record,
 
   // Check to see if this name was declared as a member previously
   NamedDecl *PrevDecl = nullptr;
-  LookupResult Previous(*this, II, Loc, LookupMemberName, ForRedeclaration);
+  LookupResult Previous(*this, II, Loc, LookupMemberName,
+                        ForVisibleRedeclaration);
   LookupName(Previous, S);
   switch (Previous.getResultKind()) {
   case LookupResult::Found:

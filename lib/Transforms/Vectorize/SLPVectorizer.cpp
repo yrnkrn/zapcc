@@ -6,6 +6,7 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
+//
 // This pass implements the Bottom Up SLP vectorizer. It detects consecutive
 // stores that can be put together into vector-stores. Next, it attempts to
 // construct vectorizable tree using the use-def chains. If a profitable tree
@@ -39,7 +40,7 @@
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryLocation.h"
-#include "llvm/Analysis/OptimizationDiagnosticInfo.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
@@ -361,14 +362,17 @@ static Value *isOneOf(Value *OpValue, Value *Op) {
 }
 
 namespace {
+
 /// Contains data for the instructions going to be vectorized.
 struct RawInstructionsData {
   /// Main Opcode of the instructions going to be vectorized.
   unsigned Opcode = 0;
+
   /// The list of instructions have some instructions with alternate opcodes.
   bool HasAltOpcodes = false;
 };
-} // namespace
+
+} // end anonymous namespace
 
 /// Checks the list of the vectorized instructions \p VL and returns info about
 /// this list.
@@ -392,19 +396,24 @@ static RawInstructionsData getMainOpcode(ArrayRef<Value *> VL) {
 }
 
 namespace {
+
 /// Main data required for vectorization of instructions.
 struct InstructionsState {
   /// The very first instruction in the list with the main opcode.
   Value *OpValue = nullptr;
+
   /// The main opcode for the list of instructions.
   unsigned Opcode = 0;
+
   /// Some of the instructions in the list have alternate opcodes.
   bool IsAltShuffle = false;
+
   InstructionsState() = default;
   InstructionsState(Value *OpValue, unsigned Opcode, bool IsAltShuffle)
       : OpValue(OpValue), Opcode(Opcode), IsAltShuffle(IsAltShuffle) {}
 };
-} // namespace
+
+} // end anonymous namespace
 
 /// \returns analysis of the Instructions in \p VL described in
 /// InstructionsState, the Opcode that we suppose the whole list 
@@ -973,6 +982,7 @@ private:
     return os;
   }
 #endif
+
   friend struct GraphTraits<BoUpSLP *>;
   friend struct DOTGraphTraits<BoUpSLP *>;
 
@@ -1176,9 +1186,9 @@ private:
 
     /// The ID of the scheduling region. For a new vectorization iteration this
     /// is incremented which "removes" all ScheduleData from the region.
-    int SchedulingRegionID = 1;
     // Make sure that the initial SchedulingRegionID is greater than the
     // initial SchedulingRegionID in ScheduleData (which is 0).
+    int SchedulingRegionID = 1;
   };
 
   /// Attaches the BlockScheduling structures to basic blocks.
@@ -1212,6 +1222,7 @@ private:
 
   unsigned MaxVecRegSize; // This is set by TTI or overridden by cl::opt.
   unsigned MinVecRegSize; // Set by cl::opt (default: 128).
+
   /// Instruction builder to construct the vectorized tree.
   IRBuilder<> Builder;
 
@@ -3601,7 +3612,9 @@ void BoUpSLP::BlockScheduling::initScheduleData(Instruction *FromI,
            "new ScheduleData already in scheduling region");
     SD->init(SchedulingRegionID, I);
 
-    if (I->mayReadOrWriteMemory()) {
+    if (I->mayReadOrWriteMemory() &&
+        (!isa<IntrinsicInst>(I) ||
+         cast<IntrinsicInst>(I)->getIntrinsicID() != Intrinsic::sideeffect)) {
       // Update the linked list of memory accessing instructions.
       if (CurrentLoadStore) {
         CurrentLoadStore->NextLoadStore = SD;
@@ -4303,7 +4316,8 @@ bool SLPVectorizerPass::vectorizeStoreChain(ArrayRef<Value *> Chain, BoUpSLP &R,
 
 bool SLPVectorizerPass::vectorizeStores(ArrayRef<StoreInst *> Stores,
                                         BoUpSLP &R) {
-  SetVector<StoreInst *> Heads, Tails;
+  SetVector<StoreInst *> Heads;
+  SmallDenseSet<StoreInst *> Tails;
   SmallDenseMap<StoreInst *, StoreInst *> ConsecutiveChain;
 
   // We may run into multiple chains that merge into a single chain. We mark the
@@ -4311,45 +4325,51 @@ bool SLPVectorizerPass::vectorizeStores(ArrayRef<StoreInst *> Stores,
   BoUpSLP::ValueSet VectorizedStores;
   bool Changed = false;
 
-  // Do a quadratic search on all of the given stores and find
+  // Do a quadratic search on all of the given stores in reverse order and find
   // all of the pairs of stores that follow each other.
   SmallVector<unsigned, 16> IndexQueue;
-  for (unsigned i = 0, e = Stores.size(); i < e; ++i) {
-    IndexQueue.clear();
+  unsigned E = Stores.size();
+  IndexQueue.resize(E - 1);
+  for (unsigned I = E; I > 0; --I) {
+    unsigned Idx = I - 1;
     // If a store has multiple consecutive store candidates, search Stores
-    // array according to the sequence: from i+1 to e, then from i-1 to 0.
+    // array according to the sequence: Idx-1, Idx+1, Idx-2, Idx+2, ...
     // This is because usually pairing with immediate succeeding or preceding
     // candidate create the best chance to find slp vectorization opportunity.
-    unsigned j = 0;
-    for (j = i + 1; j < e; ++j)
-      IndexQueue.push_back(j);
-    for (j = i; j > 0; --j)
-      IndexQueue.push_back(j - 1);
+    unsigned Offset = 1;
+    unsigned Cnt = 0;
+    for (unsigned J = 0; J < E - 1; ++J, ++Offset) {
+      if (Idx >= Offset) {
+        IndexQueue[Cnt] = Idx - Offset;
+        ++Cnt;
+      }
+      if (Idx + Offset < E) {
+        IndexQueue[Cnt] = Idx + Offset;
+        ++Cnt;
+      }
+    }
 
-    for (auto &k : IndexQueue) {
-      if (isConsecutiveAccess(Stores[i], Stores[k], *DL, *SE)) {
-        Tails.insert(Stores[k]);
-        Heads.insert(Stores[i]);
-        ConsecutiveChain[Stores[i]] = Stores[k];
+    for (auto K : IndexQueue) {
+      if (isConsecutiveAccess(Stores[K], Stores[Idx], *DL, *SE)) {
+        Tails.insert(Stores[Idx]);
+        Heads.insert(Stores[K]);
+        ConsecutiveChain[Stores[K]] = Stores[Idx];
         break;
       }
     }
   }
 
   // For stores that start but don't end a link in the chain:
-  for (SetVector<StoreInst *>::iterator it = Heads.begin(), e = Heads.end();
-       it != e; ++it) {
-    if (Tails.count(*it))
+  for (auto *SI : llvm::reverse(Heads)) {
+    if (Tails.count(SI))
       continue;
 
     // We found a store instr that starts a chain. Now follow the chain and try
     // to vectorize it.
     BoUpSLP::ValueList Operands;
-    StoreInst *I = *it;
+    StoreInst *I = SI;
     // Collect the chain into a list.
-    while (Tails.count(I) || Heads.count(I)) {
-      if (VectorizedStores.count(I))
-        break;
+    while ((Tails.count(I) || Heads.count(I)) && !VectorizedStores.count(I)) {
       Operands.push_back(I);
       // Move to the next value in the chain.
       I = ConsecutiveChain[I];
@@ -4662,6 +4682,7 @@ class HorizontalReduction {
     RK_Max,        /// Maximum reduction data.
     RK_UMax,       /// Unsigned maximum reduction data.
   };
+
   /// Contains info about operation, like its opcode, left and right operands.
   class OperationData {
     /// Opcode of the instruction.
@@ -4672,8 +4693,10 @@ class HorizontalReduction {
 
     /// Right operand of the reduction operation.
     Value *RHS = nullptr;
+
     /// Kind of the reduction operation.
     ReductionKind Kind = RK_None;
+
     /// True if float point min/max reduction has no NaNs.
     bool NoNaN = false;
 
@@ -4725,7 +4748,7 @@ class HorizontalReduction {
 
     /// Construction for reduced values. They are identified by opcode only and
     /// don't have associated LHS/RHS values.
-    explicit OperationData(Value *V) : Kind(RK_None) {
+    explicit OperationData(Value *V) {
       if (auto *I = dyn_cast<Instruction>(V))
         Opcode = I->getOpcode();
     }
@@ -4737,6 +4760,7 @@ class HorizontalReduction {
         : Opcode(Opcode), LHS(LHS), RHS(RHS), Kind(Kind), NoNaN(NoNaN) {
       assert(Kind != RK_None && "One of the reduction operations is expected.");
     }
+
     explicit operator bool() const { return Opcode; }
 
     /// Get the index of the first operand.
@@ -4865,7 +4889,7 @@ class HorizontalReduction {
       case RK_Min:
       case RK_Max:
         return Opcode == Instruction::ICmp ||
-               cast<Instruction>(I->getOperand(0))->hasUnsafeAlgebra();
+               cast<Instruction>(I->getOperand(0))->isFast();
       case RK_UMin:
       case RK_UMax:
         assert(Opcode == Instruction::ICmp &&
@@ -5217,7 +5241,7 @@ public:
     Value *VectorizedTree = nullptr;
     IRBuilder<> Builder(ReductionRoot);
     FastMathFlags Unsafe;
-    Unsafe.setUnsafeAlgebra();
+    Unsafe.setFast();
     Builder.setFastMathFlags(Unsafe);
     unsigned i = 0;
 
@@ -5421,7 +5445,6 @@ private:
 ///  starting from the last insertelement instruction.
 ///
 /// Returns true if it matches
-///
 static bool findBuildVector(InsertElementInst *LastInsertElem,
                             SmallVectorImpl<Value *> &BuildVector,
                             SmallVectorImpl<Value *> &BuildVectorOpds) {

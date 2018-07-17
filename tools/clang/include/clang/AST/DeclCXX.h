@@ -1911,6 +1911,12 @@ public:
     return getDeclName().getCXXDeductionGuideTemplate();
   }
 
+  void setIsCopyDeductionCandidate() {
+    IsCopyDeductionCandidate = true;
+  }
+
+  bool isCopyDeductionCandidate() const { return IsCopyDeductionCandidate; }
+
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K == CXXDeductionGuide; }
@@ -2574,7 +2580,10 @@ public:
 class CXXDestructorDecl : public CXXMethodDecl {
   void anchor() override;
 
+  // FIXME: Don't allocate storage for these except in the first declaration
+  // of a virtual destructor.
   FunctionDecl *OperatorDelete;
+  Expr *OperatorDeleteThisArg;
 
   CXXDestructorDecl(ASTContext &C, CXXRecordDecl *RD, SourceLocation StartLoc,
                     const DeclarationNameInfo &NameInfo,
@@ -2582,7 +2591,7 @@ class CXXDestructorDecl : public CXXMethodDecl {
                     bool isInline, bool isImplicitlyDeclared)
     : CXXMethodDecl(CXXDestructor, C, RD, StartLoc, NameInfo, T, TInfo,
                     SC_None, isInline, /*isConstexpr=*/false, SourceLocation()),
-      OperatorDelete(nullptr) {
+      OperatorDelete(nullptr), OperatorDeleteThisArg(nullptr) {
     setImplicit(isImplicitlyDeclared);
   }
 
@@ -2598,9 +2607,12 @@ public:
   FunctionDecl *getRawOperatorDelete() const { return OperatorDelete; }
   void setRawOperatorDelete(FunctionDecl *OD) { OperatorDelete = OD; }
 
-  void setOperatorDelete(FunctionDecl *OD);
+  void setOperatorDelete(FunctionDecl *OD, Expr *ThisArg);
   const FunctionDecl *getOperatorDelete() const {
     return getCanonicalDecl()->OperatorDelete;
+  }
+  Expr *getOperatorDeleteThisArg() const {
+    return getCanonicalDecl()->OperatorDeleteThisArg;
   }
 
   CXXDestructorDecl *getCanonicalDecl() override {

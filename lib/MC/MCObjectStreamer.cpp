@@ -25,20 +25,17 @@
 #include "llvm/Support/TargetRegistry.h"
 using namespace llvm;
 
-MCObjectStreamer::MCObjectStreamer(MCContext &Context, MCAsmBackend &TAB,
+MCObjectStreamer::MCObjectStreamer(MCContext &Context,
+                                   std::unique_ptr<MCAsmBackend> TAB,
                                    raw_pwrite_stream &OS,
-                                   MCCodeEmitter *Emitter_)
-    : MCStreamer(Context),
-      Assembler(new MCAssembler(Context, TAB, *Emitter_,
-                                *TAB.createObjectWriter(OS))),
+                                   std::unique_ptr<MCCodeEmitter> Emitter)
+    : MCStreamer(Context), ObjectWriter(TAB->createObjectWriter(OS)),
+      TAB(std::move(TAB)), Emitter(std::move(Emitter)),
+      Assembler(llvm::make_unique<MCAssembler>(Context, *this->TAB,
+                                               *this->Emitter, *ObjectWriter)),
       EmitEHFrame(true), EmitDebugFrame(false) {}
 
-MCObjectStreamer::~MCObjectStreamer() {
-  delete &Assembler->getBackend();
-  delete &Assembler->getEmitter();
-  delete &Assembler->getWriter();
-  delete Assembler;
-}
+MCObjectStreamer::~MCObjectStreamer() {}
 
 void MCObjectStreamer::flushPendingLabels(MCFragment *F, uint64_t FOffset) {
   if (PendingLabels.empty())
@@ -111,6 +108,16 @@ MCDataFragment *MCObjectStreamer::getOrCreateDataFragment() {
   return F;
 }
 
+MCPaddingFragment *MCObjectStreamer::getOrCreatePaddingFragment() {
+  MCPaddingFragment *F =
+      dyn_cast_or_null<MCPaddingFragment>(getCurrentFragment());
+  if (!F) {
+    F = new MCPaddingFragment();
+    insert(F);
+  }
+  return F;
+}
+
 void MCObjectStreamer::visitUsedSymbol(const MCSymbol &Sym) {
   Assembler->registerSymbol(Sym);
 }
@@ -145,6 +152,12 @@ void MCObjectStreamer::EmitValueImpl(const MCExpr *Value, unsigned Size,
       MCFixup::create(DF->getContents().size(), Value,
                       MCFixup::getKindForSize(Size, false), Loc));
   DF->getContents().resize(DF->getContents().size() + Size, 0);
+}
+
+MCSymbol *MCObjectStreamer::EmitCFILabel() {
+  MCSymbol *Label = getContext().createTempSymbol("cfi", true);
+  EmitLabel(Label);
+  return Label;
 }
 
 void MCObjectStreamer::EmitCFIStartProcImpl(MCDwarfFrameInfo &Frame) {
@@ -244,6 +257,13 @@ bool MCObjectStreamer::mayHaveInstructions(MCSection &Sec) const {
 
 void MCObjectStreamer::EmitInstruction(const MCInst &Inst,
                                        const MCSubtargetInfo &STI, bool) {
+  getAssembler().getBackend().handleCodePaddingInstructionBegin(Inst);
+  EmitInstructionImpl(Inst, STI);
+  getAssembler().getBackend().handleCodePaddingInstructionEnd(Inst);
+}
+
+void MCObjectStreamer::EmitInstructionImpl(const MCInst &Inst,
+                                           const MCSubtargetInfo &STI) {
   MCStreamer::EmitInstruction(Inst, STI);
 
   MCSection *Sec = getCurrentSectionOnly();
@@ -462,6 +482,16 @@ void MCObjectStreamer::emitValueToOffset(const MCExpr *Offset,
                                          unsigned char Value,
                                          SMLoc Loc) {
   insert(new MCOrgFragment(*Offset, Value, Loc));
+}
+
+void MCObjectStreamer::EmitCodePaddingBasicBlockStart(
+    const MCCodePaddingContext &Context) {
+  getAssembler().getBackend().handleCodePaddingBasicBlockStart(this, Context);
+}
+
+void MCObjectStreamer::EmitCodePaddingBasicBlockEnd(
+    const MCCodePaddingContext &Context) {
+  getAssembler().getBackend().handleCodePaddingBasicBlockEnd(Context);
 }
 
 // Associate DTPRel32 fixup with data and resize data area

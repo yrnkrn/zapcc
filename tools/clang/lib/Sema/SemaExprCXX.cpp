@@ -1407,14 +1407,20 @@ namespace {
     UsualDeallocFnInfo() : Found(), FD(nullptr) {}
     UsualDeallocFnInfo(Sema &S, DeclAccessPair Found)
         : Found(Found), FD(dyn_cast<FunctionDecl>(Found->getUnderlyingDecl())),
-          HasSizeT(false), HasAlignValT(false), CUDAPref(Sema::CFP_Native) {
+          Destroying(false), HasSizeT(false), HasAlignValT(false),
+          CUDAPref(Sema::CFP_Native) {
       // A function template declaration is never a usual deallocation function.
       if (!FD)
         return;
-      if (FD->getNumParams() == 3)
+      unsigned NumBaseParams = 1;
+      if (FD->isDestroyingOperatorDelete()) {
+        Destroying = true;
+        ++NumBaseParams;
+      }
+      if (FD->getNumParams() == NumBaseParams + 2)
         HasAlignValT = HasSizeT = true;
-      else if (FD->getNumParams() == 2) {
-        HasSizeT = FD->getParamDecl(1)->getType()->isIntegerType();
+      else if (FD->getNumParams() == NumBaseParams + 1) {
+        HasSizeT = FD->getParamDecl(NumBaseParams)->getType()->isIntegerType();
         HasAlignValT = !HasSizeT;
       }
 
@@ -1428,6 +1434,12 @@ namespace {
 
     bool isBetterThan(const UsualDeallocFnInfo &Other, bool WantSize,
                       bool WantAlign) const {
+      // C++ P0722:
+      //   A destroying operator delete is preferred over a non-destroying
+      //   operator delete.
+      if (Destroying != Other.Destroying)
+        return Destroying;
+
       // C++17 [expr.delete]p10:
       //   If the type has new-extended alignment, a function with a parameter
       //   of type std::align_val_t is preferred; otherwise a function without
@@ -1444,7 +1456,7 @@ namespace {
 
     DeclAccessPair Found;
     FunctionDecl *FD;
-    bool HasSizeT, HasAlignValT;
+    bool Destroying, HasSizeT, HasAlignValT;
     Sema::CUDAFunctionPreference CUDAPref;
   };
 }
@@ -2101,7 +2113,7 @@ bool Sema::CheckAllocatedType(QualType AllocType, SourceLocation Loc,
   else if (AllocType->isVariablyModifiedType())
     return Diag(Loc, diag::err_variably_modified_new_type)
              << AllocType;
-  else if (AllocType.getAddressSpace())
+  else if (AllocType.getAddressSpace() != LangAS::Default)
     return Diag(Loc, diag::err_address_space_qualified_new)
       << AllocType.getUnqualifiedType()
       << AllocType.getQualifiers().getAddressSpaceAttributePrintValue();
@@ -3173,7 +3185,7 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
     QualType Pointee = Type->getAs<PointerType>()->getPointeeType();
     QualType PointeeElem = Context.getBaseElementType(Pointee);
 
-    if (Pointee.getAddressSpace())
+    if (Pointee.getAddressSpace() != LangAS::Default)
       return Diag(Ex.get()->getLocStart(),
                   diag::err_address_space_qualified_delete)
                << Pointee.getUnqualifiedType()
@@ -3264,16 +3276,30 @@ Sema::ActOnCXXDelete(SourceLocation StartLoc, bool UseGlobal,
 
     MarkFunctionReferenced(StartLoc, OperatorDelete);
 
-    // Check access and ambiguity of operator delete and destructor.
+    // Check access and ambiguity of destructor if we're going to call it.
+    // Note that this is required even for a virtual delete.
+    bool IsVirtualDelete = false;
     if (PointeeRD) {
       if (CXXDestructorDecl *Dtor = LookupDestructor(PointeeRD)) {
-          CheckDestructorAccess(Ex.get()->getExprLoc(), Dtor,
-                      PDiag(diag::err_access_dtor) << PointeeElem);
+        CheckDestructorAccess(Ex.get()->getExprLoc(), Dtor,
+                              PDiag(diag::err_access_dtor) << PointeeElem);
+        IsVirtualDelete = Dtor->isVirtual();
       }
     }
 
     diagnoseUnavailableAlignedAllocation(*OperatorDelete, StartLoc, true,
                                          *this);
+
+    // Convert the operand to the type of the first parameter of operator
+    // delete. This is only necessary if we selected a destroying operator
+    // delete that we are going to call (non-virtually); converting to void*
+    // is trivial and left to AST consumers to handle.
+    QualType ParamType = OperatorDelete->getParamDecl(0)->getType();
+    if (!IsVirtualDelete && !ParamType->getPointeeType()->isVoidType()) {
+      Ex = PerformImplicitConversion(Ex.get(), ParamType, AA_Passing);
+      if (Ex.isInvalid())
+        return ExprError();
+    }
   }
 
   CXXDeleteExpr *Result = new (Context) CXXDeleteExpr(
@@ -4152,6 +4178,7 @@ static bool CheckUnaryTypeTraitTypeCompleteness(Sema &S, TypeTrait UTT,
   case UTT_IsDestructible:
   case UTT_IsNothrowDestructible:
   case UTT_IsTriviallyDestructible:
+  case UTT_HasUniqueObjectRepresentations:
     if (ArgTy->isIncompleteArrayType() || ArgTy->isVoidType())
       return true;
 
@@ -4591,6 +4618,8 @@ static bool EvaluateUnaryTypeTrait(Sema &Self, TypeTrait UTT,
     //   Returns True if and only if T is a complete type at the point of the
     //   function call.
     return !T->isIncompleteType();
+  case UTT_HasUniqueObjectRepresentations:
+    return T.hasUniqueObjectRepresentations(C);
   }
 }
 
@@ -4801,9 +4830,13 @@ static bool EvaluateBinaryTypeTrait(Sema &Self, TypeTrait BTT, QualType LhsT,
   }
   case BTT_IsSame:
     return Self.Context.hasSameType(LhsT, RhsT);
-  case BTT_TypeCompatible:
-    return Self.Context.typesAreCompatible(LhsT.getUnqualifiedType(),
-                                           RhsT.getUnqualifiedType());
+  case BTT_TypeCompatible: {
+    // GCC ignores cv-qualifiers on arrays for this builtin.
+    Qualifiers LhsQuals, RhsQuals;
+    QualType Lhs = Self.getASTContext().getUnqualifiedArrayType(LhsT, LhsQuals);
+    QualType Rhs = Self.getASTContext().getUnqualifiedArrayType(RhsT, RhsQuals);
+    return Self.Context.typesAreCompatible(Lhs, Rhs);
+  }
   case BTT_IsConvertible:
   case BTT_IsConvertibleTo: {
     // C++0x [meta.rel]p4:

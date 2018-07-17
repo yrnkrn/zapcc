@@ -157,24 +157,23 @@ unsigned MipsInstrInfo::removeBranch(MachineBasicBlock &MBB,
   assert(!BytesRemoved && "code size not handled");
 
   MachineBasicBlock::reverse_iterator I = MBB.rbegin(), REnd = MBB.rend();
-  unsigned removed;
-
-  // Skip all the debug instructions.
-  while (I != REnd && I->isDebugValue())
-    ++I;
-
-  if (I == REnd)
-    return 0;
-
-  MachineBasicBlock::iterator FirstBr = ++I.getReverse();
+  unsigned removed = 0;
 
   // Up to 2 branches are removed.
   // Note that indirect branches are not removed.
-  for (removed = 0; I != REnd && removed < 2; ++I, ++removed)
+  while (I != REnd && removed < 2) {
+    // Skip past debug instructions.
+    if (I->isDebugValue()) {
+      ++I;
+      continue;
+    }
     if (!getAnalyzableBrOpc(I->getOpcode()))
       break;
-
-  MBB.erase((--I).getReverse(), FirstBr);
+    // Remove the branch.
+    I->eraseFromParent();
+    I = MBB.rbegin();
+    ++removed;
+  }
 
   return removed;
 }
@@ -218,7 +217,13 @@ MipsInstrInfo::BranchType MipsInstrInfo::analyzeBranch(
   unsigned SecondLastOpc = 0;
   MachineInstr *SecondLastInst = nullptr;
 
-  if (++I != REnd) {
+  // Skip past any debug instruction to see if the second last actual
+  // is a branch.
+  ++I;
+  while (I != REnd && I->isDebugValue())
+    ++I;
+
+  if (I != REnd) {
     SecondLastInst = &*I;
     SecondLastOpc = getAnalyzableBrOpc(SecondLastInst->getOpcode());
 
@@ -618,3 +623,39 @@ bool MipsInstrInfo::verifyInstruction(const MachineInstr &MI,
   return true;
 }
 
+std::pair<unsigned, unsigned>
+MipsInstrInfo::decomposeMachineOperandsTargetFlags(unsigned TF) const {
+  return std::make_pair(TF, 0u);
+}
+
+ArrayRef<std::pair<unsigned, const char*>>
+MipsInstrInfo::getSerializableDirectMachineOperandTargetFlags() const {
+ using namespace MipsII;
+
+ static const std::pair<unsigned, const char*> Flags[] = {
+    {MO_GOT,          "mips-got"},
+    {MO_GOT_CALL,     "mips-got-call"},
+    {MO_GPREL,        "mips-gprel"},
+    {MO_ABS_HI,       "mips-abs-hi"},
+    {MO_ABS_LO,       "mips-abs-lo"},
+    {MO_TLSGD,        "mips-tlsgd"},
+    {MO_TLSLDM,       "mips-tlsldm"},
+    {MO_DTPREL_HI,    "mips-dtprel-hi"},
+    {MO_DTPREL_LO,    "mips-dtprel-lo"},
+    {MO_GOTTPREL,     "mips-gottprel"},
+    {MO_TPREL_HI,     "mips-tprel-hi"},
+    {MO_TPREL_LO,     "mips-tprel-lo"},
+    {MO_GPOFF_HI,     "mips-gpoff-hi"},
+    {MO_GPOFF_LO,     "mips-gpoff-lo"},
+    {MO_GOT_DISP,     "mips-got-disp"},
+    {MO_GOT_PAGE,     "mips-got-page"},
+    {MO_GOT_OFST,     "mips-got-ofst"},
+    {MO_HIGHER,       "mips-higher"},
+    {MO_HIGHEST,      "mips-highest"},
+    {MO_GOT_HI16,     "mips-got-hi16"},
+    {MO_GOT_LO16,     "mips-got-lo16"},
+    {MO_CALL_HI16,    "mips-call-hi16"},
+    {MO_CALL_LO16,    "mips-call-lo16"}
+  };
+  return makeArrayRef(Flags);
+}

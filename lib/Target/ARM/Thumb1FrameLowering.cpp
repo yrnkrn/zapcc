@@ -31,6 +31,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDwarf.h"
@@ -38,7 +39,6 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <bitset>
@@ -352,10 +352,36 @@ void Thumb1FrameLowering::emitPrologue(MachineFunction &MF,
   AFI->setGPRCalleeSavedArea2Size(GPRCS2Size);
   AFI->setDPRCalleeSavedAreaSize(DPRCSSize);
 
-  // Thumb1 does not currently support dynamic stack realignment.  Report a
-  // fatal error rather then silently generate bad code.
-  if (RegInfo->needsStackRealignment(MF))
-      report_fatal_error("Dynamic stack realignment not supported for thumb1.");
+  if (RegInfo->needsStackRealignment(MF)) {
+    const unsigned NrBitsToZero = countTrailingZeros(MFI.getMaxAlignment());
+    // Emit the following sequence, using R4 as a temporary, since we cannot use
+    // SP as a source or destination register for the shifts:
+    // mov  r4, sp
+    // lsrs r4, r4, #NrBitsToZero
+    // lsls r4, r4, #NrBitsToZero
+    // mov  sp, r4
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVr), ARM::R4)
+      .addReg(ARM::SP, RegState::Kill)
+      .add(predOps(ARMCC::AL));
+
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::tLSRri), ARM::R4)
+      .addDef(ARM::CPSR)
+      .addReg(ARM::R4, RegState::Kill)
+      .addImm(NrBitsToZero)
+      .add(predOps(ARMCC::AL));
+
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::tLSLri), ARM::R4)
+      .addDef(ARM::CPSR)
+      .addReg(ARM::R4, RegState::Kill)
+      .addImm(NrBitsToZero)
+      .add(predOps(ARMCC::AL));
+
+    BuildMI(MBB, MBBI, dl, TII.get(ARM::tMOVr), ARM::SP)
+      .addReg(ARM::R4, RegState::Kill)
+      .add(predOps(ARMCC::AL));
+
+    AFI->setShouldRestoreSPFromFP(true);
+  }
 
   // If we need a base pointer, set it up here. It's whatever the value
   // of the stack pointer is at this point. Any variable size objects

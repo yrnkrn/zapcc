@@ -226,15 +226,21 @@ bool DAGTypeLegalizer::run() {
     assert(N->getNodeId() == ReadyToProcess &&
            "Node should be ready if on worklist!");
 
-    if (IgnoreNodeResults(N))
+    DEBUG(dbgs() << "Legalizing node: "; N->dump());
+    if (IgnoreNodeResults(N)) {
+      DEBUG(dbgs() << "Ignoring node results\n");
       goto ScanOperands;
+    }
 
     // Scan the values produced by the node, checking to see if any result
     // types are illegal.
     for (unsigned i = 0, NumResults = N->getNumValues(); i < NumResults; ++i) {
       EVT ResultVT = N->getValueType(i);
+      DEBUG(dbgs() << "Analyzing result type: " <<
+                      ResultVT.getEVTString() << "\n");
       switch (getTypeAction(ResultVT)) {
       case TargetLowering::TypeLegal:
+        DEBUG(dbgs() << "Legal result type\n");
         break;
       // The following calls must take care of *all* of the node's results,
       // not just the illegal result they were passed (this includes results
@@ -291,9 +297,12 @@ ScanOperands:
       if (IgnoreNodeResults(N->getOperand(i).getNode()))
         continue;
 
-      EVT OpVT = N->getOperand(i).getValueType();
+      const auto Op = N->getOperand(i);
+      DEBUG(dbgs() << "Analyzing operand: "; Op.dump());
+      EVT OpVT = Op.getValueType();
       switch (getTypeAction(OpVT)) {
       case TargetLowering::TypeLegal:
+        DEBUG(dbgs() << "Legal operand\n");
         continue;
       // The following calls must either replace all of the node's results
       // using ReplaceValueWith, and return "false"; or update the node's
@@ -826,33 +835,6 @@ void DAGTypeLegalizer::GetExpandedInteger(SDValue Op, SDValue &Lo,
   Hi = Entry.second;
 }
 
-/// Transfer debug values by generating fragment expressions for split-up
-/// values.
-static void transferDbgValues(SelectionDAG &DAG, SDValue From, SDValue To,
-                              unsigned OffsetInBits) {
-  SDNode *FromNode = From.getNode();
-  SDNode *ToNode = To.getNode();
-  assert(FromNode != ToNode);
-
-  SmallVector<SDDbgValue *, 2> ClonedDVs;
-  for (SDDbgValue *Dbg : DAG.GetDbgValues(FromNode)) {
-    if (Dbg->getKind() != SDDbgValue::SDNODE)
-      break;
-
-    DIVariable *Var = Dbg->getVariable();
-    auto *Fragment = DIExpression::createFragmentExpression(
-        Dbg->getExpression(), OffsetInBits, To.getValueSizeInBits());
-    SDDbgValue *Clone =
-        DAG.getDbgValue(Var, Fragment, ToNode, To.getResNo(), Dbg->isIndirect(),
-                        Dbg->getDebugLoc(), Dbg->getOrder());
-    Dbg->setIsInvalidated();
-    ClonedDVs.push_back(Clone);
-  }
-
-  for (SDDbgValue *Dbg : ClonedDVs)
-    DAG.AddDbgValue(Dbg, ToNode, false);
-}
-
 void DAGTypeLegalizer::SetExpandedInteger(SDValue Op, SDValue Lo,
                                           SDValue Hi) {
   assert(Lo.getValueType() ==
@@ -865,11 +847,13 @@ void DAGTypeLegalizer::SetExpandedInteger(SDValue Op, SDValue Lo,
 
   // Transfer debug values.
   if (DAG.getDataLayout().isBigEndian()) {
-    transferDbgValues(DAG, Op, Hi, 0);
-    transferDbgValues(DAG, Op, Lo, Hi.getValueSizeInBits());
+    DAG.transferDbgValues(Op, Hi, 0, Hi.getValueSizeInBits());
+    DAG.transferDbgValues(Op, Lo, Hi.getValueSizeInBits(),
+                          Lo.getValueSizeInBits());
   } else {
-    transferDbgValues(DAG, Op, Lo, 0);
-    transferDbgValues(DAG, Op, Hi, Lo.getValueSizeInBits());
+    DAG.transferDbgValues(Op, Lo, 0, Lo.getValueSizeInBits());
+    DAG.transferDbgValues(Op, Hi, Lo.getValueSizeInBits(),
+                          Hi.getValueSizeInBits());
   }
 
   // Remember that this is the result of the node.

@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -31,7 +32,6 @@
 #include "llvm/Support/DataTypes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -43,6 +43,8 @@ using namespace llvm;
 MachineBasicBlock::MachineBasicBlock(MachineFunction &MF, const BasicBlock *B)
     : BB(B), Number(-1), xParent(&MF) {
   Insts.Parent = this;
+  if (B)
+    IrrLoopHeaderWeight = B->getIrrLoopHeaderWeight();
 }
 
 MachineBasicBlock::~MachineBasicBlock() {
@@ -119,7 +121,7 @@ void ilist_traits<MachineInstr>::removeNodeFromList(MachineInstr *N) {
   assert(N->getParent() && "machine instruction not in a basic block");
 
   // Remove from the use/def lists.
-  if (MachineFunction *MF = N->getParent()->getParent())
+  if (MachineFunction *MF = N->getMF())
     N->RemoveRegOperandsFromUseLists(MF->getRegInfo());
 
   N->setParent(nullptr);
@@ -344,6 +346,12 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
       if (!Probs.empty())
         OS << '(' << *getProbabilityIterator(SI) << ')';
     }
+    OS << '\n';
+  }
+  if (IrrLoopHeaderWeight) {
+    if (Indexes) OS << '\t';
+    OS << "    Irreducible loop header weight: "
+       << IrrLoopHeaderWeight.getValue();
     OS << '\n';
   }
 }

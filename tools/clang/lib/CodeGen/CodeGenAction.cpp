@@ -462,6 +462,8 @@ void BackendConsumer::InlineAsmDiagHandler2(const llvm::SMDiagnostic &D,
   case llvm::SourceMgr::DK_Note:
     DiagID = diag::note_fe_inline_asm;
     break;
+  case llvm::SourceMgr::DK_Remark:
+    llvm_unreachable("remarks unexpected");
   }
   // If this problem has clang-level source location information, report the
   // issue in the source with a note showing the instantiated
@@ -957,6 +959,8 @@ static void BitcodeInlineAsmDiagHandler(const llvm::SMDiagnostic &SM,
   case llvm::SourceMgr::DK_Note:
     DiagID = diag::note_fe_inline_asm;
     break;
+  case llvm::SourceMgr::DK_Remark:
+    llvm_unreachable("remarks unexpected");
   }
 
   Diags->Report(DiagID).AddString("cannot compile inline asm");

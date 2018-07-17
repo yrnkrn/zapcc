@@ -99,6 +99,7 @@ bool MCWasmStreamer::EmitSymbolAttribute(MCSymbol *S, MCSymbolAttr Attribute) {
   case MCSA_Invalid:
   case MCSA_IndirectSymbol:
   case MCSA_Hidden:
+  case MCSA_Protected:
     return false;
 
   case MCSA_Weak:
@@ -156,7 +157,7 @@ void MCWasmStreamer::EmitValueToAlignment(unsigned ByteAlignment, int64_t Value,
 
 void MCWasmStreamer::EmitIdent(StringRef IdentString) {
   MCSection *Comment = getAssembler().getContext().getWasmSection(
-      ".comment", wasm::WASM_SEC_DATA);
+      ".comment", SectionKind::getMetadata());
   PushSection();
   SwitchSection(Comment);
   if (!SeenIdent) {
@@ -200,10 +201,13 @@ void MCWasmStreamer::FinishImpl() {
   this->MCObjectStreamer::FinishImpl();
 }
 
-MCStreamer *llvm::createWasmStreamer(MCContext &Context, MCAsmBackend &MAB,
-                                     raw_pwrite_stream &OS, MCCodeEmitter *CE,
+MCStreamer *llvm::createWasmStreamer(MCContext &Context,
+                                     std::unique_ptr<MCAsmBackend> &&MAB,
+                                     raw_pwrite_stream &OS,
+                                     std::unique_ptr<MCCodeEmitter> &&CE,
                                      bool RelaxAll) {
-  MCWasmStreamer *S = new MCWasmStreamer(Context, MAB, OS, CE);
+  MCWasmStreamer *S =
+      new MCWasmStreamer(Context, std::move(MAB), OS, std::move(CE));
   if (RelaxAll)
     S->getAssembler().setRelaxAll(true);
   return S;

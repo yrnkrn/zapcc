@@ -128,27 +128,20 @@ EVT AMDGPUTargetLowering::getEquivalentMemType(LLVMContext &Ctx, EVT VT) {
   return EVT::getVectorVT(Ctx, MVT::i32, StoreSize / 32);
 }
 
-bool AMDGPUTargetLowering::isOrEquivalentToAdd(SelectionDAG &DAG, SDValue Op)
-{
-  assert(Op.getOpcode() == ISD::OR);
+unsigned AMDGPUTargetLowering::numBitsUnsigned(SDValue Op, SelectionDAG &DAG) {
+  KnownBits Known;
+  EVT VT = Op.getValueType();
+  DAG.computeKnownBits(Op, Known);
 
-  SDValue N0 = Op->getOperand(0);
-  SDValue N1 = Op->getOperand(1);
-  EVT VT = N0.getValueType();
+  return VT.getSizeInBits() - Known.countMinLeadingZeros();
+}
 
-  if (VT.isInteger() && !VT.isVector()) {
-    KnownBits LHSKnown, RHSKnown;
-    DAG.computeKnownBits(N0, LHSKnown);
+unsigned AMDGPUTargetLowering::numBitsSigned(SDValue Op, SelectionDAG &DAG) {
+  EVT VT = Op.getValueType();
 
-    if (LHSKnown.Zero.getBoolValue()) {
-      DAG.computeKnownBits(N1, RHSKnown);
-
-      if (!(~RHSKnown.Zero & ~LHSKnown.Zero))
-        return true;
-    }
-  }
-
-  return false;
+  // In order for this to be a signed 24-bit value, bit 23, must
+  // be a sign bit.
+  return VT.getSizeInBits() - DAG.ComputeNumSignBits(Op);
 }
 
 AMDGPUTargetLowering::AMDGPUTargetLowering(const TargetMachine &TM,
@@ -417,8 +410,10 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i32, Custom);
 
   if (Subtarget->hasFFBL())
-    setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i32, Legal);
+    setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i32, Custom);
 
+  setOperationAction(ISD::CTTZ, MVT::i64, Custom);
+  setOperationAction(ISD::CTTZ_ZERO_UNDEF, MVT::i64, Custom);
   setOperationAction(ISD::CTLZ, MVT::i64, Custom);
   setOperationAction(ISD::CTLZ_ZERO_UNDEF, MVT::i64, Custom);
 
@@ -825,6 +820,17 @@ bool AMDGPUTargetLowering::isZExtFree(SDValue Val, EVT VT2) const {
   return isZExtFree(Val.getValueType(), VT2);
 }
 
+// v_mad_mix* support a conversion from f16 to f32.
+//
+// There is only one special case when denormals are enabled we don't currently,
+// where this is OK to use.
+bool AMDGPUTargetLowering::isFPExtFoldable(unsigned Opcode,
+                                           EVT DestVT, EVT SrcVT) const {
+  return Opcode == ISD::FMAD && Subtarget->hasMadMixInsts() &&
+         DestVT.getScalarType() == MVT::f32 && !Subtarget->hasFP32Denormals() &&
+         SrcVT.getScalarType() == MVT::f16;
+}
+
 bool AMDGPUTargetLowering::isNarrowingProfitable(EVT SrcVT, EVT DestVT) const {
   // There aren't really 64-bit registers, but pairs of 32-bit ones and only a
   // limited number of native 64-bit operations. Shrinking an operation to fit
@@ -1113,9 +1119,11 @@ SDValue AMDGPUTargetLowering::LowerOperation(SDValue Op,
   case ISD::FP_TO_FP16: return LowerFP_TO_FP16(Op, DAG);
   case ISD::FP_TO_SINT: return LowerFP_TO_SINT(Op, DAG);
   case ISD::FP_TO_UINT: return LowerFP_TO_UINT(Op, DAG);
+  case ISD::CTTZ:
+  case ISD::CTTZ_ZERO_UNDEF:
   case ISD::CTLZ:
   case ISD::CTLZ_ZERO_UNDEF:
-    return LowerCTLZ(Op, DAG);
+    return LowerCTLZ_CTTZ(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);
   }
   return Op;
@@ -1505,49 +1513,181 @@ SDValue AMDGPUTargetLowering::LowerDIVREM24(SDValue Op, SelectionDAG &DAG,
 void AMDGPUTargetLowering::LowerUDIVREM64(SDValue Op,
                                       SelectionDAG &DAG,
                                       SmallVectorImpl<SDValue> &Results) const {
-  assert(Op.getValueType() == MVT::i64);
-
   SDLoc DL(Op);
   EVT VT = Op.getValueType();
+
+  assert(VT == MVT::i64 && "LowerUDIVREM64 expects an i64");
+
   EVT HalfVT = VT.getHalfSizedIntegerVT(*DAG.getContext());
 
-  SDValue one = DAG.getConstant(1, DL, HalfVT);
-  SDValue zero = DAG.getConstant(0, DL, HalfVT);
+  SDValue One = DAG.getConstant(1, DL, HalfVT);
+  SDValue Zero = DAG.getConstant(0, DL, HalfVT);
 
   //HiLo split
   SDValue LHS = Op.getOperand(0);
-  SDValue LHS_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, LHS, zero);
-  SDValue LHS_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, LHS, one);
+  SDValue LHS_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, LHS, Zero);
+  SDValue LHS_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, LHS, One);
 
   SDValue RHS = Op.getOperand(1);
-  SDValue RHS_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, RHS, zero);
-  SDValue RHS_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, RHS, one);
+  SDValue RHS_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, RHS, Zero);
+  SDValue RHS_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, RHS, One);
 
-  if (VT == MVT::i64 &&
-    DAG.MaskedValueIsZero(RHS, APInt::getHighBitsSet(64, 32)) &&
-    DAG.MaskedValueIsZero(LHS, APInt::getHighBitsSet(64, 32))) {
+  if (DAG.MaskedValueIsZero(RHS, APInt::getHighBitsSet(64, 32)) &&
+      DAG.MaskedValueIsZero(LHS, APInt::getHighBitsSet(64, 32))) {
 
     SDValue Res = DAG.getNode(ISD::UDIVREM, DL, DAG.getVTList(HalfVT, HalfVT),
                               LHS_Lo, RHS_Lo);
 
-    SDValue DIV = DAG.getBuildVector(MVT::v2i32, DL, {Res.getValue(0), zero});
-    SDValue REM = DAG.getBuildVector(MVT::v2i32, DL, {Res.getValue(1), zero});
+    SDValue DIV = DAG.getBuildVector(MVT::v2i32, DL, {Res.getValue(0), Zero});
+    SDValue REM = DAG.getBuildVector(MVT::v2i32, DL, {Res.getValue(1), Zero});
 
     Results.push_back(DAG.getNode(ISD::BITCAST, DL, MVT::i64, DIV));
     Results.push_back(DAG.getNode(ISD::BITCAST, DL, MVT::i64, REM));
     return;
   }
 
+  if (isTypeLegal(MVT::i64)) {
+    // Compute denominator reciprocal.
+    unsigned FMAD = Subtarget->hasFP32Denormals() ?
+                    (unsigned)AMDGPUISD::FMAD_FTZ :
+                    (unsigned)ISD::FMAD;
+
+    SDValue Cvt_Lo = DAG.getNode(ISD::UINT_TO_FP, DL, MVT::f32, RHS_Lo);
+    SDValue Cvt_Hi = DAG.getNode(ISD::UINT_TO_FP, DL, MVT::f32, RHS_Hi);
+    SDValue Mad1 = DAG.getNode(FMAD, DL, MVT::f32, Cvt_Hi,
+      DAG.getConstantFP(APInt(32, 0x4f800000).bitsToFloat(), DL, MVT::f32),
+      Cvt_Lo);
+    SDValue Rcp = DAG.getNode(AMDGPUISD::RCP, DL, MVT::f32, Mad1);
+    SDValue Mul1 = DAG.getNode(ISD::FMUL, DL, MVT::f32, Rcp,
+      DAG.getConstantFP(APInt(32, 0x5f7ffffc).bitsToFloat(), DL, MVT::f32));
+    SDValue Mul2 = DAG.getNode(ISD::FMUL, DL, MVT::f32, Mul1,
+      DAG.getConstantFP(APInt(32, 0x2f800000).bitsToFloat(), DL, MVT::f32));
+    SDValue Trunc = DAG.getNode(ISD::FTRUNC, DL, MVT::f32, Mul2);
+    SDValue Mad2 = DAG.getNode(FMAD, DL, MVT::f32, Trunc,
+      DAG.getConstantFP(APInt(32, 0xcf800000).bitsToFloat(), DL, MVT::f32),
+      Mul1);
+    SDValue Rcp_Lo = DAG.getNode(ISD::FP_TO_UINT, DL, HalfVT, Mad2);
+    SDValue Rcp_Hi = DAG.getNode(ISD::FP_TO_UINT, DL, HalfVT, Trunc);
+    SDValue Rcp64 = DAG.getBitcast(VT,
+                        DAG.getBuildVector(MVT::v2i32, DL, {Rcp_Lo, Rcp_Hi}));
+
+    SDValue Zero64 = DAG.getConstant(0, DL, VT);
+    SDValue One64  = DAG.getConstant(1, DL, VT);
+    SDValue Zero1 = DAG.getConstant(0, DL, MVT::i1);
+    SDVTList HalfCarryVT = DAG.getVTList(HalfVT, MVT::i1);
+
+    SDValue Neg_RHS = DAG.getNode(ISD::SUB, DL, VT, Zero64, RHS);
+    SDValue Mullo1 = DAG.getNode(ISD::MUL, DL, VT, Neg_RHS, Rcp64);
+    SDValue Mulhi1 = DAG.getNode(ISD::MULHU, DL, VT, Rcp64, Mullo1);
+    SDValue Mulhi1_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, Mulhi1,
+                                    Zero);
+    SDValue Mulhi1_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, Mulhi1,
+                                    One);
+
+    SDValue Add1_Lo = DAG.getNode(ISD::ADDCARRY, DL, HalfCarryVT, Rcp_Lo,
+                                  Mulhi1_Lo, Zero1);
+    SDValue Add1_Hi = DAG.getNode(ISD::ADDCARRY, DL, HalfCarryVT, Rcp_Hi,
+                                  Mulhi1_Hi, Add1_Lo.getValue(1));
+    SDValue Add1_HiNc = DAG.getNode(ISD::ADD, DL, HalfVT, Rcp_Hi, Mulhi1_Hi);
+    SDValue Add1 = DAG.getBitcast(VT,
+                        DAG.getBuildVector(MVT::v2i32, DL, {Add1_Lo, Add1_Hi}));
+
+    SDValue Mullo2 = DAG.getNode(ISD::MUL, DL, VT, Neg_RHS, Add1);
+    SDValue Mulhi2 = DAG.getNode(ISD::MULHU, DL, VT, Add1, Mullo2);
+    SDValue Mulhi2_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, Mulhi2,
+                                    Zero);
+    SDValue Mulhi2_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, Mulhi2,
+                                    One);
+
+    SDValue Add2_Lo = DAG.getNode(ISD::ADDCARRY, DL, HalfCarryVT, Add1_Lo,
+                                  Mulhi2_Lo, Zero1);
+    SDValue Add2_HiC = DAG.getNode(ISD::ADDCARRY, DL, HalfCarryVT, Add1_HiNc,
+                                   Mulhi2_Hi, Add1_Lo.getValue(1));
+    SDValue Add2_Hi = DAG.getNode(ISD::ADDCARRY, DL, HalfCarryVT, Add2_HiC,
+                                  Zero, Add2_Lo.getValue(1));
+    SDValue Add2 = DAG.getBitcast(VT,
+                        DAG.getBuildVector(MVT::v2i32, DL, {Add2_Lo, Add2_Hi}));
+    SDValue Mulhi3 = DAG.getNode(ISD::MULHU, DL, VT, LHS, Add2);
+
+    SDValue Mul3 = DAG.getNode(ISD::MUL, DL, VT, RHS, Mulhi3);
+
+    SDValue Mul3_Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, Mul3, Zero);
+    SDValue Mul3_Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, HalfVT, Mul3, One);
+    SDValue Sub1_Lo = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, LHS_Lo,
+                                  Mul3_Lo, Zero1);
+    SDValue Sub1_Hi = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, LHS_Hi,
+                                  Mul3_Hi, Sub1_Lo.getValue(1));
+    SDValue Sub1_Mi = DAG.getNode(ISD::SUB, DL, HalfVT, LHS_Hi, Mul3_Hi);
+    SDValue Sub1 = DAG.getBitcast(VT,
+                        DAG.getBuildVector(MVT::v2i32, DL, {Sub1_Lo, Sub1_Hi}));
+
+    SDValue MinusOne = DAG.getConstant(0xffffffffu, DL, HalfVT);
+    SDValue C1 = DAG.getSelectCC(DL, Sub1_Hi, RHS_Hi, MinusOne, Zero,
+                                 ISD::SETUGE);
+    SDValue C2 = DAG.getSelectCC(DL, Sub1_Lo, RHS_Lo, MinusOne, Zero,
+                                 ISD::SETUGE);
+    SDValue C3 = DAG.getSelectCC(DL, Sub1_Hi, RHS_Hi, C2, C1, ISD::SETEQ);
+
+    // TODO: Here and below portions of the code can be enclosed into if/endif.
+    // Currently control flow is unconditional and we have 4 selects after
+    // potential endif to substitute PHIs.
+
+    // if C3 != 0 ...
+    SDValue Sub2_Lo = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, Sub1_Lo,
+                                  RHS_Lo, Zero1);
+    SDValue Sub2_Mi = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, Sub1_Mi,
+                                  RHS_Hi, Sub1_Lo.getValue(1));
+    SDValue Sub2_Hi = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, Sub2_Mi,
+                                  Zero, Sub2_Lo.getValue(1));
+    SDValue Sub2 = DAG.getBitcast(VT,
+                        DAG.getBuildVector(MVT::v2i32, DL, {Sub2_Lo, Sub2_Hi}));
+
+    SDValue Add3 = DAG.getNode(ISD::ADD, DL, VT, Mulhi3, One64);
+
+    SDValue C4 = DAG.getSelectCC(DL, Sub2_Hi, RHS_Hi, MinusOne, Zero,
+                                 ISD::SETUGE);
+    SDValue C5 = DAG.getSelectCC(DL, Sub2_Lo, RHS_Lo, MinusOne, Zero,
+                                 ISD::SETUGE);
+    SDValue C6 = DAG.getSelectCC(DL, Sub2_Hi, RHS_Hi, C5, C4, ISD::SETEQ);
+
+    // if (C6 != 0)
+    SDValue Add4 = DAG.getNode(ISD::ADD, DL, VT, Add3, One64);
+
+    SDValue Sub3_Lo = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, Sub2_Lo,
+                                  RHS_Lo, Zero1);
+    SDValue Sub3_Mi = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, Sub2_Mi,
+                                  RHS_Hi, Sub2_Lo.getValue(1));
+    SDValue Sub3_Hi = DAG.getNode(ISD::SUBCARRY, DL, HalfCarryVT, Sub3_Mi,
+                                  Zero, Sub3_Lo.getValue(1));
+    SDValue Sub3 = DAG.getBitcast(VT,
+                        DAG.getBuildVector(MVT::v2i32, DL, {Sub3_Lo, Sub3_Hi}));
+
+    // endif C6
+    // endif C3
+
+    SDValue Sel1 = DAG.getSelectCC(DL, C6, Zero, Add4, Add3, ISD::SETNE);
+    SDValue Div  = DAG.getSelectCC(DL, C3, Zero, Sel1, Mulhi3, ISD::SETNE);
+
+    SDValue Sel2 = DAG.getSelectCC(DL, C6, Zero, Sub3, Sub2, ISD::SETNE);
+    SDValue Rem  = DAG.getSelectCC(DL, C3, Zero, Sel2, Sub1, ISD::SETNE);
+
+    Results.push_back(Div);
+    Results.push_back(Rem);
+
+    return;
+  }
+
+  // r600 expandion.
   // Get Speculative values
   SDValue DIV_Part = DAG.getNode(ISD::UDIV, DL, HalfVT, LHS_Hi, RHS_Lo);
   SDValue REM_Part = DAG.getNode(ISD::UREM, DL, HalfVT, LHS_Hi, RHS_Lo);
 
-  SDValue REM_Lo = DAG.getSelectCC(DL, RHS_Hi, zero, REM_Part, LHS_Hi, ISD::SETEQ);
-  SDValue REM = DAG.getBuildVector(MVT::v2i32, DL, {REM_Lo, zero});
+  SDValue REM_Lo = DAG.getSelectCC(DL, RHS_Hi, Zero, REM_Part, LHS_Hi, ISD::SETEQ);
+  SDValue REM = DAG.getBuildVector(MVT::v2i32, DL, {REM_Lo, Zero});
   REM = DAG.getNode(ISD::BITCAST, DL, MVT::i64, REM);
 
-  SDValue DIV_Hi = DAG.getSelectCC(DL, RHS_Hi, zero, DIV_Part, zero, ISD::SETEQ);
-  SDValue DIV_Lo = zero;
+  SDValue DIV_Hi = DAG.getSelectCC(DL, RHS_Hi, Zero, DIV_Part, Zero, ISD::SETEQ);
+  SDValue DIV_Lo = Zero;
 
   const unsigned halfBitWidth = HalfVT.getSizeInBits();
 
@@ -1556,7 +1696,7 @@ void AMDGPUTargetLowering::LowerUDIVREM64(SDValue Op,
     SDValue POS = DAG.getConstant(bitPos, DL, HalfVT);
     // Get value of high bit
     SDValue HBit = DAG.getNode(ISD::SRL, DL, HalfVT, LHS_Lo, POS);
-    HBit = DAG.getNode(ISD::AND, DL, HalfVT, HBit, one);
+    HBit = DAG.getNode(ISD::AND, DL, HalfVT, HBit, One);
     HBit = DAG.getNode(ISD::ZERO_EXTEND, DL, VT, HBit);
 
     // Shift
@@ -1565,7 +1705,7 @@ void AMDGPUTargetLowering::LowerUDIVREM64(SDValue Op,
     REM = DAG.getNode(ISD::OR, DL, VT, REM, HBit);
 
     SDValue BIT = DAG.getConstant(1ULL << bitPos, DL, HalfVT);
-    SDValue realBIT = DAG.getSelectCC(DL, REM, RHS, BIT, zero, ISD::SETUGE);
+    SDValue realBIT = DAG.getSelectCC(DL, REM, RHS, BIT, Zero, ISD::SETUGE);
 
     DIV_Lo = DAG.getNode(ISD::OR, DL, HalfVT, DIV_Lo, realBIT);
 
@@ -2022,13 +2162,33 @@ SDValue AMDGPUTargetLowering::LowerFFLOOR(SDValue Op, SelectionDAG &DAG) const {
   return DAG.getNode(ISD::FADD, SL, MVT::f64, Trunc, Add);
 }
 
-SDValue AMDGPUTargetLowering::LowerCTLZ(SDValue Op, SelectionDAG &DAG) const {
+static bool isCtlzOpc(unsigned Opc) {
+  return Opc == ISD::CTLZ || Opc == ISD::CTLZ_ZERO_UNDEF;
+}
+
+static bool isCttzOpc(unsigned Opc) {
+  return Opc == ISD::CTTZ || Opc == ISD::CTTZ_ZERO_UNDEF;
+}
+
+SDValue AMDGPUTargetLowering::LowerCTLZ_CTTZ(SDValue Op, SelectionDAG &DAG) const {
   SDLoc SL(Op);
   SDValue Src = Op.getOperand(0);
-  bool ZeroUndef = Op.getOpcode() == ISD::CTLZ_ZERO_UNDEF;
+  bool ZeroUndef = Op.getOpcode() == ISD::CTTZ_ZERO_UNDEF ||
+                   Op.getOpcode() == ISD::CTLZ_ZERO_UNDEF;
+
+  unsigned ISDOpc, NewOpc;
+  if (isCtlzOpc(Op.getOpcode())) {
+    ISDOpc = ISD::CTLZ_ZERO_UNDEF;
+    NewOpc = AMDGPUISD::FFBH_U32;
+  } else if (isCttzOpc(Op.getOpcode())) {
+    ISDOpc = ISD::CTTZ_ZERO_UNDEF;
+    NewOpc = AMDGPUISD::FFBL_B32;
+  } else
+    llvm_unreachable("Unexpected OPCode!!!");
+
 
   if (ZeroUndef && Src.getValueType() == MVT::i32)
-    return DAG.getNode(AMDGPUISD::FFBH_U32, SL, MVT::i32, Src);
+    return DAG.getNode(NewOpc, SL, MVT::i32, Src);
 
   SDValue Vec = DAG.getNode(ISD::BITCAST, SL, MVT::v2i32, Src);
 
@@ -2041,24 +2201,32 @@ SDValue AMDGPUTargetLowering::LowerCTLZ(SDValue Op, SelectionDAG &DAG) const {
   EVT SetCCVT = getSetCCResultType(DAG.getDataLayout(),
                                    *DAG.getContext(), MVT::i32);
 
-  SDValue Hi0 = DAG.getSetCC(SL, SetCCVT, Hi, Zero, ISD::SETEQ);
+  SDValue HiOrLo = isCtlzOpc(Op.getOpcode()) ? Hi : Lo;
+  SDValue Hi0orLo0 = DAG.getSetCC(SL, SetCCVT, HiOrLo, Zero, ISD::SETEQ);
 
-  SDValue CtlzLo = DAG.getNode(ISD::CTLZ_ZERO_UNDEF, SL, MVT::i32, Lo);
-  SDValue CtlzHi = DAG.getNode(ISD::CTLZ_ZERO_UNDEF, SL, MVT::i32, Hi);
+  SDValue OprLo = DAG.getNode(ISDOpc, SL, MVT::i32, Lo);
+  SDValue OprHi = DAG.getNode(ISDOpc, SL, MVT::i32, Hi);
 
   const SDValue Bits32 = DAG.getConstant(32, SL, MVT::i32);
-  SDValue Add = DAG.getNode(ISD::ADD, SL, MVT::i32, CtlzLo, Bits32);
-
-  // ctlz(x) = hi_32(x) == 0 ? ctlz(lo_32(x)) + 32 : ctlz(hi_32(x))
-  SDValue NewCtlz = DAG.getNode(ISD::SELECT, SL, MVT::i32, Hi0, Add, CtlzHi);
+  SDValue Add, NewOpr;
+  if (isCtlzOpc(Op.getOpcode())) {
+    Add = DAG.getNode(ISD::ADD, SL, MVT::i32, OprLo, Bits32);
+    // ctlz(x) = hi_32(x) == 0 ? ctlz(lo_32(x)) + 32 : ctlz(hi_32(x))
+    NewOpr = DAG.getNode(ISD::SELECT, SL, MVT::i32, Hi0orLo0, Add, OprHi);
+  } else {
+    Add = DAG.getNode(ISD::ADD, SL, MVT::i32, OprHi, Bits32);
+    // cttz(x) = lo_32(x) == 0 ? cttz(hi_32(x)) + 32 : cttz(lo_32(x))
+    NewOpr = DAG.getNode(ISD::SELECT, SL, MVT::i32, Hi0orLo0, Add, OprLo);
+  }
 
   if (!ZeroUndef) {
     // Test if the full 64-bit input is zero.
 
     // FIXME: DAG combines turn what should be an s_and_b64 into a v_or_b32,
     // which we probably don't want.
-    SDValue Lo0 = DAG.getSetCC(SL, SetCCVT, Lo, Zero, ISD::SETEQ);
-    SDValue SrcIsZero = DAG.getNode(ISD::AND, SL, SetCCVT, Lo0, Hi0);
+    SDValue LoOrHi = isCtlzOpc(Op.getOpcode()) ? Lo : Hi;
+    SDValue Lo0OrHi0 = DAG.getSetCC(SL, SetCCVT, LoOrHi, Zero, ISD::SETEQ);
+    SDValue SrcIsZero = DAG.getNode(ISD::AND, SL, SetCCVT, Lo0OrHi0, Hi0orLo0);
 
     // TODO: If i64 setcc is half rate, it can result in 1 fewer instruction
     // with the same cycles, otherwise it is slower.
@@ -2069,11 +2237,11 @@ SDValue AMDGPUTargetLowering::LowerCTLZ(SDValue Op, SelectionDAG &DAG) const {
 
     // The instruction returns -1 for 0 input, but the defined intrinsic
     // behavior is to return the number of bits.
-    NewCtlz = DAG.getNode(ISD::SELECT, SL, MVT::i32,
-                          SrcIsZero, Bits32, NewCtlz);
+    NewOpr = DAG.getNode(ISD::SELECT, SL, MVT::i32,
+                         SrcIsZero, Bits32, NewOpr);
   }
 
-  return DAG.getNode(ISD::ZERO_EXTEND, SL, MVT::i64, NewCtlz);
+  return DAG.getNode(ISD::ZERO_EXTEND, SL, MVT::i64, NewOpr);
 }
 
 SDValue AMDGPUTargetLowering::LowerINT_TO_FP32(SDValue Op, SelectionDAG &DAG,
@@ -2440,21 +2608,14 @@ SDValue AMDGPUTargetLowering::LowerSIGN_EXTEND_INREG(SDValue Op,
 //===----------------------------------------------------------------------===//
 
 static bool isU24(SDValue Op, SelectionDAG &DAG) {
-  KnownBits Known;
-  EVT VT = Op.getValueType();
-  DAG.computeKnownBits(Op, Known);
-
-  return (VT.getSizeInBits() - Known.countMinLeadingZeros()) <= 24;
+  return AMDGPUTargetLowering::numBitsUnsigned(Op, DAG) <= 24;
 }
 
 static bool isI24(SDValue Op, SelectionDAG &DAG) {
   EVT VT = Op.getValueType();
-
-  // In order for this to be a signed 24-bit value, bit 23, must
-  // be a sign bit.
   return VT.getSizeInBits() >= 24 && // Types less than 24-bit should be treated
                                      // as unsigned 24-bit values.
-         (VT.getSizeInBits() - DAG.ComputeNumSignBits(Op)) < 24;
+    AMDGPUTargetLowering::numBitsSigned(Op, DAG) < 24;
 }
 
 static bool simplifyI24(SDNode *Node24, unsigned OpIdx,
@@ -2739,21 +2900,6 @@ SDValue AMDGPUTargetLowering::performShlCombine(SDNode *N,
     SDValue Shl = DAG.getNode(ISD::SHL, SL, XVT, X, SDValue(RHS, 0));
     return DAG.getZExtOrTrunc(Shl, SL, VT);
   }
-  case ISD::OR:
-    if (!isOrEquivalentToAdd(DAG, LHS))
-      break;
-    LLVM_FALLTHROUGH;
-  case ISD::ADD: {
-    // shl (or|add x, c2), c1 => or|add (shl x, c1), (c2 << c1)
-    if (ConstantSDNode *C2 = dyn_cast<ConstantSDNode>(LHS->getOperand(1))) {
-      SDValue Shl = DAG.getNode(ISD::SHL, SL, VT, LHS->getOperand(0),
-                                SDValue(RHS, 0));
-      SDValue C2V = DAG.getConstant(C2->getAPIntValue() << RHSVal,
-                                    SDLoc(C2), VT);
-      return DAG.getNode(LHS->getOpcode(), SL, VT, Shl, C2V);
-    }
-    break;
-  }
   }
 
   if (VT != MVT::i64)
@@ -2985,13 +3131,10 @@ static bool isNegativeOne(SDValue Val) {
   return false;
 }
 
-static bool isCtlzOpc(unsigned Opc) {
-  return Opc == ISD::CTLZ || Opc == ISD::CTLZ_ZERO_UNDEF;
-}
-
-SDValue AMDGPUTargetLowering::getFFBH_U32(SelectionDAG &DAG,
+SDValue AMDGPUTargetLowering::getFFBX_U32(SelectionDAG &DAG,
                                           SDValue Op,
-                                          const SDLoc &DL) const {
+                                          const SDLoc &DL,
+                                          unsigned Opc) const {
   EVT VT = Op.getValueType();
   EVT LegalVT = getTypeToTransformTo(*DAG.getContext(), VT);
   if (LegalVT != MVT::i32 && (Subtarget->has16BitInsts() &&
@@ -3001,11 +3144,11 @@ SDValue AMDGPUTargetLowering::getFFBH_U32(SelectionDAG &DAG,
   if (VT != MVT::i32)
     Op = DAG.getNode(ISD::ZERO_EXTEND, DL, MVT::i32, Op);
 
-  SDValue FFBH = DAG.getNode(AMDGPUISD::FFBH_U32, DL, MVT::i32, Op);
+  SDValue FFBX = DAG.getNode(Opc, DL, MVT::i32, Op);
   if (VT != MVT::i32)
-    FFBH = DAG.getNode(ISD::TRUNCATE, DL, VT, FFBH);
+    FFBX = DAG.getNode(ISD::TRUNCATE, DL, VT, FFBX);
 
-  return FFBH;
+  return FFBX;
 }
 
 // The native instructions return -1 on 0 input. Optimize out a select that
@@ -3015,7 +3158,7 @@ SDValue AMDGPUTargetLowering::getFFBH_U32(SelectionDAG &DAG,
 // against the bitwidth.
 //
 // TODO: Should probably combine against FFBH_U32 instead of ctlz directly.
-SDValue AMDGPUTargetLowering::performCtlzCombine(const SDLoc &SL, SDValue Cond,
+SDValue AMDGPUTargetLowering::performCtlz_CttzCombine(const SDLoc &SL, SDValue Cond,
                                                  SDValue LHS, SDValue RHS,
                                                  DAGCombinerInfo &DCI) const {
   ConstantSDNode *CmpRhs = dyn_cast<ConstantSDNode>(Cond.getOperand(1));
@@ -3026,20 +3169,25 @@ SDValue AMDGPUTargetLowering::performCtlzCombine(const SDLoc &SL, SDValue Cond,
   ISD::CondCode CCOpcode = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
   SDValue CmpLHS = Cond.getOperand(0);
 
+  unsigned Opc = isCttzOpc(RHS.getOpcode()) ? AMDGPUISD::FFBL_B32 :
+                                           AMDGPUISD::FFBH_U32;
+
   // select (setcc x, 0, eq), -1, (ctlz_zero_undef x) -> ffbh_u32 x
+  // select (setcc x, 0, eq), -1, (cttz_zero_undef x) -> ffbl_u32 x
   if (CCOpcode == ISD::SETEQ &&
-      isCtlzOpc(RHS.getOpcode()) &&
+      (isCtlzOpc(RHS.getOpcode()) || isCttzOpc(RHS.getOpcode())) &&
       RHS.getOperand(0) == CmpLHS &&
       isNegativeOne(LHS)) {
-    return getFFBH_U32(DAG, CmpLHS, SL);
+    return getFFBX_U32(DAG, CmpLHS, SL, Opc);
   }
 
   // select (setcc x, 0, ne), (ctlz_zero_undef x), -1 -> ffbh_u32 x
+  // select (setcc x, 0, ne), (cttz_zero_undef x), -1 -> ffbl_u32 x
   if (CCOpcode == ISD::SETNE &&
-      isCtlzOpc(LHS.getOpcode()) &&
+      (isCtlzOpc(LHS.getOpcode()) || isCttzOpc(RHS.getOpcode())) &&
       LHS.getOperand(0) == CmpLHS &&
       isNegativeOne(RHS)) {
-    return getFFBH_U32(DAG, CmpLHS, SL);
+    return getFFBX_U32(DAG, CmpLHS, SL, Opc);
   }
 
   return SDValue();
@@ -3172,7 +3320,7 @@ SDValue AMDGPUTargetLowering::performSelectCombine(SDNode *N,
   }
 
   // There's no reason to not do this if the condition has other uses.
-  return performCtlzCombine(SDLoc(N), Cond, True, False, DCI);
+  return performCtlz_CttzCombine(SDLoc(N), Cond, True, False, DCI);
 }
 
 static bool isConstantFPZero(SDValue N) {
@@ -3760,6 +3908,7 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(BFM)
   NODE_NAME_CASE(FFBH_U32)
   NODE_NAME_CASE(FFBH_I32)
+  NODE_NAME_CASE(FFBL_B32)
   NODE_NAME_CASE(MUL_U24)
   NODE_NAME_CASE(MUL_I24)
   NODE_NAME_CASE(MULHI_U24)
@@ -3768,6 +3917,8 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(MUL_LOHI_I24)
   NODE_NAME_CASE(MAD_U24)
   NODE_NAME_CASE(MAD_I24)
+  NODE_NAME_CASE(MAD_I64_I32)
+  NODE_NAME_CASE(MAD_U64_U32)
   NODE_NAME_CASE(TEXTURE_FETCH)
   NODE_NAME_CASE(EXPORT)
   NODE_NAME_CASE(EXPORT_DONE)
@@ -3809,6 +3960,19 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const {
   NODE_NAME_CASE(ATOMIC_DEC)
   NODE_NAME_CASE(BUFFER_LOAD)
   NODE_NAME_CASE(BUFFER_LOAD_FORMAT)
+  NODE_NAME_CASE(BUFFER_STORE)
+  NODE_NAME_CASE(BUFFER_STORE_FORMAT)
+  NODE_NAME_CASE(BUFFER_ATOMIC_SWAP)
+  NODE_NAME_CASE(BUFFER_ATOMIC_ADD)
+  NODE_NAME_CASE(BUFFER_ATOMIC_SUB)
+  NODE_NAME_CASE(BUFFER_ATOMIC_SMIN)
+  NODE_NAME_CASE(BUFFER_ATOMIC_UMIN)
+  NODE_NAME_CASE(BUFFER_ATOMIC_SMAX)
+  NODE_NAME_CASE(BUFFER_ATOMIC_UMAX)
+  NODE_NAME_CASE(BUFFER_ATOMIC_AND)
+  NODE_NAME_CASE(BUFFER_ATOMIC_OR)
+  NODE_NAME_CASE(BUFFER_ATOMIC_XOR)
+  NODE_NAME_CASE(BUFFER_ATOMIC_CMPSWAP)
   case AMDGPUISD::LAST_AMDGPU_ISD_NUMBER: break;
   }
   return nullptr;

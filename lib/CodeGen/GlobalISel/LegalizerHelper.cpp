@@ -91,6 +91,9 @@ static RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size) {
   case TargetOpcode::G_FADD:
     assert((Size == 32 || Size == 64) && "Unsupported size");
     return Size == 64 ? RTLIB::ADD_F64 : RTLIB::ADD_F32;
+  case TargetOpcode::G_FSUB:
+    assert((Size == 32 || Size == 64) && "Unsupported size");
+    return Size == 64 ? RTLIB::SUB_F64 : RTLIB::SUB_F32;
   case TargetOpcode::G_FREM:
     return Size == 64 ? RTLIB::REM_F64 : RTLIB::REM_F32;
   case TargetOpcode::G_FPOW:
@@ -146,6 +149,7 @@ LegalizerHelper::libcall(MachineInstr &MI) {
     break;
   }
   case TargetOpcode::G_FADD:
+  case TargetOpcode::G_FSUB:
   case TargetOpcode::G_FPOW:
   case TargetOpcode::G_FREM: {
     Type *HLTy = Size == 64 ? Type::getDoubleTy(Ctx) : Type::getFloatTy(Ctx);
@@ -169,12 +173,18 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
 
   MIRBuilder.setInstr(MI);
 
+  int64_t SizeOp0 = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits();
+  int64_t NarrowSize = NarrowTy.getSizeInBits();
+
   switch (MI.getOpcode()) {
   default:
     return UnableToLegalize;
   case TargetOpcode::G_IMPLICIT_DEF: {
-    int NumParts = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() /
-                   NarrowTy.getSizeInBits();
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
+      return UnableToLegalize;
+    int NumParts = SizeOp0 / NarrowSize;
 
     SmallVector<unsigned, 2> DstRegs;
     for (int i = 0; i < NumParts; ++i) {
@@ -187,9 +197,12 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     return Legalized;
   }
   case TargetOpcode::G_ADD: {
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
+      return UnableToLegalize;
     // Expand in terms of carry-setting/consuming G_ADDE instructions.
-    int NumParts = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() /
-                   NarrowTy.getSizeInBits();
+    int NumParts = SizeOp0 / NarrowTy.getSizeInBits();
 
     SmallVector<unsigned, 2> Src1Regs, Src2Regs, DstRegs;
     extractParts(MI.getOperand(1).getReg(), NarrowTy, NumParts, Src1Regs);
@@ -217,9 +230,12 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     if (TypeIdx != 1)
       return UnableToLegalize;
 
-    int64_t NarrowSize = NarrowTy.getSizeInBits();
-    int NumParts =
-        MRI.getType(MI.getOperand(1).getReg()).getSizeInBits() / NarrowSize;
+    int64_t SizeOp1 = MRI.getType(MI.getOperand(1).getReg()).getSizeInBits();
+    // FIXME: add support for when SizeOp1 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp1 % NarrowSize != 0)
+      return UnableToLegalize;
+    int NumParts = SizeOp1 / NarrowSize;
 
     SmallVector<unsigned, 2> SrcRegs, DstRegs;
     SmallVector<uint64_t, 2> Indexes;
@@ -266,12 +282,12 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     return Legalized;
   }
   case TargetOpcode::G_INSERT: {
-    if (TypeIdx != 0)
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
       return UnableToLegalize;
 
-    int64_t NarrowSize = NarrowTy.getSizeInBits();
-    int NumParts =
-        MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() / NarrowSize;
+    int NumParts = SizeOp0 / NarrowSize;
 
     SmallVector<unsigned, 2> SrcRegs, DstRegs;
     SmallVector<uint64_t, 2> Indexes;
@@ -326,9 +342,11 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     return Legalized;
   }
   case TargetOpcode::G_LOAD: {
-    unsigned NarrowSize = NarrowTy.getSizeInBits();
-    int NumParts =
-        MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() / NarrowSize;
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
+      return UnableToLegalize;
+    int NumParts = SizeOp0 / NarrowSize;
     LLT OffsetTy = LLT::scalar(
         MRI.getType(MI.getOperand(1).getReg()).getScalarSizeInBits());
 
@@ -353,9 +371,11 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     return Legalized;
   }
   case TargetOpcode::G_STORE: {
-    unsigned NarrowSize = NarrowTy.getSizeInBits();
-    int NumParts =
-        MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() / NarrowSize;
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
+      return UnableToLegalize;
+    int NumParts = SizeOp0 / NarrowSize;
     LLT OffsetTy = LLT::scalar(
         MRI.getType(MI.getOperand(1).getReg()).getScalarSizeInBits());
 
@@ -377,9 +397,11 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     return Legalized;
   }
   case TargetOpcode::G_CONSTANT: {
-    unsigned NarrowSize = NarrowTy.getSizeInBits();
-    int NumParts =
-        MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() / NarrowSize;
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
+      return UnableToLegalize;
+    int NumParts = SizeOp0 / NarrowSize;
     const APInt &Cst = MI.getOperand(1).getCImm()->getValue();
     LLVMContext &Ctx = MIRBuilder.getMF().getFunction()->getContext();
 
@@ -406,9 +428,12 @@ LegalizerHelper::LegalizeResult LegalizerHelper::narrowScalar(MachineInstr &MI,
     // ...
     // AN = BinOp<Ty/N> BN, CN
     // A = G_MERGE_VALUES A1, ..., AN
-    unsigned NarrowSize = NarrowTy.getSizeInBits();
-    int NumParts =
-        MRI.getType(MI.getOperand(0).getReg()).getSizeInBits() / NarrowSize;
+
+    // FIXME: add support for when SizeOp0 isn't an exact multiple of
+    // NarrowSize.
+    if (SizeOp0 % NarrowSize != 0)
+      return UnableToLegalize;
+    int NumParts = SizeOp0 / NarrowSize;
 
     // List the registers where the destination will be scattered.
     SmallVector<unsigned, 2> DstRegs;
@@ -850,7 +875,12 @@ LegalizerHelper::fewerElementsVector(MachineInstr &MI, unsigned TypeIdx,
   case TargetOpcode::G_ADD: {
     unsigned NarrowSize = NarrowTy.getSizeInBits();
     unsigned DstReg = MI.getOperand(0).getReg();
-    int NumParts = MRI.getType(DstReg).getSizeInBits() / NarrowSize;
+    unsigned Size = MRI.getType(DstReg).getSizeInBits();
+    int NumParts = Size / NarrowSize;
+    // FIXME: Don't know how to handle the situation where the small vectors
+    // aren't all the same size yet.
+    if (Size % NarrowSize != 0)
+      return UnableToLegalize;
 
     MIRBuilder.setInstr(MI);
 

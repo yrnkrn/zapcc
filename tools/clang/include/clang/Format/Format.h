@@ -1327,6 +1327,41 @@ struct FormatStyle {
   /// \brief Pointer and reference alignment style.
   PointerAlignmentStyle PointerAlignment;
 
+  /// See documentation of ``RawStringFormats``.
+  struct RawStringFormat {
+    /// \brief The delimiter that this raw string format matches.
+    std::string Delimiter;
+    /// \brief The language of this raw string.
+    LanguageKind Language;
+    /// \brief The style name on which this raw string format is based on.
+    /// If not specified, the raw string format is based on the style that this
+    /// format is based on.
+    std::string BasedOnStyle;
+    bool operator==(const RawStringFormat &Other) const {
+      return Delimiter == Other.Delimiter && Language == Other.Language &&
+             BasedOnStyle == Other.BasedOnStyle;
+    }
+  };
+
+  /// \brief Raw string delimiters denoting that the raw string contents are
+  /// code in a particular language and can be reformatted.
+  ///
+  /// A raw string with a matching delimiter will be reformatted assuming the
+  /// specified language based on a predefined style given by 'BasedOnStyle'.
+  /// If 'BasedOnStyle' is not found, the formatting is based on llvm style.
+  ///
+  /// To configure this in the .clang-format file, use:
+  /// \code{.yaml}
+  ///   RawStringFormats:
+  ///     - Delimiter: 'pb'
+  ///       Language:  TextProto
+  ///       BasedOnStyle: llvm
+  ///     - Delimiter: 'proto'
+  ///       Language:  TextProto
+  ///       BasedOnStyle: google
+  /// \endcode
+  std::vector<RawStringFormat> RawStringFormats;
+
   /// \brief If ``true``, clang-format will attempt to re-flow comments.
   /// \code
   ///    false:
@@ -1350,6 +1385,14 @@ struct FormatStyle {
   bool SortIncludes;
 
   /// \brief If ``true``, clang-format will sort using declarations.
+  ///
+  /// The order of using declarations is defined as follows:
+  /// Split the strings by "::" and discard any initial empty strings. The last
+  /// element of each list is a non-namespace name; all others are namespace
+  /// names. Sort the lists of names lexicographically, where the sort order of
+  /// individual names is that all non-namespace names come before all namespace
+  /// names, and within those groups, names are in case-insensitive
+  /// lexicographic order.
   /// \code
   ///    false:                                 true:
   ///    using std::cout;               vs.     using std::cin;
@@ -1592,6 +1635,7 @@ struct FormatStyle {
            PenaltyExcessCharacter == R.PenaltyExcessCharacter &&
            PenaltyReturnTypeOnItsOwnLine == R.PenaltyReturnTypeOnItsOwnLine &&
            PointerAlignment == R.PointerAlignment &&
+           RawStringFormats == R.RawStringFormats &&
            SpaceAfterCStyleCast == R.SpaceAfterCStyleCast &&
            SpaceAfterTemplateKeyword == R.SpaceAfterTemplateKeyword &&
            SpaceBeforeAssignmentOperators == R.SpaceBeforeAssignmentOperators &&

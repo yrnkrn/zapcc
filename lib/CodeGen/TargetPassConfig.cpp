@@ -111,6 +111,11 @@ static cl::opt<bool> VerifyMachineCode("verify-machineinstrs", cl::Hidden,
 static cl::opt<bool> EnableMachineOutliner("enable-machine-outliner",
     cl::Hidden,
     cl::desc("Enable machine outliner"));
+static cl::opt<bool> EnableLinkOnceODROutlining(
+    "enable-linkonceodr-outlining",
+    cl::Hidden,
+    cl::desc("Enable the machine outliner on linkonceodr functions"),
+    cl::init(false));
 // Enable or disable FastISel. Both options are needed, because
 // FastISel is enabled by default with -fast, and we wish to be
 // able to enable or disable fast-isel independently from -O0.
@@ -595,8 +600,14 @@ void TargetPassConfig::addIRPasses() {
       addPass(createPrintFunctionPass(dbgs(), "\n\n*** Code after LSR ***\n"));
   }
 
-  if (getOptLevel() != CodeGenOpt::None && EnableMergeICmps) {
-    addPass(createMergeICmpsPass());
+  if (getOptLevel() != CodeGenOpt::None) {
+    // The MergeICmpsPass tries to create memcmp calls by grouping sequences of
+    // loads and compares. ExpandMemCmpPass then tries to expand those calls
+    // into optimally-sized loads and compares. The transforms are enabled by a
+    // target lowering hook.
+    if (EnableMergeICmps)
+      addPass(createMergeICmpsPass());
+    addPass(createExpandMemCmpPass());
   }
 
   // Run GC lowering passes for builtin collectors
@@ -891,7 +902,7 @@ void TargetPassConfig::addMachinePasses() {
   addPass(&PatchableFunctionID, false);
 
   if (EnableMachineOutliner)
-    PM->add(createMachineOutlinerPass());
+    PM->add(createMachineOutlinerPass(EnableLinkOnceODROutlining));
 
   AddingMachinePasses = false;
 }

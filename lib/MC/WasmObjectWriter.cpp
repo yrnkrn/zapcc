@@ -227,8 +227,10 @@ class WasmObjectWriter : public MCObjectWriter {
   void endSection(SectionBookkeeping &Section);
 
 public:
-  WasmObjectWriter(MCWasmObjectTargetWriter *MOTW, raw_pwrite_stream &OS)
-      : MCObjectWriter(OS, /*IsLittleEndian=*/true), TargetObjectWriter(MOTW) {}
+  WasmObjectWriter(std::unique_ptr<MCWasmObjectTargetWriter> MOTW,
+                   raw_pwrite_stream &OS)
+      : MCObjectWriter(OS, /*IsLittleEndian=*/true),
+        TargetObjectWriter(std::move(MOTW)) {}
 
 private:
   ~WasmObjectWriter() override;
@@ -435,10 +437,13 @@ void WasmObjectWriter::recordRelocation(MCAssembler &Asm,
   WasmRelocationEntry Rec(FixupOffset, SymA, C, Type, &FixupSection);
   DEBUG(dbgs() << "WasmReloc: " << Rec << "\n");
 
-  if (FixupSection.hasInstructions())
-    CodeRelocations.push_back(Rec);
-  else
+  if (FixupSection.isWasmData())
     DataRelocations.push_back(Rec);
+  else if (FixupSection.getKind().isText())
+    CodeRelocations.push_back(Rec);
+  else if (!FixupSection.getKind().isMetadata())
+    // TODO(sbc): Add support for debug sections.
+    llvm_unreachable("unexpected section type");
 }
 
 // Write X as an (unsigned) LEB value at offset Offset in Stream, padded
@@ -505,6 +510,7 @@ static void addData(SmallVectorImpl<char> &DataBytes,
 
   DataBytes.resize(alignTo(DataBytes.size(), DataSection.getAlignment()));
 
+  size_t LastFragmentSize = 0;
   for (const MCFragment &Frag : DataSection) {
     if (Frag.hasInstructions())
       report_fatal_error("only data supported in data sections");
@@ -526,9 +532,16 @@ static void addData(SmallVectorImpl<char> &DataBytes,
       const SmallVectorImpl<char> &Contents = DataFrag.getContents();
 
       DataBytes.insert(DataBytes.end(), Contents.begin(), Contents.end());
+      LastFragmentSize = Contents.size();
     }
   }
 
+  // Don't allow empty segments, or segments that end with zero-sized
+  // fragment, otherwise the linker cannot map symbols to a unique
+  // data segment.  This can be triggered by zero-sized structs
+  // See: test/MC/WebAssembly/bss.ll
+  if (LastFragmentSize == 0)
+    DataBytes.resize(DataBytes.size() + 1);
   DEBUG(dbgs() << "addData -> " << DataBytes.size() << "\n");
 }
 
@@ -1058,7 +1071,8 @@ void WasmObjectWriter::writeObject(MCAssembler &Asm,
   // In the special .global_variables section, we've encoded global
   // variables used by the function. Translate them into the Globals
   // list.
-  MCSectionWasm *GlobalVars = Ctx.getWasmSection(".global_variables", wasm::WASM_SEC_DATA);
+  MCSectionWasm *GlobalVars =
+      Ctx.getWasmSection(".global_variables", SectionKind::getMetadata());
   if (!GlobalVars->getFragmentList().empty()) {
     if (GlobalVars->getFragmentList().size() != 1)
       report_fatal_error("only one .global_variables fragment supported");
@@ -1114,7 +1128,8 @@ void WasmObjectWriter::writeObject(MCAssembler &Asm,
 
   // In the special .stack_pointer section, we've encoded the stack pointer
   // index.
-  MCSectionWasm *StackPtr = Ctx.getWasmSection(".stack_pointer", wasm::WASM_SEC_DATA);
+  MCSectionWasm *StackPtr =
+      Ctx.getWasmSection(".stack_pointer", SectionKind::getMetadata());
   if (!StackPtr->getFragmentList().empty()) {
     if (StackPtr->getFragmentList().size() != 1)
       report_fatal_error("only one .stack_pointer fragment supported");
@@ -1133,7 +1148,7 @@ void WasmObjectWriter::writeObject(MCAssembler &Asm,
 
   for (MCSection &Sec : Asm) {
     auto &Section = static_cast<MCSectionWasm &>(Sec);
-    if (Section.getType() != wasm::WASM_SEC_DATA)
+    if (!Section.isWasmData())
       continue;
 
     DataSize = alignTo(DataSize, Section.getAlignment());
@@ -1315,7 +1330,11 @@ void WasmObjectWriter::writeObject(MCAssembler &Asm,
   // TODO: Translate debug sections to the output.
 }
 
-MCObjectWriter *llvm::createWasmObjectWriter(MCWasmObjectTargetWriter *MOTW,
-                                             raw_pwrite_stream &OS) {
-  return new WasmObjectWriter(MOTW, OS);
+std::unique_ptr<MCObjectWriter>
+llvm::createWasmObjectWriter(std::unique_ptr<MCWasmObjectTargetWriter> MOTW,
+                             raw_pwrite_stream &OS) {
+  // FIXME: Can't use make_unique<WasmObjectWriter>(...) as WasmObjectWriter's
+  //        destructor is private. Is that necessary?
+  return std::unique_ptr<MCObjectWriter>(
+      new WasmObjectWriter(std::move(MOTW), OS));
 }

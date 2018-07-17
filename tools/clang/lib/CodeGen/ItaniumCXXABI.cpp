@@ -578,9 +578,9 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
     llvm::Value *MemFnPtr, const MemberPointerType *MPT) {
   CGBuilderTy &Builder = CGF.Builder;
 
-  const FunctionProtoType *FPT = 
+  const FunctionProtoType *FPT =
     MPT->getPointeeType()->getAs<FunctionProtoType>();
-  const CXXRecordDecl *RD = 
+  const CXXRecordDecl *RD =
     cast<CXXRecordDecl>(MPT->getClass()->getAs<RecordType>()->getDecl());
 
   llvm::FunctionType *FTy = CGM.getTypes().GetFunctionType(
@@ -607,10 +607,10 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
   Ptr = Builder.CreateInBoundsGEP(Ptr, Adj);
   This = Builder.CreateBitCast(Ptr, This->getType(), "this.adjusted");
   ThisPtrForCall = This;
-  
+
   // Load the function pointer.
   llvm::Value *FnAsInt = Builder.CreateExtractValue(MemFnPtr, 0, "memptr.ptr");
-  
+
   // If the LSB in the function pointer is 1, the function pointer points to
   // a virtual function.
   llvm::Value *IsVirtual;
@@ -658,7 +658,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
   CGF.EmitBlock(FnNonVirtual);
   llvm::Value *NonVirtualFn =
     Builder.CreateIntToPtr(FnAsInt, FTy->getPointerTo(), "memptr.nonvirtualfn");
-  
+
   // We're done.
   CGF.EmitBlock(FnEnd);
   llvm::PHINode *CalleePtr = Builder.CreatePHI(FTy->getPointerTo(), 2);
@@ -823,7 +823,7 @@ llvm::Constant *
 ItaniumCXXABI::EmitNullMemberPointer(const MemberPointerType *MPT) {
   // Itanium C++ ABI 2.3:
   //   A NULL pointer is represented as -1.
-  if (MPT->isMemberDataPointer()) 
+  if (MPT->isMemberDataPointer())
     return llvm::ConstantInt::get(CGM.PtrDiffTy, -1ULL, /*isSigned=*/true);
 
   llvm::Constant *Zero = llvm::ConstantInt::get(CGM.PtrDiffTy, 0);
@@ -900,7 +900,7 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
                                        (UseARMMethodPtrABI ? 2 : 1) *
                                        ThisAdjustment.getQuantity());
   }
-  
+
   return llvm::ConstantStruct::getAnon(MemPtr);
 }
 
@@ -959,7 +959,7 @@ ItaniumCXXABI::EmitMemberPointerComparison(CodeGenFunction &CGF,
   //                   (L.ptr == 0 && ((L.adj|R.adj) & 1) == 0)))
   // The inequality tautologies have exactly the same structure, except
   // applying De Morgan's laws.
-  
+
   llvm::Value *LPtr = Builder.CreateExtractValue(L, 0, "lhs.memptr.ptr");
   llvm::Value *RPtr = Builder.CreateExtractValue(R, 0, "rhs.memptr.ptr");
 
@@ -1012,7 +1012,7 @@ ItaniumCXXABI::EmitMemberPointerIsNotNull(CodeGenFunction &CGF,
       llvm::Constant::getAllOnesValue(MemPtr->getType());
     return Builder.CreateICmpNE(MemPtr, NegativeOne, "memptr.tobool");
   }
-  
+
   // In Itanium, a member function pointer is not null if 'ptr' is not null.
   llvm::Value *Ptr = Builder.CreateExtractValue(MemPtr, 0, "memptr.ptr");
 
@@ -1170,9 +1170,9 @@ static llvm::Constant *getItaniumDynamicCastFn(CodeGenFunction &CGF) {
   //                      const abi::__class_type_info *src,
   //                      const abi::__class_type_info *dst,
   //                      std::ptrdiff_t src2dst_offset);
-  
+
   llvm::Type *Int8PtrTy = CGF.Int8PtrTy;
-  llvm::Type *PtrDiffTy = 
+  llvm::Type *PtrDiffTy =
     CGF.ConvertType(CGF.getContext().getPointerDiffType());
 
   llvm::Type *Args[4] = { Int8PtrTy, Int8PtrTy, Int8PtrTy, PtrDiffTy };
@@ -2168,19 +2168,19 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
   CGF.EmitBlock(InitCheckBlock);
 
   // Variables used when coping with thread-safe statics and exceptions.
-  if (threadsafe) {    
+  if (threadsafe) {
     // Call __cxa_guard_acquire.
     llvm::Value *V
       = CGF.EmitNounwindRuntimeCall(getGuardAcquireFn(CGM, guardPtrTy), guard);
-               
+
     llvm::BasicBlock *InitBlock = CGF.createBasicBlock("init");
-  
+
     Builder.CreateCondBr(Builder.CreateIsNotNull(V, "tobool"),
                          InitBlock, EndBlock);
-  
+
     // Call __cxa_guard_abort along the exceptional edge.
     CGF.EHStack.pushCleanup<CallGuardAbort>(EHCleanup, guard);
-    
+
     CGF.EmitBlock(InitBlock);
   }
 
@@ -2497,11 +2497,11 @@ LValue ItaniumCXXABI::EmitThreadLocalVarDeclLValue(CodeGenFunction &CGF,
 /// if it's a base constructor or destructor with virtual bases.
 bool ItaniumCXXABI::NeedsVTTParameter(GlobalDecl GD) {
   const CXXMethodDecl *MD = cast<CXXMethodDecl>(GD.getDecl());
-  
+
   // We don't have any virtual bases, just return early.
   if (!MD->getParent()->getNumVBases())
     return false;
-  
+
   // Check if we have a base constructor.
   if (isa<CXXConstructorDecl>(MD) && GD.getCtorType() == Ctor_Base)
     return true;
@@ -2509,7 +2509,7 @@ bool ItaniumCXXABI::NeedsVTTParameter(GlobalDecl GD) {
   // Check if we have a base destructor.
   if (isa<CXXDestructorDecl>(MD) && GD.getDtorType() == Dtor_Base)
     return true;
-  
+
   return false;
 }
 
@@ -3725,6 +3725,18 @@ void ItaniumCXXABI::emitCXXStructor(const CXXMethodDecl *MD,
   if (DD && Type == StructorType::Base && CGType != StructorCodegen::COMDAT &&
       !CGM.TryEmitBaseDestructorAsAlias(DD))
     return;
+
+  // FIXME: The deleting destructor is equivalent to the selected operator
+  // delete if:
+  //  * either the delete is a destroying operator delete or the destructor
+  //    would be trivial if it weren't virtual,
+  //  * the conversion from the 'this' parameter to the first parameter of the
+  //    destructor is equivalent to a bitcast,
+  //  * the destructor does not have an implicit "this" return, and
+  //  * the operator delete has the same calling convention and IR function type
+  //    as the destructor.
+  // In such cases we should try to emit the deleting dtor as an alias to the
+  // selected 'operator delete'.
 
   llvm::Function *Fn = CGM.codegenCXXStructor(MD, Type);
   CGM.insertDeclGlobalValues(MD, Fn);

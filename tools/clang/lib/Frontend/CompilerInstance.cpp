@@ -398,6 +398,7 @@ void CompilerInstance::createPreprocessor(TranslationUnitKind TUKind) {
       Invocation->getPreprocessorOptsPtr(), getDiagnostics(), getLangOpts(),
       getSourceManager(), getPCMCache(), *HeaderInfo, *this, PTHMgr,
       /*OwnsHeaderSearch=*/true, TUKind);
+  getTarget().adjust(getLangOpts());
   PP->Initialize(getTarget(), getAuxTarget());
   PP->IncludeMgr.IncludedCallBack = CachingIncludedCallBack;
   if (PreprocessorCreatedCallBack)

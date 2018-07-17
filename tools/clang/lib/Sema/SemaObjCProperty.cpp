@@ -1290,6 +1290,14 @@ Decl *Sema::ActOnPropertyImplDecl(Scope *S,
         // An abstract type is as bad as an incomplete type.
         CompleteTypeErr = true;
       }
+      if (!CompleteTypeErr) {
+        const RecordType *RecordTy = PropertyIvarType->getAs<RecordType>();
+        if (RecordTy && RecordTy->getDecl()->hasFlexibleArrayMember()) {
+          Diag(PropertyIvarLoc, diag::err_synthesize_variable_sized_ivar)
+            << PropertyIvarType;
+          CompleteTypeErr = true; // suppress later diagnostics about the ivar
+        }
+      }
       if (CompleteTypeErr)
         Ivar->setInvalidDecl();
       ClassImpDecl->addDecl(Ivar);
@@ -1599,7 +1607,11 @@ Sema::DiagnosePropertyMismatch(ObjCPropertyDecl *Property,
   // meaningless for readonly properties, so don't diagnose if the
   // atomic property is 'readonly'.
   checkAtomicPropertyMismatch(*this, SuperProperty, Property, false);
-  if (Property->getSetterName() != SuperProperty->getSetterName()) {
+  // Readonly properties from protocols can be implemented as "readwrite"
+  // with a custom setter name.
+  if (Property->getSetterName() != SuperProperty->getSetterName() &&
+      !(SuperProperty->isReadOnly() &&
+        isa<ObjCProtocolDecl>(SuperProperty->getDeclContext()))) {
     Diag(Property->getLocation(), diag::warn_property_attribute)
       << Property->getDeclName() << "setter" << inheritedName;
     Diag(SuperProperty->getLocation(), diag::note_property_declare);

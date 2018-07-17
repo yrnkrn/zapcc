@@ -350,7 +350,7 @@ void Preprocessor::CheckEndOfDirective(const char *DirType, bool EnableMacros) {
 /// If ElseOk is true, then \#else directives are ok, if not, then we have
 /// already seen one so a \#else directive is a duplicate.  When this returns,
 /// the caller can lex the first valid token.
-void Preprocessor::SkipExcludedConditionalBlock(const Token &HashToken,
+void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
                                                 SourceLocation IfTokenLoc,
                                                 bool FoundNonSkipPortion,
                                                 bool FoundElse,
@@ -358,8 +358,11 @@ void Preprocessor::SkipExcludedConditionalBlock(const Token &HashToken,
   ++NumSkipped;
   assert(!CurTokenLexer && CurPPLexer && "Lexing a macro, not a file?");
 
-  CurPPLexer->pushConditionalLevel(IfTokenLoc, /*isSkipping*/false,
-                                 FoundNonSkipPortion, FoundElse);
+  if (PreambleConditionalStack.reachedEOFWhileSkipping())
+    PreambleConditionalStack.clearSkipInfo();
+  else
+    CurPPLexer->pushConditionalLevel(IfTokenLoc, /*isSkipping*/ false,
+                                     FoundNonSkipPortion, FoundElse);
 
   if (CurPTHLexer) {
     PTHSkipExcludedConditionalBlock();
@@ -385,6 +388,9 @@ void Preprocessor::SkipExcludedConditionalBlock(const Token &HashToken,
       // We don't emit errors for unterminated conditionals here,
       // Lexer::LexEndOfFile can do that propertly.
       // Just return and let the caller lex after this #include.
+      if (PreambleConditionalStack.isRecording())
+        PreambleConditionalStack.SkipInfo.emplace(
+            HashTokenLoc, IfTokenLoc, FoundNonSkipPortion, FoundElse, ElseLoc);
       break;
     }
 
@@ -554,7 +560,7 @@ void Preprocessor::SkipExcludedConditionalBlock(const Token &HashToken,
 
   if (Callbacks)
     Callbacks->SourceRangeSkipped(
-        SourceRange(HashToken.getLocation(), CurPPLexer->getSourceLocation()),
+        SourceRange(HashTokenLoc, CurPPLexer->getSourceLocation()),
         Tok.getLocation());
 }
 
@@ -2400,12 +2406,50 @@ MacroInfo *Preprocessor::ReadOptionalMacroParameterListAndBody(
     // Otherwise, read the body of a function-like macro.  While we are at it,
     // check C99 6.10.3.2p1: ensure that # operators are followed by macro
     // parameters in function-like macro expansions.
+
+    VAOptDefinitionContext VAOCtx(*this);
+
     while (Tok.isNot(tok::eod)) {
       LastTok = Tok;
 
       if (!Tok.isOneOf(tok::hash, tok::hashat, tok::hashhash)) {
         MI->AddTokenToBody(Tok);
 
+        if (VAOCtx.isVAOptToken(Tok)) {
+          // If we're already within a VAOPT, emit an error.
+          if (VAOCtx.isInVAOpt()) {
+            Diag(Tok, diag::err_pp_vaopt_nested_use);
+            return nullptr;
+          }
+          // Ensure VAOPT is followed by a '(' .
+          LexUnexpandedToken(Tok);
+          if (Tok.isNot(tok::l_paren)) {
+            Diag(Tok, diag::err_pp_missing_lparen_in_vaopt_use);
+            return nullptr;
+          }
+          MI->AddTokenToBody(Tok);
+          VAOCtx.sawVAOptFollowedByOpeningParens(Tok.getLocation());
+          LexUnexpandedToken(Tok);
+          if (Tok.is(tok::hashhash)) {
+            Diag(Tok, diag::err_vaopt_paste_at_start);
+            return nullptr;
+          }
+          continue;
+        } else if (VAOCtx.isInVAOpt()) {
+          if (Tok.is(tok::r_paren)) {
+            if (VAOCtx.sawClosingParen()) {
+              const unsigned NumTokens = MI->getNumTokens();
+              assert(NumTokens >= 3 && "Must have seen at least __VA_OPT__( "
+                                       "and a subsequent tok::r_paren");
+              if (MI->getReplacementToken(NumTokens - 2).is(tok::hashhash)) {
+                Diag(Tok, diag::err_vaopt_paste_at_end);
+                return nullptr;
+              }
+            }
+          } else if (Tok.is(tok::l_paren)) {
+            VAOCtx.sawOpeningParen(Tok.getLocation());
+          }
+        }
         // Get the next token of the macro.
         LexUnexpandedToken(Tok);
         continue;
@@ -2446,12 +2490,14 @@ MacroInfo *Preprocessor::ReadOptionalMacroParameterListAndBody(
         continue;
       }
 
+      // Our Token is a stringization operator.
       // Get the next token of the macro.
       LexUnexpandedToken(Tok);
 
-      // Check for a valid macro arg identifier.
-      if (Tok.getIdentifierInfo() == nullptr ||
-          MI->getParameterNum(Tok.getIdentifierInfo()) == -1) {
+      // Check for a valid macro arg identifier or __VA_OPT__.
+      if (!VAOCtx.isVAOptToken(Tok) &&
+          (Tok.getIdentifierInfo() == nullptr ||
+           MI->getParameterNum(Tok.getIdentifierInfo()) == -1)) {
 
         // If this is assembler-with-cpp mode, we accept random gibberish after
         // the '#' because '#' is often a comment character.  However, change
@@ -2470,11 +2516,24 @@ MacroInfo *Preprocessor::ReadOptionalMacroParameterListAndBody(
 
       // Things look ok, add the '#' and param name tokens to the macro.
       MI->AddTokenToBody(LastTok);
-      MI->AddTokenToBody(Tok);
-      LastTok = Tok;
 
-      // Get the next token of the macro.
-      LexUnexpandedToken(Tok);
+      // If the token following '#' is VAOPT, let the next iteration handle it
+      // and check it for correctness, otherwise add the token and prime the
+      // loop with the next one.
+      if (!VAOCtx.isVAOptToken(Tok)) {
+        MI->AddTokenToBody(Tok);
+        LastTok = Tok;
+
+        // Get the next token of the macro.
+        LexUnexpandedToken(Tok);
+      }
+    }
+    if (VAOCtx.isInVAOpt()) {
+      assert(Tok.is(tok::eod) && "Must be at End Of preprocessing Directive");
+      Diag(Tok, diag::err_pp_expected_after)
+        << LastTok.getKind() << tok::r_paren;
+      Diag(VAOCtx.getUnmatchedOpeningParenLoc(), diag::note_matching) << tok::l_paren;
+      return nullptr;
     }
   }
   MI->setDefinitionEndLoc(LastTok.getLocation());
@@ -2655,7 +2714,8 @@ void Preprocessor::HandleIfdefDirective(Token &Result,
   if (MacroNameTok.is(tok::eod)) {
     // Skip code until we get to #endif.  This helps with recovery by not
     // emitting an error when the #endif is reached.
-    SkipExcludedConditionalBlock(HashToken, DirectiveTok.getLocation(),
+    SkipExcludedConditionalBlock(HashToken.getLocation(),
+                                 DirectiveTok.getLocation(),
                                  /*Foundnonskip*/ false, /*FoundElse*/ false);
     return;
   }
@@ -2712,7 +2772,8 @@ void Preprocessor::HandleIfdefDirective(Token &Result,
                                      /*foundelse*/false);
   } else {
     // No, skip the contents of this block.
-    SkipExcludedConditionalBlock(HashToken, DirectiveTok.getLocation(),
+    SkipExcludedConditionalBlock(HashToken.getLocation(),
+                                 DirectiveTok.getLocation(),
                                  /*Foundnonskip*/ false,
                                  /*FoundElse*/ false);
   }
@@ -2760,7 +2821,7 @@ void Preprocessor::HandleIfDirective(Token &IfToken,
                                    /*foundnonskip*/true, /*foundelse*/false);
   } else {
     // No, skip the contents of this block.
-    SkipExcludedConditionalBlock(HashToken, IfToken.getLocation(),
+    SkipExcludedConditionalBlock(HashToken.getLocation(), IfToken.getLocation(),
                                  /*Foundnonskip*/ false,
                                  /*FoundElse*/ false);
   }
@@ -2825,7 +2886,8 @@ void Preprocessor::HandleElseDirective(Token &Result, const Token &HashToken) {
   }
 
   // Finally, skip the rest of the contents of this block.
-  SkipExcludedConditionalBlock(HashToken, CI.IfLoc, /*Foundnonskip*/ true,
+  SkipExcludedConditionalBlock(HashToken.getLocation(), CI.IfLoc,
+                               /*Foundnonskip*/ true,
                                /*FoundElse*/ true, Result.getLocation());
 }
 
@@ -2869,7 +2931,7 @@ void Preprocessor::HandleElifDirective(Token &ElifToken,
   }
 
   // Finally, skip the rest of the contents of this block.
-  SkipExcludedConditionalBlock(HashToken, CI.IfLoc, /*Foundnonskip*/ true,
-                               /*FoundElse*/ CI.FoundElse,
-                               ElifToken.getLocation());
+  SkipExcludedConditionalBlock(
+      HashToken.getLocation(), CI.IfLoc, /*Foundnonskip*/ true,
+      /*FoundElse*/ CI.FoundElse, ElifToken.getLocation());
 }

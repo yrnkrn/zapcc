@@ -990,7 +990,7 @@ void Unloader::eraseType(const Type *T, bool EraseDeclaration) {
   if (T->isRecordType()) {
     if (TBAA) {
       TBAA->MetadataCache.erase(T);
-      TBAA->StructTypeMetadataCache.erase(T);
+      TBAA->BaseTypeMetadataCache.erase(T);
       TBAA->StructMetadataCache.erase(T);
     }
     // Erase LLVM StructType definition.

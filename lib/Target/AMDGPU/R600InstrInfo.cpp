@@ -1186,10 +1186,8 @@ int R600InstrInfo::getIndirectIndexBegin(const MachineFunction &MF) const {
   }
 
   const TargetRegisterClass *IndirectRC = getIndirectAddrRegClass();
-  for (MachineRegisterInfo::livein_iterator LI = MRI.livein_begin(),
-                                            LE = MRI.livein_end();
-                                            LI != LE; ++LI) {
-    unsigned Reg = LI->first;
+  for (std::pair<unsigned, unsigned> LI : MRI.liveins()) {
+    unsigned Reg = LI.first;
     if (TargetRegisterInfo::isVirtualRegister(Reg) ||
         !IndirectRC->contains(Reg))
       continue;
@@ -1494,4 +1492,22 @@ void R600InstrInfo::clearFlag(MachineInstr &MI, unsigned Operand,
     InstFlags &= ~(Flag << (NUM_MO_FLAGS * Operand));
     FlagOp.setImm(InstFlags);
   }
+}
+
+unsigned R600InstrInfo::getAddressSpaceForPseudoSourceKind(
+    PseudoSourceValue::PSVKind Kind) const {
+  switch (Kind) {
+  case PseudoSourceValue::Stack:
+  case PseudoSourceValue::FixedStack:
+    return AMDGPUASI.PRIVATE_ADDRESS;
+  case PseudoSourceValue::ConstantPool:
+  case PseudoSourceValue::GOT:
+  case PseudoSourceValue::JumpTable:
+  case PseudoSourceValue::GlobalValueCallEntry:
+  case PseudoSourceValue::ExternalSymbolCallEntry:
+  case PseudoSourceValue::TargetCustom:
+    return AMDGPUASI.CONSTANT_ADDRESS;
+  }
+  llvm_unreachable("Invalid pseudo source kind");
+  return AMDGPUASI.PRIVATE_ADDRESS;
 }

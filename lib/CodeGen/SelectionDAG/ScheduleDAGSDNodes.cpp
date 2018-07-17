@@ -23,11 +23,11 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -709,18 +709,17 @@ ProcessSDDbgValues(SDNode *N, SelectionDAG *DAG, InstrEmitter &Emitter,
   // source order number as N.
   MachineBasicBlock *BB = Emitter.getBlock();
   MachineBasicBlock::iterator InsertPos = Emitter.getInsertPos();
-  ArrayRef<SDDbgValue*> DVs = DAG->GetDbgValues(N);
-  for (unsigned i = 0, e = DVs.size(); i != e; ++i) {
-    if (DVs[i]->isInvalidated())
+  for (auto DV : DAG->GetDbgValues(N)) {
+    if (DV->isInvalidated())
       continue;
-    unsigned DVOrder = DVs[i]->getOrder();
+    unsigned DVOrder = DV->getOrder();
     if (!Order || DVOrder == Order) {
-      MachineInstr *DbgMI = Emitter.EmitDbgValue(DVs[i], VRBaseMap);
+      MachineInstr *DbgMI = Emitter.EmitDbgValue(DV, VRBaseMap);
       if (DbgMI) {
         Orders.push_back({DVOrder, DbgMI});
         BB->insert(InsertPos, DbgMI);
       }
-      DVs[i]->setIsInvalidated();
+      DV->setIsInvalidated();
     }
   }
 }

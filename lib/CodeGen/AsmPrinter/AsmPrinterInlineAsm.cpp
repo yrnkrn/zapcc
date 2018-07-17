@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/InlineAsm.h"
@@ -32,7 +33,6 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetRegistry.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -144,6 +144,7 @@ void AsmPrinter::EmitInlineAsm(StringRef Str, const MCSubtargetInfo &STI,
                        " we don't have an asm parser for this target\n");
   Parser->setAssemblerDialect(Dialect);
   Parser->setTargetParser(*TAP.get());
+  Parser->setEnablePrintSchedInfo(EnablePrintSchedInfo);
   if (Dialect == InlineAsm::AD_Intel)
     // We need this flag to be able to parse numbers like "0bH"
     Parser->setParsingInlineAsm(true);

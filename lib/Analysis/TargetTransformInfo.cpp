@@ -88,11 +88,6 @@ int TargetTransformInfo::getGEPCost(Type *PointeeType, const Value *Ptr,
   return TTIImpl->getGEPCost(PointeeType, Ptr, Operands);
 }
 
-int TargetTransformInfo::getGEPCost(const GEPOperator *GEP,
-                                    ArrayRef<const Value *> Operands) const {
-  return TTIImpl->getGEPCost(GEP, Operands);
-}
-
 int TargetTransformInfo::getExtCost(const Instruction *I,
                                     const Value *Src) const {
   return TTIImpl->getExtCost(I, Src);
@@ -185,6 +180,11 @@ bool TargetTransformInfo::hasDivRemOp(Type *DataType, bool IsSigned) const {
   return TTIImpl->hasDivRemOp(DataType, IsSigned);
 }
 
+bool TargetTransformInfo::hasVolatileVariant(Instruction *I,
+                                             unsigned AddrSpace) const {
+  return TTIImpl->hasVolatileVariant(I, AddrSpace);
+}
+
 bool TargetTransformInfo::prefersVectorizedAddressing() const {
   return TTIImpl->prefersVectorizedAddressing();
 }
@@ -250,8 +250,9 @@ bool TargetTransformInfo::enableAggressiveInterleaving(bool LoopHasReductions) c
   return TTIImpl->enableAggressiveInterleaving(LoopHasReductions);
 }
 
-bool TargetTransformInfo::enableMemCmpExpansion(unsigned &MaxLoadSize) const {
-  return TTIImpl->enableMemCmpExpansion(MaxLoadSize);
+const TargetTransformInfo::MemCmpExpansionOptions *
+TargetTransformInfo::enableMemCmpExpansion(bool IsZeroCmp) const {
+  return TTIImpl->enableMemCmpExpansion(IsZeroCmp);
 }
 
 bool TargetTransformInfo::enableInterleavedAccessVectorization() const {

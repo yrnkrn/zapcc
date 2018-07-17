@@ -139,7 +139,9 @@ let Defs = [SCC] in {
     [(set i64:$sdst, (not i64:$src0))]
   >;
   def S_WQM_B32 : SOP1_32 <"s_wqm_b32">;
-  def S_WQM_B64 : SOP1_64 <"s_wqm_b64">;
+  def S_WQM_B64 : SOP1_64 <"s_wqm_b64",
+    [(set i1:$sdst, (int_amdgcn_wqm_vote i1:$src0))]
+  >;
 } // End Defs = [SCC]
 
 
@@ -159,10 +161,11 @@ def S_BCNT1_I32_B64 : SOP1_32_64 <"s_bcnt1_i32_b64">;
 
 def S_FF0_I32_B32 : SOP1_32 <"s_ff0_i32_b32">;
 def S_FF0_I32_B64 : SOP1_32_64 <"s_ff0_i32_b64">;
-def S_FF1_I32_B32 : SOP1_32 <"s_ff1_i32_b32",
-  [(set i32:$sdst, (cttz_zero_undef i32:$src0))]
->;
 def S_FF1_I32_B64 : SOP1_32_64 <"s_ff1_i32_b64">;
+
+def S_FF1_I32_B32 : SOP1_32 <"s_ff1_i32_b32",
+  [(set i32:$sdst, (AMDGPUffbl_b32 i32:$src0))]
+>;
 
 def S_FLBIT_I32_B32 : SOP1_32 <"s_flbit_i32_b32",
   [(set i32:$sdst, (AMDGPUffbh_u32 i32:$src0))]
@@ -817,8 +820,7 @@ def S_CBRANCH_SCC0 : SOPP <
 >;
 def S_CBRANCH_SCC1 : SOPP <
   0x00000005, (ins sopp_brtarget:$simm16),
-  "s_cbranch_scc1 $simm16",
-  [(si_uniform_br_scc SCC, bb:$simm16)]
+  "s_cbranch_scc1 $simm16"
 >;
 } // End Uses = [SCC]
 

@@ -137,6 +137,8 @@ LANGOPT(GNUAsm            , 1, 1, "GNU-style inline assembly")
 LANGOPT(CoroutinesTS      , 1, 0, "C++ coroutines TS")
 LANGOPT(RelaxedTemplateTemplateArgs, 1, 0, "C++17 relaxed matching of template template arguments")
 
+LANGOPT(DoubleSquareBracketAttributes, 1, 0, "'[[]]' attributes extension for all language standard modes")
+
 BENIGN_LANGOPT(ThreadsafeStatics , 1, 1, "thread-safe static initializers")
 LANGOPT(POSIXThreads      , 1, 0, "POSIX thread support")
 LANGOPT(Blocks            , 1, 0, "blocks extension to C")
@@ -175,7 +177,8 @@ BENIGN_LANGOPT(ObjCGCBitmapPrint , 1, 0, "printing of GC's bitmap layout for __w
 
 BENIGN_LANGOPT(AccessControl     , 1, 1, "C++ access control")
 LANGOPT(CharIsSigned      , 1, 1, "signed char")
-LANGOPT(ShortWChar        , 1, 0, "unsigned short wchar_t")
+LANGOPT(WCharSize         , 4, 0, "width of wchar_t")
+LANGOPT(WCharIsSigned        , 1, 0, "signed or unsigned wchar_t")
 ENUM_LANGOPT(MSPointerToMemberRepresentationMethod, PragmaMSPointersToMembersKind, 2, PPTMK_BestCase, "member-pointer representation method")
 ENUM_LANGOPT(DefaultCallingConv, DefaultCallingConvention, 3, DCC_None, "default calling convention")
 

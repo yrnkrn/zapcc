@@ -35,17 +35,17 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/SlotIndexes.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/DebugLoc.h"
-#include "llvm/Pass.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/Pass.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetOpcodes.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -363,7 +363,7 @@ bool CoalescerPair::setRegisters(const MachineInstr *MI) {
     Flipped = true;
   }
 
-  const MachineRegisterInfo &MRI = MI->getParent()->getParent()->getRegInfo();
+  const MachineRegisterInfo &MRI = MI->getMF()->getRegInfo();
 
   if (TargetRegisterInfo::isPhysicalRegister(Dst)) {
     // Eliminate DstSub on a physreg.
@@ -1337,6 +1337,9 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
       MachineInstr *UseMI = UseMO.getParent();
       if (UseMI->isDebugValue()) {
         UseMO.setReg(DstReg);
+        // Move the debug value directly after the def of the rematerialized
+        // value in DstReg.
+        MBB->splice(std::next(NewMI.getIterator()), UseMI->getParent(), UseMI);
         DEBUG(dbgs() << "\t\tupdated: " << *UseMI);
       }
     }
@@ -2685,8 +2688,8 @@ void JoinVals::pruneValues(JoinVals &Other,
           for (MachineOperand &MO :
                Indexes->getInstructionFromIndex(Def)->operands()) {
             if (MO.isReg() && MO.isDef() && MO.getReg() == Reg) {
-              if (MO.getSubReg() != 0)
-                MO.setIsUndef(EraseImpDef);
+              if (MO.getSubReg() != 0 && MO.isUndef() && !EraseImpDef)
+                MO.setIsUndef(false);
               MO.setIsDead(false);
             }
           }

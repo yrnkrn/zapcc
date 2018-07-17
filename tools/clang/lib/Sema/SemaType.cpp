@@ -3482,13 +3482,20 @@ classifyPointerDeclarator(Sema &S, QualType type, Declarator &declarator,
         isCFError = (S.CFError == recordDecl);
       } else {
         // Check whether this is CFError, which we identify based on its bridge
-        // to NSError.
+        // to NSError. CFErrorRef used to be declared with "objc_bridge" but is
+        // now declared with "objc_bridge_mutable", so look for either one of
+        // the two attributes.
         if (recordDecl->getTagKind() == TTK_Struct && numNormalPointers > 0) {
-          if (auto bridgeAttr = recordDecl->getAttr<ObjCBridgeAttr>()) {
-            if (bridgeAttr->getBridgedType() == S.getNSErrorIdent()) {
-              S.CFError = recordDecl;
-              isCFError = true;
-            }
+          IdentifierInfo *bridgedType = nullptr;
+          if (auto bridgeAttr = recordDecl->getAttr<ObjCBridgeAttr>())
+            bridgedType = bridgeAttr->getBridgedType();
+          else if (auto bridgeAttr =
+                       recordDecl->getAttr<ObjCBridgeMutableAttr>())
+            bridgedType = bridgeAttr->getBridgedType();
+
+          if (bridgedType == S.getNSErrorIdent()) {
+            S.CFError = recordDecl;
+            isCFError = true;
           }
         }
       }
@@ -4460,7 +4467,8 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
 
       FunctionType::ExtInfo EI(getCCForDeclaratorChunk(S, D, FTI, chunkIndex));
 
-      if (!FTI.NumParams && !FTI.isVariadic && !LangOpts.CPlusPlus) {
+      if (!FTI.NumParams && !FTI.isVariadic && !LangOpts.CPlusPlus
+                                            && !LangOpts.OpenCL) {
         // Simple void foo(), where the incoming T is the result type.
         T = Context.getFunctionNoProtoType(T, EI);
       } else {
@@ -4937,7 +4945,6 @@ TypeSourceInfo *Sema::GetTypeForDeclarator(Declarator &D, Scope *S) {
 
   TypeSourceInfo *ReturnTypeInfo = nullptr;
   QualType T = GetDeclSpecTypeForDeclarator(state, ReturnTypeInfo);
-
   if (D.isPrototypeContext() && getLangOpts().ObjCAutoRefCount)
     inferARCWriteback(state, T);
 
@@ -5631,7 +5638,7 @@ QualType Sema::BuildAddressSpaceAttr(QualType &T, Expr *AddrSpace,
     // If this type is already address space qualified, reject it.
     // ISO/IEC TR 18037 S5.3 (amending C99 6.7.3): "No type shall be qualified
     // by qualifiers for two or more different address spaces."
-    if (T.getAddressSpace()) {
+    if (T.getAddressSpace() != LangAS::Default) {
       Diag(AttrLoc, diag::err_attribute_address_multiple_qualifiers);
       return QualType();
     }
@@ -5655,15 +5662,16 @@ QualType Sema::BuildAddressSpaceAttr(QualType &T, Expr *AddrSpace,
     }
 
     llvm::APSInt max(addrSpace.getBitWidth());
-    max = Qualifiers::MaxAddressSpace - LangAS::FirstTargetAddressSpace;
+    max =
+        Qualifiers::MaxAddressSpace - (unsigned)LangAS::FirstTargetAddressSpace;
     if (addrSpace > max) {
       Diag(AttrLoc, diag::err_attribute_address_space_too_high)
           << (unsigned)max.getZExtValue() << AddrSpace->getSourceRange();
       return QualType();
     }
 
-    unsigned ASIdx = static_cast<unsigned>(addrSpace.getZExtValue()) +
-                     LangAS::FirstTargetAddressSpace;
+    LangAS ASIdx =
+        getLangASFromTargetAS(static_cast<unsigned>(addrSpace.getZExtValue()));
 
     return Context.getAddrSpaceQualType(T, ASIdx);
   }
@@ -5689,7 +5697,7 @@ static void HandleAddressSpaceTypeAttribute(QualType &Type,
   // If this type is already address space qualified, reject it.
   // ISO/IEC TR 18037 S5.3 (amending C99 6.7.3): "No type shall be qualified by
   // qualifiers for two or more different address spaces."
-  if (Type.getAddressSpace()) {
+  if (Type.getAddressSpace() != LangAS::Default) {
     S.Diag(Attr.getLoc(), diag::err_attribute_address_multiple_qualifiers);
     Attr.setInvalid();
     return;
@@ -5703,7 +5711,7 @@ static void HandleAddressSpaceTypeAttribute(QualType &Type,
     return;
   }
 
-  unsigned ASIdx;
+  LangAS ASIdx;
   if (Attr.getKind() == AttributeList::AT_AddressSpace) {
 
     // Check the attribute arguments.
@@ -5751,9 +5759,10 @@ static void HandleAddressSpaceTypeAttribute(QualType &Type,
       ASIdx = LangAS::opencl_constant; break;
     case AttributeList::AT_OpenCLGenericAddressSpace:
       ASIdx = LangAS::opencl_generic; break;
+    case AttributeList::AT_OpenCLPrivateAddressSpace:
+      ASIdx = LangAS::opencl_private; break;
     default:
-      assert(Attr.getKind() == AttributeList::AT_OpenCLPrivateAddressSpace);
-      ASIdx = 0; break;
+      llvm_unreachable("Invalid address space");
     }
 
     Type = S.Context.getAddrSpaceQualType(Type, ASIdx);
@@ -6985,6 +6994,92 @@ static void HandleOpenCLAccessAttr(QualType &CurType, const AttributeList &Attr,
   }
 }
 
+static void deduceOpenCLImplicitAddrSpace(TypeProcessingState &State,
+                                          QualType &T, TypeAttrLocation TAL) {
+  Declarator &D = State.getDeclarator();
+
+  // Handle the cases where address space should not be deduced.
+  //
+  // The pointee type of a pointer type is alwasy deduced since a pointer always
+  // points to some memory location which should has an address space.
+  //
+  // There are situations that at the point of certain declarations, the address
+  // space may be unknown and better to be left as default. For example, when
+  // definining a typedef or struct type, they are not associated with any
+  // specific address space. Later on, they may be used with any address space
+  // to declare a variable.
+  //
+  // The return value of a function is r-value, therefore should not have
+  // address space.
+  //
+  // The void type does not occupy memory, therefore should not have address
+  // space, except when it is used as a pointee type.
+  //
+  // Since LLVM assumes function type is in default address space, it should not
+  // have address space.
+  auto ChunkIndex = State.getCurrentChunkIndex();
+  bool IsPointee =
+      ChunkIndex > 0 &&
+      (D.getTypeObject(ChunkIndex - 1).Kind == DeclaratorChunk::Pointer ||
+       D.getTypeObject(ChunkIndex - 1).Kind == DeclaratorChunk::BlockPointer);
+  bool IsFuncReturnType =
+      ChunkIndex > 0 &&
+      D.getTypeObject(ChunkIndex - 1).Kind == DeclaratorChunk::Function;
+  bool IsFuncType =
+      ChunkIndex < D.getNumTypeObjects() &&
+      D.getTypeObject(ChunkIndex).Kind == DeclaratorChunk::Function;
+  if ( // Do not deduce addr space for function return type and function type,
+       // otherwise it will fail some sema check.
+      IsFuncReturnType || IsFuncType ||
+      // Do not deduce addr space for member types of struct, except the pointee
+      // type of a pointer member type.
+      (D.getContext() == Declarator::MemberContext && !IsPointee) ||
+      // Do not deduce addr space for types used to define a typedef and the
+      // typedef itself, except the pointee type of a pointer type which is used
+      // to define the typedef.
+      (D.getDeclSpec().getStorageClassSpec() == DeclSpec::SCS_typedef &&
+       !IsPointee) ||
+      // Do not deduce addr space of the void type, e.g. in f(void), otherwise
+      // it will fail some sema check.
+      (T->isVoidType() && !IsPointee))
+    return;
+
+  LangAS ImpAddr;
+  // Put OpenCL automatic variable in private address space.
+  // OpenCL v1.2 s6.5:
+  // The default address space name for arguments to a function in a
+  // program, or local variables of a function is __private. All function
+  // arguments shall be in the __private address space.
+  if (State.getSema().getLangOpts().OpenCLVersion <= 120) {
+      ImpAddr = LangAS::opencl_private;
+  } else {
+    // If address space is not set, OpenCL 2.0 defines non private default
+    // address spaces for some cases:
+    // OpenCL 2.0, section 6.5:
+    // The address space for a variable at program scope or a static variable
+    // inside a function can either be __global or __constant, but defaults to
+    // __global if not specified.
+    // (...)
+    // Pointers that are declared without pointing to a named address space
+    // point to the generic address space.
+    if (IsPointee) {
+      ImpAddr = LangAS::opencl_generic;
+    } else {
+      if (D.getContext() == Declarator::FileContext) {
+        ImpAddr = LangAS::opencl_global;
+      } else {
+        if (D.getDeclSpec().getStorageClassSpec() == DeclSpec::SCS_static ||
+            D.getDeclSpec().getStorageClassSpec() == DeclSpec::SCS_extern) {
+          ImpAddr = LangAS::opencl_global;
+        } else {
+          ImpAddr = LangAS::opencl_private;
+        }
+      }
+    }
+  }
+  T = State.getSema().Context.getAddrSpaceQualType(T, ImpAddr);
+}
+
 static void processTypeAttrs(TypeProcessingState &state, QualType &type,
                              TypeAttrLocation TAL, AttributeList *attrs) {
   // Scan through and apply attributes to this type where it makes sense.  Some
@@ -6992,7 +7087,6 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
   // type, but others can be present in the type specifiers even though they
   // apply to the decl.  Here we apply type attributes and ignore the rest.
 
-  bool hasOpenCLAddressSpace = false;
   while (attrs) {
     AttributeList &attr = *attrs;
     attrs = attr.getNext(); // reset to the next here due to early loop continue
@@ -7055,7 +7149,6 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
     case AttributeList::AT_AddressSpace:
       HandleAddressSpaceTypeAttribute(type, attr, state.getSema());
       attr.setUsedAsTypeAttr();
-      hasOpenCLAddressSpace = true;
       break;
     OBJC_POINTER_TYPE_ATTRS_CASELIST:
       if (!handleObjCPointerTypeAttr(state, attr, type))
@@ -7156,39 +7249,11 @@ static void processTypeAttrs(TypeProcessingState &state, QualType &type,
     }
   }
 
-  // If address space is not set, OpenCL 2.0 defines non private default
-  // address spaces for some cases:
-  // OpenCL 2.0, section 6.5:
-  // The address space for a variable at program scope or a static variable
-  // inside a function can either be __global or __constant, but defaults to
-  // __global if not specified.
-  // (...)
-  // Pointers that are declared without pointing to a named address space point
-  // to the generic address space.
-  if (state.getSema().getLangOpts().OpenCLVersion >= 200 &&
-      !hasOpenCLAddressSpace && type.getAddressSpace() == 0 &&
-      (TAL == TAL_DeclSpec || TAL == TAL_DeclChunk)) {
-    Declarator &D = state.getDeclarator();
-    if (state.getCurrentChunkIndex() > 0 &&
-        (D.getTypeObject(state.getCurrentChunkIndex() - 1).Kind ==
-             DeclaratorChunk::Pointer ||
-         D.getTypeObject(state.getCurrentChunkIndex() - 1).Kind ==
-             DeclaratorChunk::BlockPointer)) {
-      type = state.getSema().Context.getAddrSpaceQualType(
-          type, LangAS::opencl_generic);
-    } else if (state.getCurrentChunkIndex() == 0 &&
-               D.getContext() == Declarator::FileContext &&
-               !D.isFunctionDeclarator() && !D.isFunctionDefinition() &&
-               D.getDeclSpec().getStorageClassSpec() != DeclSpec::SCS_typedef &&
-               !type->isSamplerT())
-      type = state.getSema().Context.getAddrSpaceQualType(
-          type, LangAS::opencl_global);
-    else if (state.getCurrentChunkIndex() == 0 &&
-             D.getContext() == Declarator::BlockContext &&
-             D.getDeclSpec().getStorageClassSpec() == DeclSpec::SCS_static)
-      type = state.getSema().Context.getAddrSpaceQualType(
-          type, LangAS::opencl_global);
-  }
+  if (!state.getSema().getLangOpts().OpenCL ||
+      type.getAddressSpace() != LangAS::Default)
+    return;
+
+  deduceOpenCLImplicitAddrSpace(state, type, TAL);
 }
 
 void Sema::completeExprArrayBound(Expr *E) {

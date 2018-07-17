@@ -28,6 +28,8 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -37,8 +39,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetFrameLowering.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <cstdlib>
@@ -933,11 +933,16 @@ PPCRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
            SReg = MF.getRegInfo().createVirtualRegister(RC);
 
   // Insert a set of rA with the full offset value before the ld, st, or add
-  BuildMI(MBB, II, dl, TII.get(is64Bit ? PPC::LIS8 : PPC::LIS), SRegHi)
-    .addImm(Offset >> 16);
-  BuildMI(MBB, II, dl, TII.get(is64Bit ? PPC::ORI8 : PPC::ORI), SReg)
-    .addReg(SRegHi, RegState::Kill)
-    .addImm(Offset);
+  if (isInt<16>(Offset)) 
+    BuildMI(MBB, II, dl, TII.get(is64Bit ? PPC::LI8 : PPC::LI), SReg)
+      .addImm(Offset);
+  else {
+    BuildMI(MBB, II, dl, TII.get(is64Bit ? PPC::LIS8 : PPC::LIS), SRegHi)
+      .addImm(Offset >> 16);
+    BuildMI(MBB, II, dl, TII.get(is64Bit ? PPC::ORI8 : PPC::ORI), SReg)
+      .addReg(SRegHi, RegState::Kill)
+      .addImm(Offset);
+  }
 
   // Convert into indexed form of the instruction:
   //

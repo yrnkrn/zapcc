@@ -73,6 +73,14 @@ FunctionPass *createDeadCodeEliminationPass();
 //
 FunctionPass *createDeadStoreEliminationPass();
 
+
+//===----------------------------------------------------------------------===//
+//
+// CallSiteSplitting - This pass split call-site based on its known argument
+// values.
+FunctionPass *createCallSiteSplittingPass();
+
+
 //===----------------------------------------------------------------------===//
 //
 // AggressiveDCE - This pass uses the SSA based Aggressive DCE algorithm.  This
@@ -255,18 +263,12 @@ FunctionPass *createJumpThreadingPass(int Threshold = -1);
 //===----------------------------------------------------------------------===//
 //
 // CFGSimplification - Merge basic blocks, eliminate unreachable blocks,
-// simplify terminator instructions, etc...
+// simplify terminator instructions, convert switches to lookup tables, etc.
 //
 FunctionPass *createCFGSimplificationPass(
-    int Threshold = -1, std::function<bool(const Function &)> Ftor = nullptr);
-
-//===----------------------------------------------------------------------===//
-//
-// LateCFGSimplification - Like CFGSimplification, but may also
-// convert switches to lookup tables.
-//
-FunctionPass *createLateCFGSimplificationPass(
-    int Threshold = -1, std::function<bool(const Function &)> Ftor = nullptr);
+    unsigned Threshold = 1, bool ForwardSwitchCond = false,
+    bool ConvertSwitch = false, bool KeepLoops = true,
+    std::function<bool(const Function &)> Ftor = nullptr);
 
 //===----------------------------------------------------------------------===//
 //
@@ -428,7 +430,7 @@ Pass *createLowerGuardIntrinsicPass();
 
 //===----------------------------------------------------------------------===//
 //
-// MergeICmps - Merge integer comparison chains
+// MergeICmps - Merge integer comparison chains into a memcmp
 //
 Pass *createMergeICmpsPass();
 

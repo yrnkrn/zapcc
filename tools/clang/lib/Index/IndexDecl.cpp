@@ -354,12 +354,10 @@ public:
         gatherTemplatePseudoOverrides(D, Relations);
         IndexCtx.indexTagDecl(D, Relations);
       } else {
-        auto *Parent = dyn_cast<NamedDecl>(D->getDeclContext());
         SmallVector<SymbolRelation, 1> Relations;
         gatherTemplatePseudoOverrides(D, Relations);
-        return IndexCtx.handleReference(D, D->getLocation(), Parent,
-                                        D->getLexicalDeclContext(),
-                                        SymbolRoleSet(), Relations);
+        return IndexCtx.handleDecl(D, D->getLocation(), SymbolRoleSet(),
+                                   Relations, D->getLexicalDeclContext());
       }
     }
     return true;
@@ -666,7 +664,6 @@ public:
   }
 
   bool VisitTemplateDecl(const TemplateDecl *D) {
-    // FIXME: Template parameters.
 
     // Index the default values for the template parameters.
     const NamedDecl *Parent = D->getTemplatedDecl();
@@ -683,7 +680,7 @@ public:
         } else if (const auto *TTPD = dyn_cast<TemplateTemplateParmDecl>(TP)) {
           if (TTPD->hasDefaultArgument())
             handleTemplateArgumentLoc(TTPD->getDefaultArgument(), Parent,
-                                      /*DC=*/nullptr);
+                                      TP->getLexicalDeclContext());
         }
       }
     }

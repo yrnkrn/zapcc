@@ -23,11 +23,11 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 #include <cassert>
@@ -187,6 +187,8 @@ bool MachineCopyPropagation::eraseIfRedundant(MachineInstr &Copy, unsigned Src,
 
   // Check that the existing copy uses the correct sub registers.
   MachineInstr &PrevCopy = *CI->second;
+  if (PrevCopy.getOperand(0).isDead())
+    return false;
   if (!isNopCopy(PrevCopy, Src, Def, TRI))
     return false;
 
@@ -286,7 +288,7 @@ void MachineCopyPropagation::CopyPropagateBlock(MachineBasicBlock &MBB) {
       // it's no longer available for copy propagation.
       RegList &DestList = SrcMap[Src];
       if (!is_contained(DestList, Def))
-        DestList.push_back(Def);
+          DestList.push_back(Def);
 
       continue;
     }

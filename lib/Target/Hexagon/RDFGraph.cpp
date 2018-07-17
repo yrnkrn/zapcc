@@ -21,6 +21,7 @@
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/MC/LaneBitmask.h"
 #include "llvm/MC/MCInstrDesc.h"
@@ -28,7 +29,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -913,8 +913,8 @@ void DataFlowGraph::build(unsigned Options) {
   MachineRegisterInfo &MRI = MF.getRegInfo();
   MachineBasicBlock &EntryB = *EA.Addr->getCode();
   assert(EntryB.pred_empty() && "Function entry block has predecessors");
-  for (auto I = MRI.livein_begin(), E = MRI.livein_end(); I != E; ++I)
-    LiveIns.insert(RegisterRef(I->first));
+  for (std::pair<unsigned,unsigned> P : MRI.liveins())
+    LiveIns.insert(RegisterRef(P.first));
   if (MRI.tracksLiveness()) {
     for (auto I : EntryB.liveins())
       LiveIns.insert(RegisterRef(I.PhysReg, I.LaneMask));

@@ -276,7 +276,8 @@ LLVMBool LLVMPrintModuleToFile(LLVMModuleRef M, const char *Filename,
   dest.close();
 
   if (dest.has_error()) {
-    *ErrorMessage = strdup("Error printing to file");
+    std::string E = "Error printing to file: " + dest.error().message();
+    *ErrorMessage = strdup(E.c_str());
     return true;
   }
 
@@ -451,9 +452,6 @@ LLVMTypeRef LLVMPPCFP128TypeInContext(LLVMContextRef C) {
 LLVMTypeRef LLVMX86MMXTypeInContext(LLVMContextRef C) {
   return (LLVMTypeRef) Type::getX86_MMXTy(*unwrap(C));
 }
-LLVMTypeRef LLVMTokenTypeInContext(LLVMContextRef C) {
-  return (LLVMTypeRef) Type::getTokenTy(*unwrap(C));
-}
 
 LLVMTypeRef LLVMHalfType(void) {
   return LLVMHalfTypeInContext(LLVMGetGlobalContext());
@@ -618,6 +616,12 @@ LLVMTypeRef LLVMVoidTypeInContext(LLVMContextRef C)  {
 }
 LLVMTypeRef LLVMLabelTypeInContext(LLVMContextRef C) {
   return wrap(Type::getLabelTy(*unwrap(C)));
+}
+LLVMTypeRef LLVMTokenTypeInContext(LLVMContextRef C) {
+  return wrap(Type::getTokenTy(*unwrap(C)));
+}
+LLVMTypeRef LLVMMetadataTypeInContext(LLVMContextRef C) {
+  return wrap(Type::getMetadataTy(*unwrap(C)));
 }
 
 LLVMTypeRef LLVMVoidType(void)  {

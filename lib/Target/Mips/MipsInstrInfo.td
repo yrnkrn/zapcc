@@ -212,6 +212,8 @@ def HasMicroMips64r6 : Predicate<"Subtarget->inMicroMips64r6Mode()">,
                        AssemblerPredicate<"FeatureMicroMips,FeatureMips64r6">;
 def InMips16Mode :    Predicate<"Subtarget->inMips16Mode()">,
                       AssemblerPredicate<"FeatureMips16">;
+def NotInMips16Mode : Predicate<"!Subtarget->inMips16Mode()">,
+                      AssemblerPredicate<"!FeatureMips16">;
 def HasCnMips    :    Predicate<"Subtarget->hasCnMips()">,
                       AssemblerPredicate<"FeatureCnMips">;
 def NotCnMips    :    Predicate<"!Subtarget->hasCnMips()">,
@@ -1222,6 +1224,20 @@ def immZExtRange2To64 : PatLeaf<(imm), [{
          (N->getZExtValue() <= 64);
 }]>;
 
+def ORiPred  : PatLeaf<(imm), [{
+  return isUInt<16>(N->getZExtValue()) && !isInt<16>(N->getSExtValue());
+}], LO16>;
+
+def LUiPred : PatLeaf<(imm), [{
+  int64_t Val = N->getSExtValue();
+  return !isInt<16>(Val) && isInt<32>(Val) && !(Val & 0xffff);
+}]>;
+
+def LUiORiPred  : PatLeaf<(imm), [{
+  int64_t SVal = N->getSExtValue();
+  return isInt<32>(SVal) && (SVal & 0xffff);
+}]>;
+
 // Mips Address Mode! SDNode frameindex could possibily be a match
 // since load and store instructions from stack used it.
 def addr :
@@ -1472,9 +1488,9 @@ class JumpFJ<DAGOperand opnd, string opstr, SDPatternOperator operator,
 }
 
 // Unconditional branch
-class UncondBranch<Instruction BEQInst> :
+class UncondBranch<Instruction BEQInst, DAGOperand opnd> :
   PseudoSE<(outs), (ins brtarget:$offset), [(br bb:$offset)], II_B>,
-  PseudoInstExpansion<(BEQInst ZERO, ZERO, brtarget:$offset)> {
+  PseudoInstExpansion<(BEQInst ZERO, ZERO, opnd:$offset)> {
   let isBranch = 1;
   let isTerminator = 1;
   let isBarrier = 1;
@@ -1530,7 +1546,7 @@ let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1, hasDelaySlot = 1,
     PseudoInstExpansion<(JumpInst Opnd:$target)>;
 
   class TailCallReg<RegisterOperand RO> :
-    MipsPseudo<(outs), (ins RO:$rs), [(MipsTailCall RO:$rs)], II_JR>;
+    PseudoSE<(outs), (ins RO:$rs), [(MipsTailCall RO:$rs)], II_JR>;
 }
 
 class BAL_BR_Pseudo<Instruction RealInst> :
@@ -1712,12 +1728,13 @@ class ExtBase<string opstr, RegisterOperand RO, Operand PosOpnd,
          [(set RO:$rt, (Op RO:$rs, PosImm:$pos, SizeImm:$size))], II_EXT,
          FrmR, opstr>, ISA_MIPS32R2;
 
+// 'ins' and its' 64 bit variants are matched by C++ code.
 class InsBase<string opstr, RegisterOperand RO, Operand PosOpnd,
-              Operand SizeOpnd, PatFrag PosImm, PatFrag SizeImm,
-              SDPatternOperator Op = null_frag>:
+              Operand SizeOpnd, PatFrag PosImm, PatFrag SizeImm>:
   InstSE<(outs RO:$rt), (ins RO:$rs, PosOpnd:$pos, SizeOpnd:$size, RO:$src),
          !strconcat(opstr, " $rt, $rs, $pos, $size"),
-         [(set RO:$rt, (Op RO:$rs, PosImm:$pos, SizeImm:$size, RO:$src))],
+         [(set RO:$rt, (null_frag RO:$rs, PosImm:$pos, SizeImm:$size,
+                                  RO:$src))],
          II_INS, FrmR, opstr>, ISA_MIPS32R2 {
   let Constraints = "$src = $rt";
 }
@@ -2028,7 +2045,7 @@ def SC : SCBase<"sc", GPR32Opnd>, LW_FM<0x38>, PTR_32, ISA_MIPS2_NOT_32R6_64R6;
 
 /// Jump and Branch Instructions
 def J       : MMRel, JumpFJ<jmptarget, "j", br, bb, "j">, FJ<2>,
-              AdditionalRequires<[RelocNotPIC]>, IsBranch;
+              AdditionalRequires<[RelocNotPIC, NotInMicroMips]>, IsBranch;
 def JR      : MMRel, IndirectBranch<"jr", GPR32Opnd>, MTLO_FM<8>, ISA_MIPS1_NOT_32R6_64R6; 
 def BEQ     : MMRel, CBranch<"beq", brtarget, seteq, GPR32Opnd>, BEQ_FM<4>;
 def BEQL    : MMRel, CBranchLikely<"beql", brtarget, GPR32Opnd>,
@@ -2052,7 +2069,8 @@ def BLTZ    : MMRel, CBranchZero<"bltz", brtarget, setlt, GPR32Opnd>,
               BGEZ_FM<1, 0>;
 def BLTZL   : MMRel, CBranchZeroLikely<"bltzl", brtarget, GPR32Opnd>,
               BGEZ_FM<1, 2>, ISA_MIPS2_NOT_32R6_64R6;
-def B       : UncondBranch<BEQ>;
+def B       : UncondBranch<BEQ, brtarget>,
+              AdditionalRequires<[NotInMicroMips]>;
 
 def JAL  : MMRel, JumpLink<"jal", calltarget>, FJ<3>;
 let AdditionalPredicates = [NotInMicroMips] in {
@@ -2072,7 +2090,7 @@ def BLTZALL : MMRel, BGEZAL_FT<"bltzall", brtarget, GPR32Opnd>,
               BGEZAL_FM<0x12>, ISA_MIPS2_NOT_32R6_64R6;
 def BAL_BR : BAL_BR_Pseudo<BGEZAL>;
 
-let Predicates = [NotInMicroMips] in { 
+let AdditionalPredicates = [NotInMips16Mode, NotInMicroMips] in {
   def TAILCALL : TailCall<J, jmptarget>;
 }
 
@@ -2089,6 +2107,7 @@ class PseudoIndirectBranchBase<RegisterOperand RO> :
   let isBranch = 1;
   let isIndirectBranch = 1;
   bit isCTI = 1;
+  let Predicates = [NotInMips16Mode];
 }
 
 def PseudoIndirectBranch : PseudoIndirectBranchBase<GPR32Opnd>;
@@ -2222,7 +2241,7 @@ let AdditionalPredicates = [NotInMicroMips] in {
             EXT_FM<0>;
   def INS : MMRel, StdMMR6Rel, InsBase<"ins", GPR32Opnd, uimm5,
                                        uimm5_inssize_plus1, immZExt5,
-                                       immZExt5Plus1, MipsIns>,
+                                       immZExt5Plus1>,
             EXT_FM<4>;
 }
 /// Move Control Registers From/To CPU Registers
@@ -2716,15 +2735,20 @@ multiclass MaterializeImms<ValueType VT, Register ZEROReg,
                            Instruction ADDiuOp, Instruction LUiOp,
                            Instruction ORiOp> {
 
-// Small immediates
-def : MipsPat<(VT immSExt16:$imm), (ADDiuOp ZEROReg, imm:$imm)>;
-def : MipsPat<(VT immZExt16:$imm), (ORiOp ZEROReg, imm:$imm)>;
-
-// Bits 32-16 set, sign/zero extended.
-def : MipsPat<(VT immSExt32Low16Zero:$imm), (LUiOp (HI16 imm:$imm))>;
+// Constant synthesis previously relied on the ordering of the patterns below.
+// By making the predicates they use non-overlapping, the patterns were
+// reordered so that the effect of the newly introduced predicates can be
+// observed.
 
 // Arbitrary immediates
-def : MipsPat<(VT immSExt32:$imm), (ORiOp (LUiOp (HI16 imm:$imm)), (LO16 imm:$imm))>;
+def : MipsPat<(VT LUiORiPred:$imm), (ORiOp (LUiOp (HI16 imm:$imm)), (LO16 imm:$imm))>;
+
+// Bits 32-16 set, sign/zero extended.
+def : MipsPat<(VT LUiPred:$imm), (LUiOp (HI16 imm:$imm))>;
+
+// Small immediates
+def : MipsPat<(VT ORiPred:$imm), (ORiOp ZEROReg, imm:$imm)>;
+def : MipsPat<(VT immSExt16:$imm), (ADDiuOp ZEROReg, imm:$imm)>;
 }
 
 let AdditionalPredicates = [NotInMicroMips] in
@@ -2757,10 +2781,12 @@ def : MipsPat<(MipsJmpLink (i32 texternalsym:$dst)),
 //              (JALR GPR32:$dst)>;
 
 // Tail call
-def : MipsPat<(MipsTailCall (iPTR tglobaladdr:$dst)),
-              (TAILCALL tglobaladdr:$dst)>;
-def : MipsPat<(MipsTailCall (iPTR texternalsym:$dst)),
-              (TAILCALL texternalsym:$dst)>;
+let AdditionalPredicates = [NotInMicroMips] in {
+  def : MipsPat<(MipsTailCall (iPTR tglobaladdr:$dst)),
+                (TAILCALL tglobaladdr:$dst)>;
+  def : MipsPat<(MipsTailCall (iPTR texternalsym:$dst)),
+                (TAILCALL texternalsym:$dst)>;
+}
 // hi/lo relocs
 multiclass MipsHiLoRelocs<Instruction Lui, Instruction Addiu,
                           Register ZeroReg, RegisterOperand GPROpnd> {

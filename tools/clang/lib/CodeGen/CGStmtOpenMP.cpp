@@ -254,6 +254,12 @@ static QualType getCanonicalParamType(ASTContext &C, QualType T) {
   }
   if (T->isPointerType())
     return C.getPointerType(getCanonicalParamType(C, T->getPointeeType()));
+  if (auto *A = T->getAsArrayTypeUnsafe()) {
+    if (auto *VLA = dyn_cast<VariableArrayType>(A))
+      return getCanonicalParamType(C, VLA->getElementType());
+    else if (!A->isVariablyModifiedType())
+      return C.getCanonicalType(T);
+  }
   return C.getCanonicalParamType(T);
 }
 
@@ -327,7 +333,7 @@ static llvm::Function *emitOutlinedFunctionPrologue(
       II = &Ctx.Idents.get("vla");
     }
     if (ArgType->isVariablyModifiedType())
-      ArgType = getCanonicalParamType(Ctx, ArgType.getNonReferenceType());
+      ArgType = getCanonicalParamType(Ctx, ArgType);
     auto *Arg =
         ImplicitParamDecl::Create(Ctx, /*DC=*/nullptr, FD->getLocation(), II,
                                   ArgType, ImplicitParamDecl::Other);
@@ -392,15 +398,14 @@ static llvm::Function *emitOutlinedFunctionPrologue(
       continue;
     }
 
-    LValueBaseInfo BaseInfo(AlignmentSource::Decl, false);
-    LValue ArgLVal =
-        CGF.MakeAddrLValue(LocalAddr, Args[Cnt]->getType(), BaseInfo);
+    LValue ArgLVal = CGF.MakeAddrLValue(LocalAddr, Args[Cnt]->getType(),
+                                        AlignmentSource::Decl);
     if (FD->hasCapturedVLAType()) {
       if (FO.UIntPtrCastRequired) {
         ArgLVal = CGF.MakeAddrLValue(castValueFromUintptr(CGF, FD->getType(),
                                                           Args[Cnt]->getName(),
                                                           ArgLVal),
-                                     FD->getType(), BaseInfo);
+                                     FD->getType(), AlignmentSource::Decl);
       }
       auto *ExprArg =
           CGF.EmitLoadOfLValue(ArgLVal, SourceLocation()).getScalarVal();
@@ -412,8 +417,7 @@ static llvm::Function *emitOutlinedFunctionPrologue(
       Address ArgAddr = ArgLVal.getAddress();
       if (!VarTy->isReferenceType()) {
         if (ArgLVal.getType()->isLValueReferenceType()) {
-          ArgAddr = CGF.EmitLoadOfReference(
-              ArgAddr, ArgLVal.getType()->castAs<ReferenceType>());
+          ArgAddr = CGF.EmitLoadOfReference(ArgLVal);
         } else if (!VarTy->isVariablyModifiedType() || !VarTy->isPointerType()) {
           assert(ArgLVal.getType()->isPointerType());
           ArgAddr = CGF.EmitLoadOfPointer(
@@ -497,14 +501,15 @@ CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S) {
   llvm::Function *WrapperF =
       emitOutlinedFunctionPrologue(WrapperCGF, Args, LocalAddrs, VLASizes,
                                    WrapperCGF.CXXThisValue, WrapperFO);
-  LValueBaseInfo BaseInfo(AlignmentSource::Decl, false);
   llvm::SmallVector<llvm::Value *, 4> CallArgs;
   for (const auto *Arg : Args) {
     llvm::Value *CallArg;
     auto I = LocalAddrs.find(Arg);
     if (I != LocalAddrs.end()) {
-      LValue LV =
-          WrapperCGF.MakeAddrLValue(I->second.second, Arg->getType(), BaseInfo);
+      LValue LV = WrapperCGF.MakeAddrLValue(
+          I->second.second,
+          I->second.first ? I->second.first->getType() : Arg->getType(),
+          AlignmentSource::Decl);
       CallArg = WrapperCGF.EmitLoadOfScalar(LV, SourceLocation());
     } else {
       auto EI = VLASizes.find(Arg);
@@ -512,11 +517,12 @@ CodeGenFunction::GenerateOpenMPCapturedStmtFunction(const CapturedStmt &S) {
         CallArg = EI->second.second;
       else {
         LValue LV = WrapperCGF.MakeAddrLValue(WrapperCGF.GetAddrOfLocalVar(Arg),
-                                              Arg->getType(), BaseInfo);
+                                              Arg->getType(),
+                                              AlignmentSource::Decl);
         CallArg = WrapperCGF.EmitLoadOfScalar(LV, SourceLocation());
       }
     }
-    CallArgs.emplace_back(CallArg);
+    CallArgs.emplace_back(WrapperCGF.EmitFromMemory(CallArg, Arg->getType()));
   }
   CGM.getOpenMPRuntime().emitOutlinedFunctionCall(WrapperCGF, S.getLocStart(),
                                                   F, CallArgs);
@@ -995,7 +1001,9 @@ void CodeGenFunction::EmitOMPReductionClauseInit(
 
     auto *LHSVD = cast<VarDecl>(cast<DeclRefExpr>(*ILHS)->getDecl());
     auto *RHSVD = cast<VarDecl>(cast<DeclRefExpr>(*IRHS)->getDecl());
-    if (isa<OMPArraySectionExpr>(IRef)) {
+    QualType Type = PrivateVD->getType();
+    bool isaOMPArraySectionExpr = isa<OMPArraySectionExpr>(IRef);
+    if (isaOMPArraySectionExpr && Type->isVariablyModifiedType()) {
       // Store the address of the original variable associated with the LHS
       // implicit variable.
       PrivateScope.addPrivate(LHSVD, [&RedCG, Count]() -> Address {
@@ -1004,7 +1012,8 @@ void CodeGenFunction::EmitOMPReductionClauseInit(
       PrivateScope.addPrivate(RHSVD, [this, PrivateVD]() -> Address {
         return GetAddrOfLocalVar(PrivateVD);
       });
-    } else if (isa<ArraySubscriptExpr>(IRef)) {
+    } else if ((isaOMPArraySectionExpr && Type->isScalarType()) ||
+               isa<ArraySubscriptExpr>(IRef)) {
       // Store the address of the original variable associated with the LHS
       // implicit variable.
       PrivateScope.addPrivate(LHSVD, [&RedCG, Count]() -> Address {
@@ -2011,18 +2020,6 @@ void CodeGenFunction::EmitOMPDistributeSimdDirective(
   OMPLexicalScope Scope(*this, S, /*AsInlined=*/true);
   CGM.getOpenMPRuntime().emitInlinedDirective(
       *this, OMPD_distribute_simd,
-      [&S](CodeGenFunction &CGF, PrePostActionTy &) {
-        OMPLoopScope PreInitScope(CGF, S);
-        CGF.EmitStmt(
-            cast<CapturedStmt>(S.getAssociatedStmt())->getCapturedStmt());
-      });
-}
-
-void CodeGenFunction::EmitOMPTargetParallelForSimdDirective(
-    const OMPTargetParallelForSimdDirective &S) {
-  OMPLexicalScope Scope(*this, S, /*AsInlined=*/true);
-  CGM.getOpenMPRuntime().emitInlinedDirective(
-      *this, OMPD_target_parallel_for_simd,
       [&S](CodeGenFunction &CGF, PrePostActionTy &) {
         OMPLoopScope PreInitScope(CGF, S);
         CGF.EmitStmt(
@@ -3674,7 +3671,7 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
                                          const RegionCodeGenTy &CodeGen) {
   assert(isOpenMPTargetExecutionDirective(S.getDirectiveKind()));
   CodeGenModule &CGM = CGF.CGM;
-  const CapturedStmt &CS = *cast<CapturedStmt>(S.getAssociatedStmt());
+  const CapturedStmt &CS = *S.getCapturedStmt(OMPD_target);
 
   llvm::Function *Fn = nullptr;
   llvm::Constant *FnID = nullptr;
@@ -4125,9 +4122,79 @@ void CodeGenFunction::EmitOMPTargetParallelDirective(
   emitCommonOMPTargetDirective(*this, S, CodeGen);
 }
 
+static void emitTargetParallelForRegion(CodeGenFunction &CGF,
+                                        const OMPTargetParallelForDirective &S,
+                                        PrePostActionTy &Action) {
+  Action.Enter(CGF);
+  // Emit directive as a combined directive that consists of two implicit
+  // directives: 'parallel' with 'for' directive.
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
+    CGF.EmitOMPWorksharingLoop(S, S.getEnsureUpperBound(), emitForLoopBounds,
+                               emitDispatchForLoopBounds);
+  };
+  emitCommonOMPParallelDirective(CGF, S, OMPD_for, CodeGen,
+                                 emitEmptyBoundParameters);
+}
+
+void CodeGenFunction::EmitOMPTargetParallelForDeviceFunction(
+    CodeGenModule &CGM, StringRef ParentName,
+    const OMPTargetParallelForDirective &S) {
+  // Emit SPMD target parallel for region as a standalone region.
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
+    emitTargetParallelForRegion(CGF, S, Action);
+  };
+  llvm::Function *Fn;
+  llvm::Constant *Addr;
+  // Emit target region as a standalone region.
+  CGM.getOpenMPRuntime().emitTargetOutlinedFunction(
+      S, ParentName, Fn, Addr, /*IsOffloadEntry=*/true, CodeGen);
+  assert(Fn && Addr && "Target device function emission failed.");
+}
+
 void CodeGenFunction::EmitOMPTargetParallelForDirective(
     const OMPTargetParallelForDirective &S) {
-  // TODO: codegen for target parallel for.
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
+    emitTargetParallelForRegion(CGF, S, Action);
+  };
+  emitCommonOMPTargetDirective(*this, S, CodeGen);
+}
+
+static void
+emitTargetParallelForSimdRegion(CodeGenFunction &CGF,
+                                const OMPTargetParallelForSimdDirective &S,
+                                PrePostActionTy &Action) {
+  Action.Enter(CGF);
+  // Emit directive as a combined directive that consists of two implicit
+  // directives: 'parallel' with 'for' directive.
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
+    CGF.EmitOMPWorksharingLoop(S, S.getEnsureUpperBound(), emitForLoopBounds,
+                               emitDispatchForLoopBounds);
+  };
+  emitCommonOMPParallelDirective(CGF, S, OMPD_simd, CodeGen,
+                                 emitEmptyBoundParameters);
+}
+
+void CodeGenFunction::EmitOMPTargetParallelForSimdDeviceFunction(
+    CodeGenModule &CGM, StringRef ParentName,
+    const OMPTargetParallelForSimdDirective &S) {
+  // Emit SPMD target parallel for region as a standalone region.
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
+    emitTargetParallelForSimdRegion(CGF, S, Action);
+  };
+  llvm::Function *Fn;
+  llvm::Constant *Addr;
+  // Emit target region as a standalone region.
+  CGM.getOpenMPRuntime().emitTargetOutlinedFunction(
+      S, ParentName, Fn, Addr, /*IsOffloadEntry=*/true, CodeGen);
+  assert(Fn && Addr && "Target device function emission failed.");
+}
+
+void CodeGenFunction::EmitOMPTargetParallelForSimdDirective(
+    const OMPTargetParallelForSimdDirective &S) {
+  auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
+    emitTargetParallelForSimdRegion(CGF, S, Action);
+  };
+  emitCommonOMPTargetDirective(*this, S, CodeGen);
 }
 
 /// Emit a helper variable and return corresponding lvalue.

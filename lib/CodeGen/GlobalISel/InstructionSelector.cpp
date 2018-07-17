@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -29,7 +30,7 @@
 using namespace llvm;
 
 InstructionSelector::MatcherState::MatcherState(unsigned MaxRenderers)
-    : Renderers(MaxRenderers, nullptr), MIs() {}
+    : Renderers(MaxRenderers), MIs() {}
 
 InstructionSelector::InstructionSelector() = default;
 
@@ -98,7 +99,30 @@ bool InstructionSelector::isOperandImmEqual(
   return false;
 }
 
-bool InstructionSelector::isObviouslySafeToFold(MachineInstr &MI) const {
+bool InstructionSelector::isBaseWithConstantOffset(
+    const MachineOperand &Root, const MachineRegisterInfo &MRI) const {
+  if (!Root.isReg())
+    return false;
+
+  MachineInstr *RootI = MRI.getVRegDef(Root.getReg());
+  if (RootI->getOpcode() != TargetOpcode::G_GEP)
+    return false;
+
+  MachineOperand &RHS = RootI->getOperand(2);
+  MachineInstr *RHSI = MRI.getVRegDef(RHS.getReg());
+  if (RHSI->getOpcode() != TargetOpcode::G_CONSTANT)
+    return false;
+
+  return true;
+}
+
+bool InstructionSelector::isObviouslySafeToFold(MachineInstr &MI,
+                                                MachineInstr &IntoMI) const {
+  // Immediate neighbours are already folded.
+  if (MI.getParent() == IntoMI.getParent() &&
+      std::next(MI.getIterator()) == IntoMI.getIterator())
+    return true;
+
   return !MI.mayLoadOrStore() && !MI.hasUnmodeledSideEffects() &&
          MI.implicit_operands().begin() == MI.implicit_operands().end();
 }

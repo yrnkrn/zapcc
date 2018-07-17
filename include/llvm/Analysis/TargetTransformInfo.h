@@ -193,13 +193,6 @@ public:
   int getGEPCost(Type *PointeeType, const Value *Ptr,
                  ArrayRef<const Value *> Operands) const;
 
-  /// \brief Estimate the cost of a GEP operation when lowered.
-  ///
-  /// This user-based overload adds the ability to check if the GEP can be
-  /// folded into its users.
-  int getGEPCost(const GEPOperator *GEP,
-                 ArrayRef<const Value *> Operands) const;
-
   /// \brief Estimate the cost of a EXT operation when lowered.
   ///
   /// The contract for this function is the same as \c getOperationCost except
@@ -258,9 +251,9 @@ public:
   /// \brief Estimate the cost of a given IR user when lowered.
   ///
   /// This can estimate the cost of either a ConstantExpr or Instruction when
-  /// lowered. It has two primary advantages over the \c getOperationCost above,
-  /// and one significant disadvantage: it can only be used when the IR
-  /// construct has already been formed.
+  /// lowered. It has two primary advantages over the \c getOperationCost and
+  /// \c getGEPCost above, and one significant disadvantage: it can only be
+  /// used when the IR construct has already been formed.
   ///
   /// The advantages are that it can inspect the SSA use graph to reason more
   /// accurately about the cost. For example, all-constant-GEPs can often be
@@ -496,6 +489,13 @@ public:
   /// would typically be allowed using throughput or size cost models.
   bool hasDivRemOp(Type *DataType, bool IsSigned) const;
 
+  /// Return true if the given instruction (assumed to be a memory access
+  /// instruction) has a volatile variant. If that's the case then we can avoid
+  /// addrspacecast to generic AS for volatile loads/stores. Default
+  /// implementation returns false, which prevents address space inference for
+  /// volatile loads/stores.
+  bool hasVolatileVariant(Instruction *I, unsigned AddrSpace) const;
+
   /// Return true if target doesn't mind addresses in vectors.
   bool prefersVectorizedAddressing() const;
 
@@ -554,8 +554,13 @@ public:
   /// \brief Don't restrict interleaved unrolling to small loops.
   bool enableAggressiveInterleaving(bool LoopHasReductions) const;
 
-  /// \brief Enable inline expansion of memcmp
-  bool enableMemCmpExpansion(unsigned &MaxLoadSize) const;
+  /// \brief If not nullptr, enable inline expansion of memcmp. IsZeroCmp is
+  /// true if this is the expansion of memcmp(p1, p2, s) == 0.
+  struct MemCmpExpansionOptions {
+    // The list of available load sizes (in bytes), sorted in decreasing order.
+    SmallVector<unsigned, 8> LoadSizes;
+  };
+  const MemCmpExpansionOptions *enableMemCmpExpansion(bool IsZeroCmp) const;
 
   /// \brief Enable matching of interleaved access groups.
   bool enableInterleavedAccessVectorization() const;
@@ -939,8 +944,6 @@ public:
   virtual int getOperationCost(unsigned Opcode, Type *Ty, Type *OpTy) = 0;
   virtual int getGEPCost(Type *PointeeType, const Value *Ptr,
                          ArrayRef<const Value *> Operands) = 0;
-  virtual int getGEPCost(const GEPOperator *GEP,
-                         ArrayRef<const Value *> Operands) = 0;
   virtual int getExtCost(const Instruction *I, const Value *Src) = 0;
   virtual int getCallCost(FunctionType *FTy, int NumArgs) = 0;
   virtual int getCallCost(const Function *F, int NumArgs) = 0;
@@ -976,6 +979,7 @@ public:
   virtual bool isLegalMaskedScatter(Type *DataType) = 0;
   virtual bool isLegalMaskedGather(Type *DataType) = 0;
   virtual bool hasDivRemOp(Type *DataType, bool IsSigned) = 0;
+  virtual bool hasVolatileVariant(Instruction *I, unsigned AddrSpace) = 0;
   virtual bool prefersVectorizedAddressing() = 0;
   virtual int getScalingFactorCost(Type *Ty, GlobalValue *BaseGV,
                                    int64_t BaseOffset, bool HasBaseReg,
@@ -994,7 +998,8 @@ public:
                                                     unsigned VF) = 0;
   virtual bool supportsEfficientVectorElementLoadStore() = 0;
   virtual bool enableAggressiveInterleaving(bool LoopHasReductions) = 0;
-  virtual bool enableMemCmpExpansion(unsigned &MaxLoadSize) = 0;
+  virtual const MemCmpExpansionOptions *enableMemCmpExpansion(
+      bool IsZeroCmp) const = 0;
   virtual bool enableInterleavedAccessVectorization() = 0;
   virtual bool isFPVectorizationPotentiallyUnsafe() = 0;
   virtual bool allowsMisalignedMemoryAccesses(LLVMContext &Context,
@@ -1122,10 +1127,6 @@ public:
                  ArrayRef<const Value *> Operands) override {
     return Impl.getGEPCost(PointeeType, Ptr, Operands);
   }
-  int getGEPCost(const GEPOperator *GEP,
-                 ArrayRef<const Value *> Operands) override {
-    return Impl.getGEPCost(GEP, Operands);
-  }
   int getExtCost(const Instruction *I, const Value *Src) override {
     return Impl.getExtCost(I, Src);
   }
@@ -1205,6 +1206,9 @@ public:
   bool hasDivRemOp(Type *DataType, bool IsSigned) override {
     return Impl.hasDivRemOp(DataType, IsSigned);
   }
+  bool hasVolatileVariant(Instruction *I, unsigned AddrSpace) override {
+    return Impl.hasVolatileVariant(I, AddrSpace);
+  }
   bool prefersVectorizedAddressing() override {
     return Impl.prefersVectorizedAddressing();
   }
@@ -1248,8 +1252,9 @@ public:
   bool enableAggressiveInterleaving(bool LoopHasReductions) override {
     return Impl.enableAggressiveInterleaving(LoopHasReductions);
   }
-  bool enableMemCmpExpansion(unsigned &MaxLoadSize) override {
-    return Impl.enableMemCmpExpansion(MaxLoadSize);
+  const MemCmpExpansionOptions *enableMemCmpExpansion(
+      bool IsZeroCmp) const override {
+    return Impl.enableMemCmpExpansion(IsZeroCmp);
   }
   bool enableInterleavedAccessVectorization() override {
     return Impl.enableInterleavedAccessVectorization();

@@ -21,11 +21,11 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/MachineTraceMetrics.h"
 #include "llvm/CodeGen/Passes.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSchedule.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 
@@ -161,9 +161,10 @@ MachineCombiner::getDepth(SmallVectorImpl<MachineInstr *> &InsInstrs,
         assert(DefInstr &&
                "There must be a definition for a new virtual register");
         DepthOp = InstrDepth[II->second];
-        LatencyOp = TSchedModel.computeOperandLatency(
-            DefInstr, DefInstr->findRegisterDefOperandIdx(MO.getReg()),
-            InstrPtr, InstrPtr->findRegisterUseOperandIdx(MO.getReg()));
+        int DefIdx = DefInstr->findRegisterDefOperandIdx(MO.getReg());
+        int UseIdx = InstrPtr->findRegisterUseOperandIdx(MO.getReg());
+        LatencyOp = TSchedModel.computeOperandLatency(DefInstr, DefIdx,
+                                                      InstrPtr, UseIdx);
       } else {
         MachineInstr *DefInstr = getOperandDef(MO);
         if (DefInstr) {
@@ -415,7 +416,7 @@ bool MachineCombiner::combineInstructions(MachineBasicBlock *MBB) {
 
   bool IncrementalUpdate = false;
   auto BlockIter = MBB->begin();
-  auto LastUpdate = BlockIter;
+  decltype(BlockIter) LastUpdate;
   // Check if the block is in a loop.
   const MachineLoop *ML = MLI->getLoopFor(MBB);
   if (!MinInstr)
@@ -503,9 +504,11 @@ bool MachineCombiner::combineInstructions(MachineBasicBlock *MBB) {
                                     InstrIdxForVirtReg, P,
                                     !IncrementalUpdate) &&
             preservesResourceLen(MBB, BlockTrace, InsInstrs, DelInstrs)) {
-          if (MBB->size() > inc_threshold)
+          if (MBB->size() > inc_threshold) {
             // Use incremental depth updates for basic blocks above treshold
             IncrementalUpdate = true;
+            LastUpdate = BlockIter;
+          }
 
           insertDeleteInstructions(MBB, MI, InsInstrs, DelInstrs, MinInstr,
                                    RegUnits, IncrementalUpdate);

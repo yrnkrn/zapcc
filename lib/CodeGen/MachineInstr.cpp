@@ -33,6 +33,7 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/PseudoSourceValue.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
@@ -58,7 +59,6 @@
 #include "llvm/Support/LowLevelTypeImpl.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetIntrinsicInfo.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -311,7 +311,7 @@ bool MachineOperand::isIdenticalTo(const MachineOperand &Other) const {
       return true;
 
     // Calculate the size of the RegMask
-    const MachineFunction *MF = getParent()->getParent()->getParent();
+    const MachineFunction *MF = getParent()->getMF();
     const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
     unsigned RegMaskSize = (TRI->getNumRegs() + 31) / 32;
 
@@ -1055,7 +1055,7 @@ MachineInstr::mergeMemRefsWith(const MachineInstr& Other) {
   if (CombinedNumMemRefs != uint8_t(CombinedNumMemRefs))
     return std::make_pair(nullptr, 0);
 
-  MachineFunction *MF = getParent()->getParent();
+  MachineFunction *MF = getMF();
   mmo_iterator MemBegin = MF->allocateMemRefsArray(CombinedNumMemRefs);
   mmo_iterator MemEnd = std::copy(memoperands_begin(), memoperands_end(),
                                   MemBegin);
@@ -1129,9 +1129,9 @@ bool MachineInstr::isIdenticalTo(const MachineInstr &Other,
       if (Check == IgnoreDefs)
         continue;
       else if (Check == IgnoreVRegDefs) {
-        if (TargetRegisterInfo::isPhysicalRegister(MO.getReg()) ||
-            TargetRegisterInfo::isPhysicalRegister(OMO.getReg()))
-          if (MO.getReg() != OMO.getReg())
+        if (!TargetRegisterInfo::isVirtualRegister(MO.getReg()) ||
+            !TargetRegisterInfo::isVirtualRegister(OMO.getReg()))
+          if (!MO.isIdenticalTo(OMO))
             return false;
       } else {
         if (!MO.isIdenticalTo(OMO))
@@ -1152,6 +1152,10 @@ bool MachineInstr::isIdenticalTo(const MachineInstr &Other,
         getDebugLoc() != Other.getDebugLoc())
       return false;
   return true;
+}
+
+const MachineFunction *MachineInstr::getMF() const {
+  return getParent()->getParent();
 }
 
 MachineInstr *MachineInstr::removeFromParent() {
@@ -1303,8 +1307,8 @@ MachineInstr::getRegClassConstraint(unsigned OpIdx,
                                     const TargetInstrInfo *TII,
                                     const TargetRegisterInfo *TRI) const {
   assert(getParent() && "Can't have an MBB reference here!");
-  assert(getParent()->getParent() && "Can't have an MF reference here!");
-  const MachineFunction &MF = *getParent()->getParent();
+  assert(getMF() && "Can't have an MF reference here!");
+  const MachineFunction &MF = *getMF();
 
   // Most opcodes have fixed constraints in their MCInstrDesc.
   if (!isInlineAsm())
@@ -1640,7 +1644,7 @@ bool MachineInstr::isSafeToMove(AliasAnalysis *AA, bool &SawStore) const {
   // Treat volatile loads as stores. This is not strictly necessary for
   // volatiles, but it is required for atomic loads. It is not allowed to move
   // a load across an atomic load with Ordering > Monotonic.
-  if (mayStore() || isCall() ||
+  if (mayStore() || isCall() || isPHI() ||
       (mayLoad() && hasOrderedMemoryRef())) {
     SawStore = true;
     return false;
@@ -1665,7 +1669,7 @@ bool MachineInstr::isSafeToMove(AliasAnalysis *AA, bool &SawStore) const {
 
 bool MachineInstr::mayAlias(AliasAnalysis *AA, MachineInstr &Other,
                             bool UseTBAA) {
-  const MachineFunction *MF = getParent()->getParent();
+  const MachineFunction *MF = getMF();
   const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
   const MachineFrameInfo &MFI = MF->getFrameInfo();
 

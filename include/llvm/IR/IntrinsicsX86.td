@@ -2171,11 +2171,11 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
 // FMA3 and FMA4
 
 let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
-  def int_x86_fma_vfmadd_ss : GCCBuiltin<"__builtin_ia32_vfmaddss">,
+  def int_x86_fma_vfmadd_ss : GCCBuiltin<"__builtin_ia32_vfmaddss3">,
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmadd_sd : GCCBuiltin<"__builtin_ia32_vfmaddsd">,
+  def int_x86_fma_vfmadd_sd : GCCBuiltin<"__builtin_ia32_vfmaddsd3">,
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
@@ -2196,75 +2196,75 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
                         [llvm_v4f64_ty, llvm_v4f64_ty, llvm_v4f64_ty],
                         [IntrNoMem]>;
 
-  def int_x86_fma_vfmsub_ss : GCCBuiltin<"__builtin_ia32_vfmsubss">,
+  def int_x86_fma_vfmsub_ss : GCCBuiltin<"__builtin_ia32_vfmsubss3">,
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsub_sd : GCCBuiltin<"__builtin_ia32_vfmsubsd">,
+  def int_x86_fma_vfmsub_sd : GCCBuiltin<"__builtin_ia32_vfmsubsd3">,
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsub_ps : GCCBuiltin<"__builtin_ia32_vfmsubps">,
+  def int_x86_fma_vfmsub_ps : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsub_pd : GCCBuiltin<"__builtin_ia32_vfmsubpd">,
+  def int_x86_fma_vfmsub_pd : // TODO: remove this intrinsic
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsub_ps_256 : GCCBuiltin<"__builtin_ia32_vfmsubps256">,
+  def int_x86_fma_vfmsub_ps_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v8f32_ty],
                         [llvm_v8f32_ty, llvm_v8f32_ty, llvm_v8f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsub_pd_256 : GCCBuiltin<"__builtin_ia32_vfmsubpd256">,
+  def int_x86_fma_vfmsub_pd_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f64_ty],
                         [llvm_v4f64_ty, llvm_v4f64_ty, llvm_v4f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmadd_ss : GCCBuiltin<"__builtin_ia32_vfnmaddss">,
+  def int_x86_fma_vfnmadd_ss : GCCBuiltin<"__builtin_ia32_vfnmaddss3">,
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmadd_sd : GCCBuiltin<"__builtin_ia32_vfnmaddsd">,
+  def int_x86_fma_vfnmadd_sd : GCCBuiltin<"__builtin_ia32_vfnmaddsd3">,
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmadd_ps : GCCBuiltin<"__builtin_ia32_vfnmaddps">,
+  def int_x86_fma_vfnmadd_ps : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmadd_pd : GCCBuiltin<"__builtin_ia32_vfnmaddpd">,
+  def int_x86_fma_vfnmadd_pd : // TODO: remove this intrinsic
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmadd_ps_256 : GCCBuiltin<"__builtin_ia32_vfnmaddps256">,
+  def int_x86_fma_vfnmadd_ps_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v8f32_ty],
                         [llvm_v8f32_ty, llvm_v8f32_ty, llvm_v8f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmadd_pd_256 : GCCBuiltin<"__builtin_ia32_vfnmaddpd256">,
+  def int_x86_fma_vfnmadd_pd_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f64_ty],
                         [llvm_v4f64_ty, llvm_v4f64_ty, llvm_v4f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmsub_ss : GCCBuiltin<"__builtin_ia32_vfnmsubss">,
+  def int_x86_fma_vfnmsub_ss : GCCBuiltin<"__builtin_ia32_vfnmsubss3">,
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmsub_sd : GCCBuiltin<"__builtin_ia32_vfnmsubsd">,
+  def int_x86_fma_vfnmsub_sd : GCCBuiltin<"__builtin_ia32_vfnmsubsd3">,
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmsub_ps : GCCBuiltin<"__builtin_ia32_vfnmsubps">,
+  def int_x86_fma_vfnmsub_ps : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmsub_pd : GCCBuiltin<"__builtin_ia32_vfnmsubpd">,
+  def int_x86_fma_vfnmsub_pd : // TODO: remove this intrinsic
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmsub_ps_256 : GCCBuiltin<"__builtin_ia32_vfnmsubps256">,
+  def int_x86_fma_vfnmsub_ps_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v8f32_ty],
                         [llvm_v8f32_ty, llvm_v8f32_ty, llvm_v8f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfnmsub_pd_256 : GCCBuiltin<"__builtin_ia32_vfnmsubpd256">,
+  def int_x86_fma_vfnmsub_pd_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f64_ty],
                         [llvm_v4f64_ty, llvm_v4f64_ty, llvm_v4f64_ty],
                         [IntrNoMem]>;
@@ -2286,21 +2286,19 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
               Intrinsic<[llvm_v4f64_ty],
                         [llvm_v4f64_ty, llvm_v4f64_ty, llvm_v4f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsubadd_ps : GCCBuiltin<"__builtin_ia32_vfmsubaddps">,
+  def int_x86_fma_vfmsubadd_ps : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f32_ty],
                         [llvm_v4f32_ty, llvm_v4f32_ty, llvm_v4f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsubadd_pd : GCCBuiltin<"__builtin_ia32_vfmsubaddpd">,
+  def int_x86_fma_vfmsubadd_pd : // TODO: remove this intrinsic
               Intrinsic<[llvm_v2f64_ty],
                         [llvm_v2f64_ty, llvm_v2f64_ty, llvm_v2f64_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsubadd_ps_256 :
-              GCCBuiltin<"__builtin_ia32_vfmsubaddps256">,
+  def int_x86_fma_vfmsubadd_ps_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v8f32_ty],
                         [llvm_v8f32_ty, llvm_v8f32_ty, llvm_v8f32_ty],
                         [IntrNoMem]>;
-  def int_x86_fma_vfmsubadd_pd_256 :
-              GCCBuiltin<"__builtin_ia32_vfmsubaddpd256">,
+  def int_x86_fma_vfmsubadd_pd_256 : // TODO: remove this intrinsic
               Intrinsic<[llvm_v4f64_ty],
                         [llvm_v4f64_ty, llvm_v4f64_ty, llvm_v4f64_ty],
                         [IntrNoMem]>;
@@ -3473,9 +3471,12 @@ let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
 }
 
 //===----------------------------------------------------------------------===//
-// CLFLUSHOPT
+// CLFLUSHOPT and CLWB
 let TargetPrefix = "x86" in {  // All intrinsics start with "llvm.x86.".
   def int_x86_clflushopt : GCCBuiltin<"__builtin_ia32_clflushopt">,
+              Intrinsic<[], [llvm_ptr_ty], []>;
+
+  def int_x86_clwb : GCCBuiltin<"__builtin_ia32_clwb">,
               Intrinsic<[], [llvm_ptr_ty], []>;
 }
 

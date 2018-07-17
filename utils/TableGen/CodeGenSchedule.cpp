@@ -585,8 +585,7 @@ void CodeGenSchedModels::collectSchedClasses() {
     }
     // If ProcIndices contains zero, the class applies to all processors.
     if (!std::count(ProcIndices.begin(), ProcIndices.end(), 0)) {
-      for (const CodeGenProcModel &PM :
-           make_range(ProcModels.begin(), ProcModels.end())) {
+      for (const CodeGenProcModel &PM : ProcModels) {
         if (!std::count(ProcIndices.begin(), ProcIndices.end(), PM.Index))
           dbgs() << "No machine model for " << Inst->TheDef->getName()
                  << " on processor " << PM.ModelName << '\n';
@@ -830,16 +829,16 @@ void CodeGenSchedModels::collectProcItins() {
 void CodeGenSchedModels::collectProcItinRW() {
   RecVec ItinRWDefs = Records.getAllDerivedDefinitions("ItinRW");
   std::sort(ItinRWDefs.begin(), ItinRWDefs.end(), LessRecord());
-  for (RecIter II = ItinRWDefs.begin(), IE = ItinRWDefs.end(); II != IE; ++II) {
-    if (!(*II)->getValueInit("SchedModel")->isComplete())
-      PrintFatalError((*II)->getLoc(), "SchedModel is undefined");
-    Record *ModelDef = (*II)->getValueAsDef("SchedModel");
+  for (Record *RWDef  : ItinRWDefs) {
+    if (!RWDef->getValueInit("SchedModel")->isComplete())
+      PrintFatalError(RWDef->getLoc(), "SchedModel is undefined");
+    Record *ModelDef = RWDef->getValueAsDef("SchedModel");
     ProcModelMapTy::const_iterator I = ProcModelMap.find(ModelDef);
     if (I == ProcModelMap.end()) {
-      PrintFatalError((*II)->getLoc(), "Undefined SchedMachineModel "
+      PrintFatalError(RWDef->getLoc(), "Undefined SchedMachineModel "
                     + ModelDef->getName());
     }
-    ProcModels[I->second].ItinRWDefs.push_back(*II);
+    ProcModels[I->second].ItinRWDefs.push_back(RWDef);
   }
 }
 
@@ -995,7 +994,7 @@ private:
 // conditions implicitly negate any prior condition.
 bool PredTransitions::mutuallyExclusive(Record *PredDef,
                                         ArrayRef<PredCheck> Term) {
-  for (const PredCheck &PC: make_range(Term.begin(), Term.end())) {
+  for (const PredCheck &PC: Term) {
     if (PC.Predicate == PredDef)
       return false;
 
@@ -1015,7 +1014,7 @@ static bool hasAliasedVariants(const CodeGenSchedRW &RW,
   if (RW.HasVariants)
     return true;
 
-  for (Record *Alias : make_range(RW.Aliases.begin(), RW.Aliases.end())) {
+  for (Record *Alias : RW.Aliases) {
     const CodeGenSchedRW &AliasRW =
       SchedModels.getSchedRW(Alias->getValueAsDef("AliasRW"));
     if (AliasRW.HasVariants)
@@ -1080,8 +1079,8 @@ void PredTransitions::getIntersectingVariants(
     }
     // Push each variant. Assign TransVecIdx later.
     const RecVec VarDefs = SchedRW.TheDef->getValueAsListOfDefs("Variants");
-    for (RecIter RI = VarDefs.begin(), RE = VarDefs.end(); RI != RE; ++RI)
-      Variants.push_back(TransVariant(*RI, SchedRW.Index, VarProcIdx, 0));
+    for (Record *VarDef : VarDefs)
+      Variants.push_back(TransVariant(VarDef, SchedRW.Index, VarProcIdx, 0));
     if (VarProcIdx == 0)
       GenericRW = true;
   }
@@ -1100,8 +1099,8 @@ void PredTransitions::getIntersectingVariants(
 
     if (AliasRW.HasVariants) {
       const RecVec VarDefs = AliasRW.TheDef->getValueAsListOfDefs("Variants");
-      for (RecIter RI = VarDefs.begin(), RE = VarDefs.end(); RI != RE; ++RI)
-        Variants.push_back(TransVariant(*RI, AliasRW.Index, AliasProcIdx, 0));
+      for (Record *VD : VarDefs)
+        Variants.push_back(TransVariant(VD, AliasRW.Index, AliasProcIdx, 0));
     }
     if (AliasRW.IsSequence) {
       Variants.push_back(
@@ -1110,12 +1109,11 @@ void PredTransitions::getIntersectingVariants(
     if (AliasProcIdx == 0)
       GenericRW = true;
   }
-  for (unsigned VIdx = 0, VEnd = Variants.size(); VIdx != VEnd; ++VIdx) {
-    TransVariant &Variant = Variants[VIdx];
+  for (TransVariant &Variant : Variants) {
     // Don't expand variants if the processor models don't intersect.
     // A zero processor index means any processor.
     SmallVectorImpl<unsigned> &ProcIndices = TransVec[TransIdx].ProcIndices;
-    if (ProcIndices[0] && Variants[VIdx].ProcIdx) {
+    if (ProcIndices[0] && Variant.ProcIdx) {
       unsigned Cnt = std::count(ProcIndices.begin(), ProcIndices.end(),
                                 Variant.ProcIdx);
       if (!Cnt)
@@ -1480,31 +1478,31 @@ void CodeGenSchedModels::collectProcResources() {
   }
   // Add resources separately defined by each subtarget.
   RecVec WRDefs = Records.getAllDerivedDefinitions("WriteRes");
-  for (RecIter WRI = WRDefs.begin(), WRE = WRDefs.end(); WRI != WRE; ++WRI) {
-    Record *ModelDef = (*WRI)->getValueAsDef("SchedModel");
-    addWriteRes(*WRI, getProcModel(ModelDef).Index);
+  for (Record *WR : WRDefs) {
+    Record *ModelDef = WR->getValueAsDef("SchedModel");
+    addWriteRes(WR, getProcModel(ModelDef).Index);
   }
   RecVec SWRDefs = Records.getAllDerivedDefinitions("SchedWriteRes");
-  for (RecIter WRI = SWRDefs.begin(), WRE = SWRDefs.end(); WRI != WRE; ++WRI) {
-    Record *ModelDef = (*WRI)->getValueAsDef("SchedModel");
-    addWriteRes(*WRI, getProcModel(ModelDef).Index);
+  for (Record *SWR : SWRDefs) {
+    Record *ModelDef = SWR->getValueAsDef("SchedModel");
+    addWriteRes(SWR, getProcModel(ModelDef).Index);
   }
   RecVec RADefs = Records.getAllDerivedDefinitions("ReadAdvance");
-  for (RecIter RAI = RADefs.begin(), RAE = RADefs.end(); RAI != RAE; ++RAI) {
-    Record *ModelDef = (*RAI)->getValueAsDef("SchedModel");
-    addReadAdvance(*RAI, getProcModel(ModelDef).Index);
+  for (Record *RA : RADefs) {
+    Record *ModelDef = RA->getValueAsDef("SchedModel");
+    addReadAdvance(RA, getProcModel(ModelDef).Index);
   }
   RecVec SRADefs = Records.getAllDerivedDefinitions("SchedReadAdvance");
-  for (RecIter RAI = SRADefs.begin(), RAE = SRADefs.end(); RAI != RAE; ++RAI) {
-    if ((*RAI)->getValueInit("SchedModel")->isComplete()) {
-      Record *ModelDef = (*RAI)->getValueAsDef("SchedModel");
-      addReadAdvance(*RAI, getProcModel(ModelDef).Index);
+  for (Record *SRA : SRADefs) {
+    if (SRA->getValueInit("SchedModel")->isComplete()) {
+      Record *ModelDef = SRA->getValueAsDef("SchedModel");
+      addReadAdvance(SRA, getProcModel(ModelDef).Index);
     }
   }
   // Add ProcResGroups that are defined within this processor model, which may
   // not be directly referenced but may directly specify a buffer size.
   RecVec ProcResGroups = Records.getAllDerivedDefinitions("ProcResGroup");
-  for (Record *PRG : make_range(ProcResGroups.begin(), ProcResGroups.end())) {
+  for (Record *PRG : ProcResGroups) {
     if (!PRG->getValueInit("SchedModel")->isComplete())
       continue;
     CodeGenProcModel &PM = getProcModel(PRG->getValueAsDef("SchedModel"));

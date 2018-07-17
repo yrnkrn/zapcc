@@ -14,7 +14,7 @@ define <8 x i16> @pr25080(<8 x i32> %a) {
 ; AVX-NEXT:    vpxor %xmm2, %xmm2, %xmm2
 ; AVX-NEXT:    vpcmpeqd %xmm2, %xmm1, %xmm1
 ; AVX-NEXT:    vpcmpeqd %xmm2, %xmm0, %xmm0
-; AVX-NEXT:    vpacksswb %xmm1, %xmm0, %xmm0
+; AVX-NEXT:    vpackssdw %xmm1, %xmm0, %xmm0
 ; AVX-NEXT:    vpor {{.*}}(%rip), %xmm0, %xmm0
 ; AVX-NEXT:    vpsllw $15, %xmm0, %xmm0
 ; AVX-NEXT:    vpsraw $15, %xmm0, %xmm0
@@ -23,10 +23,9 @@ define <8 x i16> @pr25080(<8 x i32> %a) {
 ;
 ; KNL-32-LABEL: pr25080:
 ; KNL-32:       # BB#0: # %entry
+; KNL-32-NEXT:    # kill: %YMM0<def> %YMM0<kill> %ZMM0<def>
 ; KNL-32-NEXT:    vpbroadcastd {{.*#+}} ymm1 = [8388607,8388607,8388607,8388607,8388607,8388607,8388607,8388607]
-; KNL-32-NEXT:    vpand %ymm1, %ymm0, %ymm0
-; KNL-32-NEXT:    vpxor %xmm1, %xmm1, %xmm1
-; KNL-32-NEXT:    vpcmpeqd %zmm1, %zmm0, %k0
+; KNL-32-NEXT:    vptestnmd %zmm1, %zmm0, %k0
 ; KNL-32-NEXT:    movb $15, %al
 ; KNL-32-NEXT:    kmovw %eax, %k1
 ; KNL-32-NEXT:    korw %k1, %k0, %k1
@@ -67,9 +66,7 @@ define void @pr26232(i64 %a, <16 x i1> %b) {
 ; KNL-32-LABEL: pr26232:
 ; KNL-32:       # BB#0: # %for_loop599.preheader
 ; KNL-32-NEXT:    pushl %esi
-; KNL-32-NEXT:  .Lcfi0:
 ; KNL-32-NEXT:    .cfi_def_cfa_offset 8
-; KNL-32-NEXT:  .Lcfi1:
 ; KNL-32-NEXT:    .cfi_offset %esi, -8
 ; KNL-32-NEXT:    vpmovsxbd %xmm0, %zmm0
 ; KNL-32-NEXT:    vpslld $31, %zmm0, %zmm0

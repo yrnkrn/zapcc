@@ -132,6 +132,10 @@ def DynamicTypePropagation : Checker<"DynamicTypePropagation">,
   HelpText<"Generate dynamic type information">,
   DescFile<"DynamicTypePropagation.cpp">;
 
+def NonnullGlobalConstantsChecker: Checker<"NonnilStringConstants">,
+  HelpText<"Assume that const string-like globals are non-null">,
+  DescFile<"NonilStringConstantsChecker.cpp">;
+
 } // end "core"
 
 let ParentPackage = CoreAlpha in {
@@ -743,10 +747,6 @@ def ExprInspectionChecker : Checker<"ExprInspection">,
 
 def ExplodedGraphViewer : Checker<"ViewExplodedGraph">,
   HelpText<"View Exploded Graphs using GraphViz">,
-  DescFile<"DebugCheckers.cpp">;
-
-def BugHashDumper : Checker<"DumpBugHash">,
-  HelpText<"Dump the bug hash for all statements.">,
   DescFile<"DebugCheckers.cpp">;
 
 } // end "debug"

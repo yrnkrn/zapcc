@@ -481,7 +481,7 @@ TARGET_BUILTIN(__nvvm_atom_cta_add_gen_f, "ffD*f", "n", "satom")
 TARGET_BUILTIN(__nvvm_atom_sys_add_gen_f, "ffD*f", "n", "satom")
 BUILTIN(__nvvm_atom_add_g_d, "ddD*1d", "n")
 BUILTIN(__nvvm_atom_add_s_d, "ddD*3d", "n")
-BUILTIN(__nvvm_atom_add_gen_d, "ddD*d", "n")
+TARGET_BUILTIN(__nvvm_atom_add_gen_d, "ddD*d", "n", "satom")
 TARGET_BUILTIN(__nvvm_atom_cta_add_gen_d, "ddD*d", "n", "satom")
 TARGET_BUILTIN(__nvvm_atom_sys_add_gen_d, "ddD*d", "n", "satom")
 
@@ -687,6 +687,19 @@ BUILTIN(__nvvm_ldg_ull2, "E2ULLiE2ULLiC*", "")
 BUILTIN(__nvvm_ldg_f2, "E2fE2fC*", "")
 BUILTIN(__nvvm_ldg_f4, "E4fE4fC*", "")
 BUILTIN(__nvvm_ldg_d2, "E2dE2dC*", "")
+
+// Builtins to support WMMA instructions on sm_70
+TARGET_BUILTIN(__hmma_m16n16k16_ld_a, "vi*iC*UiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_ld_b, "vi*iC*UiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_ld_c_f16, "vi*iC*UiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_ld_c_f32, "vf*fC*UiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_st_c_f16, "vi*i*UiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_st_c_f32, "vf*f*UiIi", "", "ptx60")
+
+TARGET_BUILTIN(__hmma_m16n16k16_mma_f16f16, "vi*iC*iC*iC*IiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_mma_f32f16, "vf*iC*iC*iC*IiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_mma_f32f32, "vf*iC*iC*fC*IiIi", "", "ptx60")
+TARGET_BUILTIN(__hmma_m16n16k16_mma_f16f32, "vi*iC*iC*fC*IiIi", "", "ptx60")
 
 #undef BUILTIN
 #undef TARGET_BUILTIN

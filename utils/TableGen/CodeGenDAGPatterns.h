@@ -25,6 +25,7 @@
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <map>
 #include <set>
 #include <vector>
@@ -447,7 +448,7 @@ public:
   /// isAlwaysTrue - Return true if this is a noop predicate.
   bool isAlwaysTrue() const;
 
-  bool isImmediatePattern() const { return !getImmCode().empty(); }
+  bool isImmediatePattern() const { return hasImmCode(); }
 
   /// getImmediatePredicateCode - Return the code that evaluates this pattern if
   /// this is an immediate predicate.  It is an error to call this on a
@@ -457,7 +458,6 @@ public:
     assert(!Result.empty() && "Isn't an immediate pattern!");
     return Result;
   }
-
 
   bool operator==(const TreePredicateFn &RHS) const {
     return PatFragRec == RHS.PatFragRec;
@@ -475,9 +475,51 @@ public:
   /// appropriate.
   std::string getCodeToRunOnSDNode() const;
 
+  /// Get the data type of the argument to getImmediatePredicateCode().
+  StringRef getImmType() const;
+
+  /// Get a string that describes the type returned by getImmType() but is
+  /// usable as part of an identifier.
+  StringRef getImmTypeIdentifier() const;
+
+  // Is the desired predefined predicate for a load?
+  bool isLoad() const;
+  // Is the desired predefined predicate for a store?
+  bool isStore() const;
+
+  /// Is this predicate the predefined unindexed load predicate?
+  /// Is this predicate the predefined unindexed store predicate?
+  bool isUnindexed() const;
+  /// Is this predicate the predefined non-extending load predicate?
+  bool isNonExtLoad() const;
+  /// Is this predicate the predefined any-extend load predicate?
+  bool isAnyExtLoad() const;
+  /// Is this predicate the predefined sign-extend load predicate?
+  bool isSignExtLoad() const;
+  /// Is this predicate the predefined zero-extend load predicate?
+  bool isZeroExtLoad() const;
+  /// Is this predicate the predefined non-truncating store predicate?
+  bool isNonTruncStore() const;
+  /// Is this predicate the predefined truncating store predicate?
+  bool isTruncStore() const;
+
+  /// If non-null, indicates that this predicate is a predefined memory VT
+  /// predicate for a load/store and returns the ValueType record for the memory VT.
+  Record *getMemoryVT() const;
+  /// If non-null, indicates that this predicate is a predefined memory VT
+  /// predicate (checking only the scalar type) for load/store and returns the
+  /// ValueType record for the memory VT.
+  Record *getScalarMemoryVT() const;
+
 private:
+  bool hasPredCode() const;
+  bool hasImmCode() const;
   std::string getPredCode() const;
   std::string getImmCode() const;
+  bool immCodeUsesAPInt() const;
+  bool immCodeUsesAPFloat() const;
+
+  bool isPredefinedPredicateEqualTo(StringRef Field, bool Value) const;
 };
 
 
@@ -739,6 +781,7 @@ public:
   const std::vector<TreePatternNode*> &getTrees() const { return Trees; }
   unsigned getNumTrees() const { return Trees.size(); }
   TreePatternNode *getTree(unsigned i) const { return Trees[i]; }
+  void setTree(unsigned i, TreePatternNode *Tree) { Trees[i] = Tree; }
   TreePatternNode *getOnlyTree() const {
     assert(Trees.size() == 1 && "Doesn't have exactly one pattern!");
     return Trees[0];
@@ -988,8 +1031,12 @@ class CodeGenDAGPatterns {
 
   TypeSetByHwMode LegalVTS;
 
+  using PatternRewriterFn = std::function<void (TreePattern *)>;
+  PatternRewriterFn PatternRewriter;
+
 public:
-  CodeGenDAGPatterns(RecordKeeper &R);
+  CodeGenDAGPatterns(RecordKeeper &R,
+                     PatternRewriterFn PatternRewriter = nullptr);
 
   CodeGenTarget &getTargetInfo() { return Target; }
   const CodeGenTarget &getTargetInfo() const { return Target; }
@@ -998,15 +1045,17 @@ public:
   Record *getSDNodeNamed(const std::string &Name) const;
 
   const SDNodeInfo &getSDNodeInfo(Record *R) const {
-    assert(SDNodes.count(R) && "Unknown node!");
-    return SDNodes.find(R)->second;
+    auto F = SDNodes.find(R);
+    assert(F != SDNodes.end() && "Unknown node!");
+    return F->second;
   }
 
   // Node transformation lookups.
   typedef std::pair<Record*, std::string> NodeXForm;
   const NodeXForm &getSDNodeTransform(Record *R) const {
-    assert(SDNodeXForms.count(R) && "Invalid transform!");
-    return SDNodeXForms.find(R)->second;
+    auto F = SDNodeXForms.find(R);
+    assert(F != SDNodeXForms.end() && "Invalid transform!");
+    return F->second;
   }
 
   typedef std::map<Record*, NodeXForm, LessRecordByID>::const_iterator
@@ -1016,8 +1065,9 @@ public:
 
 
   const ComplexPattern &getComplexPattern(Record *R) const {
-    assert(ComplexPatterns.count(R) && "Unknown addressing mode!");
-    return ComplexPatterns.find(R)->second;
+    auto F = ComplexPatterns.find(R);
+    assert(F != ComplexPatterns.end() && "Unknown addressing mode!");
+    return F->second;
   }
 
   const CodeGenIntrinsic &getIntrinsic(Record *R) const {
@@ -1045,19 +1095,22 @@ public:
   }
 
   const DAGDefaultOperand &getDefaultOperand(Record *R) const {
-    assert(DefaultOperands.count(R) &&"Isn't an analyzed default operand!");
-    return DefaultOperands.find(R)->second;
+    auto F = DefaultOperands.find(R);
+    assert(F != DefaultOperands.end() &&"Isn't an analyzed default operand!");
+    return F->second;
   }
 
   // Pattern Fragment information.
   TreePattern *getPatternFragment(Record *R) const {
-    assert(PatternFragments.count(R) && "Invalid pattern fragment request!");
-    return PatternFragments.find(R)->second.get();
+    auto F = PatternFragments.find(R);
+    assert(F != PatternFragments.end() && "Invalid pattern fragment request!");
+    return F->second.get();
   }
   TreePattern *getPatternFragmentIfRead(Record *R) const {
-    if (!PatternFragments.count(R))
+    auto F = PatternFragments.find(R);
+    if (F == PatternFragments.end())
       return nullptr;
-    return PatternFragments.find(R)->second.get();
+    return F->second.get();
   }
 
   typedef std::map<Record *, std::unique_ptr<TreePattern>,
@@ -1079,8 +1132,9 @@ public:
       DAGInstMap &DAGInsts);
 
   const DAGInstruction &getInstruction(Record *R) const {
-    assert(Instructions.count(R) && "Unknown instruction!");
-    return Instructions.find(R)->second;
+    auto F = Instructions.find(R);
+    assert(F != Instructions.end() && "Unknown instruction!");
+    return F->second;
   }
 
   Record *get_intrinsic_void_sdnode() const {

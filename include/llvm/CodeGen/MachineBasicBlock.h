@@ -97,6 +97,8 @@ private:
   using const_probability_iterator =
       std::vector<BranchProbability>::const_iterator;
 
+  Optional<uint64_t> IrrLoopHeaderWeight;
+
   /// Keep track of the physical registers that are livein of the basicblock.
   using LiveInVector = std::vector<RegisterMaskPair>;
   LiveInVector LiveIns;
@@ -731,6 +733,14 @@ public:
 
   MCSymbol *getSymbolRaw() const { return CachedMCSymbol; }
   void resetSymbolRaw();
+
+  Optional<uint64_t> getIrrLoopHeaderWeight() const {
+    return IrrLoopHeaderWeight;
+  }
+
+  void setIrrLoopHeaderWeight(uint64_t Weight) {
+    IrrLoopHeaderWeight = Weight;
+  }
 
 private:
   /// Return probability iterator corresponding to the I successor iterator.

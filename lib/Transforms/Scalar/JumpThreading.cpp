@@ -192,11 +192,12 @@ JumpThreadingPass::JumpThreadingPass(int T) {
 //     P(cond == true ) = P(A) + P(cond == true | B) * P(B)
 //
 //  which gives us:
-//     P(A) <= P(c == true), i.e.
+//     P(A) is less than P(cond == true), i.e.
 //     P(t == true) <= P(cond == true)
 //
-//  In other words, if we know P(cond == true), we know that P(t == true)
-//  can not be greater than 1%.
+//  In other words, if we know P(cond == true) is unlikely, we know 
+//  that P(t == true) is also unlikely.
+//
 static void updatePredecessorProfileMetadata(PHINode *PN, BasicBlock *BB) {
   BranchInst *CondBr = dyn_cast<BranchInst>(BB->getTerminator());
   if (!CondBr)
@@ -648,8 +649,6 @@ bool JumpThreadingPass::ComputeValueKnownInPredecessors(
     return true;
   }
 
-  PredValueInfoTy LHSVals, RHSVals;
-
   // Handle some boolean conditions.
   if (I->getType()->getPrimitiveSizeInBits() == 1) {
     assert(Preference == WantInteger && "One-bit non-integer type?");
@@ -657,6 +656,8 @@ bool JumpThreadingPass::ComputeValueKnownInPredecessors(
     // X & false -> false
     if (I->getOpcode() == Instruction::Or ||
         I->getOpcode() == Instruction::And) {
+      PredValueInfoTy LHSVals, RHSVals;
+
       ComputeValueKnownInPredecessors(I->getOperand(0), BB, LHSVals,
                                       WantInteger, CxtI);
       ComputeValueKnownInPredecessors(I->getOperand(1), BB, RHSVals,

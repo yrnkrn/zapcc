@@ -23,7 +23,6 @@ module LLVM_Backend {
     exclude header "CodeGen/CommandFlags.h"
     exclude header "CodeGen/LinkAllAsmWriterComponents.h"
     exclude header "CodeGen/LinkAllCodegenComponents.h"
-    exclude header "CodeGen/GlobalISel/InstructionSelectorImpl.h"
 
     // These are intended for (repeated) textual inclusion.
     textual header "CodeGen/DIEValue.def"
@@ -226,17 +225,21 @@ module LLVM_LTO { requires cplusplus umbrella "LTO" module * { export * } }
 module LLVM_MC {
   requires cplusplus
 
-  // FIXME: Mislayered?
-  module Support_TargetRegistry {
-    header "Support/TargetRegistry.h"
-    export *
-  }
-
   umbrella "MC"
   module * { export * }
 
   // Exclude this; it's fundamentally non-modular.
   exclude header "MC/MCTargetOptionsCommandFlags.h"
+}
+
+// Used by llvm-tblgen
+module LLVM_MC_TableGen {
+  requires cplusplus
+  module MC_LaneBitmask { header "MC/LaneBitmask.h" export * }
+  module MC_FixedLenDisassembler { header "MC/MCFixedLenDisassembler.h" export * }
+  module MC_InstrItineraries { header "MC/MCInstrItineraries.h" export * }
+  module MC_Schedule { header "MC/MCSchedule.h" export * }
+  module MC_SubtargetFeature { header "MC/SubtargetFeature.h" export * }
 }
 
 module LLVM_Object {
@@ -254,6 +257,13 @@ module LLVM_ProfileData {
   module * { export * }
 
   textual header "ProfileData/InstrProfData.inc"
+}
+
+// FIXME: Mislayered?
+module LLVM_Support_TargetRegistry {
+  requires cplusplus
+  header "Support/TargetRegistry.h"
+  export *
 }
 
 module LLVM_TableGen { requires cplusplus umbrella "TableGen" module * { export * } }
@@ -287,6 +297,7 @@ module LLVM_Utils {
     // These are intended for textual inclusion.
     textual header "Support/ARMTargetParser.def"
     textual header "Support/AArch64TargetParser.def"
+    textual header "Support/X86TargetParser.def"
   }
 
   // This part of the module is usable from both C and C++ code.

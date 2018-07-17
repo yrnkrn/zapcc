@@ -1490,11 +1490,7 @@ public:
   /// convenient to write "2.0" and the like.  Without this function we'd
   /// have to duplicate its logic everywhere it's called.
   bool isExactlyValue(double V) const {
-    bool ignored;
-    APFloat Tmp(V);
-    Tmp.convert(Value->getValueAPF().getSemantics(),
-                APFloat::rmNearestTiesToEven, &ignored);
-    return isExactlyValue(Tmp);
+    return Value->getValueAPF().isExactlyValue(V);
   }
   bool isExactlyValue(const APFloat& V) const;
 
@@ -2115,7 +2111,7 @@ class MaskedGatherScatterSDNode : public MemSDNode {
 public:
   friend class SelectionDAG;
 
-  MaskedGatherScatterSDNode(unsigned NodeTy, unsigned Order,
+  MaskedGatherScatterSDNode(ISD::NodeType NodeTy, unsigned Order,
                             const DebugLoc &dl, SDVTList VTs, EVT MemVT,
                             MachineMemOperand *MMO)
       : MemSDNode(NodeTy, Order, dl, VTs, MemVT, MMO) {}

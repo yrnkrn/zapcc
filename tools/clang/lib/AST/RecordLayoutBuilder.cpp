@@ -1169,7 +1169,6 @@ ItaniumRecordLayoutBuilder::LayoutBase(const BaseSubobjectInfo *Base) {
   // Query the external layout to see if it provides an offset.
   bool HasExternalLayout = false;
   if (UseExternalLayout) {
-    llvm::DenseMap<const CXXRecordDecl *, CharUnits>::iterator Known;
     if (Base->IsVirtual)
       HasExternalLayout = External.getExternalNVBaseOffset(Base->Class, Offset);
     else
@@ -1732,7 +1731,7 @@ void ItaniumRecordLayoutBuilder::LayoutField(const FieldDecl *D,
     const ArrayType* ATy = Context.getAsArrayType(D->getType());
     FieldAlign = Context.getTypeAlignInChars(ATy->getElementType());
   } else if (const ReferenceType *RT = D->getType()->getAs<ReferenceType>()) {
-    unsigned AS = RT->getPointeeType().getAddressSpace();
+    unsigned AS = Context.getTargetAddressSpace(RT->getPointeeType());
     FieldSize = 
       Context.toCharUnitsFromBits(Context.getTargetInfo().getPointerWidth(AS));
     FieldAlign = 
