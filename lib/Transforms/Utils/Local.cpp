@@ -1293,16 +1293,25 @@ void llvm::findDbgValues(SmallVectorImpl<DbgValueInst *> &DbgValues, Value *V) {
           DbgValues.push_back(DVI);
 }
 
+static void findDbgUsers(SmallVectorImpl<DbgInfoIntrinsic *> &DbgUsers,
+                         Value *V) {
+  if (auto *L = LocalAsMetadata::getIfExists(V))
+    if (auto *MDV = MetadataAsValue::getIfExists(V->getContext(), L))
+      for (User *U : MDV->users())
+        if (DbgInfoIntrinsic *DII = dyn_cast<DbgInfoIntrinsic>(U))
+          DbgUsers.push_back(DII);
+}
+
 bool llvm::replaceDbgDeclare(Value *Address, Value *NewAddress,
                              Instruction *InsertBefore, DIBuilder &Builder,
-                             bool Deref, int Offset) {
+                             bool DerefBefore, int Offset, bool DerefAfter) {
   auto DbgAddrs = FindDbgAddrUses(Address);
   for (DbgInfoIntrinsic *DII : DbgAddrs) {
     DebugLoc Loc = DII->getDebugLoc();
     auto *DIVar = DII->getVariable();
     auto *DIExpr = DII->getExpression();
     assert(DIVar && "Missing variable");
-    DIExpr = DIExpression::prepend(DIExpr, Deref, Offset);
+    DIExpr = DIExpression::prepend(DIExpr, DerefBefore, Offset, DerefAfter);
     // Insert llvm.dbg.declare immediately after InsertBefore, and remove old
     // llvm.dbg.declare.
     Builder.insertDeclare(NewAddress, DIVar, DIExpr, Loc, InsertBefore);
@@ -1314,9 +1323,10 @@ bool llvm::replaceDbgDeclare(Value *Address, Value *NewAddress,
 }
 
 bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
-                                      DIBuilder &Builder, bool Deref, int Offset) {
+                                      DIBuilder &Builder, bool DerefBefore,
+                                      int Offset, bool DerefAfter) {
   return replaceDbgDeclare(AI, NewAllocaAddress, AI->getNextNode(), Builder,
-                           Deref, Offset);
+                           DerefBefore, Offset, DerefAfter);
 }
 
 static void replaceOneDbgValueForAlloca(DbgValueInst *DVI, Value *NewAddress,
@@ -1369,6 +1379,7 @@ void llvm::salvageDebugInfo(Instruction &I) {
   auto applyOffset = [&](DbgValueInst *DVI, uint64_t Offset) {
     auto *DIExpr = DVI->getExpression();
     DIExpr = DIExpression::prepend(DIExpr, DIExpression::NoDeref, Offset,
+                                   DIExpression::NoDeref,
                                    DIExpression::WithStackValue);
     DVI->setOperand(0, wrapMD(I.getOperand(0)));
     DVI->setOperand(2, MetadataAsValue::get(I.getContext(), DIExpr));
@@ -1376,12 +1387,13 @@ void llvm::salvageDebugInfo(Instruction &I) {
   };
 
   if (isa<BitCastInst>(&I) || isa<IntToPtrInst>(&I)) {
-    findDbgValues(DbgValues, &I);
-    for (auto *DVI : DbgValues) {
-      // Bitcasts are entirely irrelevant for debug info. Rewrite the dbg.value
-      // to use the cast's source.
-      DVI->setOperand(0, wrapMD(I.getOperand(0)));
-      DEBUG(dbgs() << "SALVAGE: " << *DVI << '\n');
+    // Bitcasts are entirely irrelevant for debug info. Rewrite dbg.value,
+    // dbg.addr, and dbg.declare to use the cast's source.
+    SmallVector<DbgInfoIntrinsic *, 1> DbgUsers;
+    findDbgUsers(DbgUsers, &I);
+    for (auto *DII : DbgUsers) {
+      DII->setOperand(0, wrapMD(I.getOperand(0)));
+      DEBUG(dbgs() << "SALVAGE: " << *DII << '\n');
     }
   } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
     findDbgValues(DbgValues, &I);
@@ -2131,8 +2143,6 @@ static bool bitTransformIsCorrectForBitReverse(unsigned From, unsigned To,
   return From == BitWidth - To - 1;
 }
 
-/// Given an OR instruction, check to see if this is a bitreverse
-/// idiom. If so, insert the new intrinsic and return true.
 bool llvm::recognizeBSwapOrBitReverseIdiom(
     Instruction *I, bool MatchBSwaps, bool MatchBitReversals,
     SmallVectorImpl<Instruction *> &InsertedInsts) {

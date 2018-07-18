@@ -2101,6 +2101,8 @@ public:
   DITypeRef getType() const { return DITypeRef(getRawType()); }
   uint32_t getAlignInBits() const { return AlignInBits; }
   uint32_t getAlignInBytes() const { return getAlignInBits() / CHAR_BIT; }
+  /// Determines the size of the variable's type.
+  Optional<uint64_t> getSizeInBits() const;
 
   StringRef getFilename() const {
     if (auto *F = getFile())
@@ -2305,8 +2307,9 @@ public:
 
   /// Prepend \p DIExpr with a deref and offset operation and optionally turn it
   /// into a stack value.
-  static DIExpression *prepend(const DIExpression *DIExpr, bool Deref,
-                               int64_t Offset = 0, bool StackValue = false);
+  static DIExpression *prepend(const DIExpression *DIExpr, bool DerefBefore,
+                               int64_t Offset = 0, bool DerefAfter = false,
+                               bool StackValue = false);
 
   /// Create a DIExpression to describe one part of an aggregate variable that
   /// is fragmented across multiple Values. The DW_OP_LLVM_fragment operation

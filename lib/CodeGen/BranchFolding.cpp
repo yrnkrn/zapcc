@@ -40,7 +40,10 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/Function.h"
@@ -54,9 +57,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOpcodes.h"
-#include "llvm/Target/TargetRegisterInfo.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 #include <cassert>
 #include <cstddef>
 #include <iterator>
@@ -118,7 +118,7 @@ INITIALIZE_PASS(BranchFolderPass, DEBUG_TYPE,
                 "Control Flow Optimizer", false, false)
 
 bool BranchFolderPass::runOnMachineFunction(MachineFunction &MF) {
-  if (skipFunction(*MF.getFunction()))
+  if (skipFunction(MF.getFunction()))
     return false;
 
   TargetPassConfig *PassConfig = &getAnalysis<TargetPassConfig>();
@@ -613,8 +613,8 @@ ProfitableToMerge(MachineBasicBlock *MBB1, MachineBasicBlock *MBB2,
   CommonTailLen = ComputeCommonTailLength(MBB1, MBB2, I1, I2);
   if (CommonTailLen == 0)
     return false;
-  DEBUG(dbgs() << "Common tail length of BB#" << MBB1->getNumber()
-               << " and BB#" << MBB2->getNumber() << " is " << CommonTailLen
+  DEBUG(dbgs() << "Common tail length of " << printMBBReference(*MBB1)
+               << " and " << printMBBReference(*MBB2) << " is " << CommonTailLen
                << '\n');
 
   // It's almost always profitable to merge any number of non-terminator
@@ -685,7 +685,7 @@ ProfitableToMerge(MachineBasicBlock *MBB1, MachineBasicBlock *MBB2,
   // branch instruction, which is likely to be smaller than the 2
   // instructions that would be deleted in the merge.
   MachineFunction *MF = MBB1->getParent();
-  return EffectiveTailLen >= 2 && MF->getFunction()->optForSize() &&
+  return EffectiveTailLen >= 2 && MF->getFunction().optForSize() &&
          (I1 == MBB1->begin() || I2 == MBB2->begin());
 }
 
@@ -770,7 +770,7 @@ bool BranchFolder::CreateCommonTailOnlyBlock(MachineBasicBlock *&PredBB,
     SameTails[commonTailIndex].getTailStartPos();
   MachineBasicBlock *MBB = SameTails[commonTailIndex].getBlock();
 
-  DEBUG(dbgs() << "\nSplitting BB#" << MBB->getNumber() << ", size "
+  DEBUG(dbgs() << "\nSplitting " << printMBBReference(*MBB) << ", size "
                << maxCommonTailLength);
 
   // If the split block unconditionally falls-thru to SuccBB, it will be
@@ -920,20 +920,17 @@ bool BranchFolder::TryTailMergeBlocks(MachineBasicBlock *SuccBB,
   bool MadeChange = false;
 
   DEBUG(dbgs() << "\nTryTailMergeBlocks: ";
-        for (unsigned i = 0, e = MergePotentials.size(); i != e; ++i)
-          dbgs() << "BB#" << MergePotentials[i].getBlock()->getNumber()
-                 << (i == e-1 ? "" : ", ");
-        dbgs() << "\n";
-        if (SuccBB) {
-          dbgs() << "  with successor BB#" << SuccBB->getNumber() << '\n';
+        for (unsigned i = 0, e = MergePotentials.size(); i != e; ++i) dbgs()
+        << printMBBReference(*MergePotentials[i].getBlock())
+        << (i == e - 1 ? "" : ", ");
+        dbgs() << "\n"; if (SuccBB) {
+          dbgs() << "  with successor " << printMBBReference(*SuccBB) << '\n';
           if (PredBB)
-            dbgs() << "  which has fall-through from BB#"
-                   << PredBB->getNumber() << "\n";
-        }
-        dbgs() << "Looking for common tails of at least "
-               << MinCommonTailLength << " instruction"
-               << (MinCommonTailLength == 1 ? "" : "s") << '\n';
-       );
+            dbgs() << "  which has fall-through from "
+                   << printMBBReference(*PredBB) << "\n";
+        } dbgs() << "Looking for common tails of at least "
+                 << MinCommonTailLength << " instruction"
+                 << (MinCommonTailLength == 1 ? "" : "s") << '\n';);
 
   // Sort by hash value so that blocks with identical end sequences sort
   // together.
@@ -1013,13 +1010,13 @@ bool BranchFolder::TryTailMergeBlocks(MachineBasicBlock *SuccBB,
 
     // MBB is common tail.  Adjust all other BB's to jump to this one.
     // Traversal must be forwards so erases work.
-    DEBUG(dbgs() << "\nUsing common tail in BB#" << MBB->getNumber()
+    DEBUG(dbgs() << "\nUsing common tail in " << printMBBReference(*MBB)
                  << " for ");
     for (unsigned int i=0, e = SameTails.size(); i != e; ++i) {
       if (commonTailIndex == i)
         continue;
-      DEBUG(dbgs() << "BB#" << SameTails[i].getBlock()->getNumber()
-                   << (i == e-1 ? "" : ", "));
+      DEBUG(dbgs() << printMBBReference(*SameTails[i].getBlock())
+                   << (i == e - 1 ? "" : ", "));
       // Hack the end off BB i, making it jump to BB commonTailIndex instead.
       replaceTailWithBranchTo(SameTails[i].getTailStartPos(), *MBB);
       // BB i is no longer a predecessor of SuccBB; remove it from the worklist.
@@ -1514,7 +1511,7 @@ ReoptimizeBlock:
   }
 
   if (!IsEmptyBlock(MBB) && MBB->pred_size() == 1 &&
-      MF.getFunction()->optForSize()) {
+      MF.getFunction().optForSize()) {
     // Changing "Jcc foo; foo: jmp bar;" into "Jcc bar;" might change the branch
     // direction, thereby defeating careful block placement and regressing
     // performance. Therefore, only consider this for optsize functions.
@@ -1971,7 +1968,7 @@ bool BranchFolder::HoistCommonCodeInSuccs(MachineBasicBlock *MBB) {
           //
           // BB2:
           // r1 = op2, ...
-          //    = op3, r1<kill>
+          //    = op3, killed r1
           IsSafe = false;
           break;
         }

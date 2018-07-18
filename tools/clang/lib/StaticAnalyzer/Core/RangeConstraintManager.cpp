@@ -354,7 +354,8 @@ private:
   RangeSet getSymLERange(ProgramStateRef St, SymbolRef Sym,
                          const llvm::APSInt &Int,
                          const llvm::APSInt &Adjustment);
-  RangeSet getSymLERange(const RangeSet &RS, const llvm::APSInt &Int,
+  RangeSet getSymLERange(llvm::function_ref<RangeSet()> RS,
+                         const llvm::APSInt &Int,
                          const llvm::APSInt &Adjustment);
   RangeSet getSymGERange(ProgramStateRef St, SymbolRef Sym,
                          const llvm::APSInt &Int,
@@ -395,7 +396,9 @@ bool RangeConstraintManager::canReasonAbout(SVal X) const {
     }
 
     if (const SymSymExpr *SSE = dyn_cast<SymSymExpr>(SE)) {
-      if (BinaryOperator::isComparisonOp(SSE->getOpcode())) {
+      // FIXME: Handle <=> here.
+      if (BinaryOperator::isEqualityOp(SSE->getOpcode()) ||
+          BinaryOperator::isRelationalOp(SSE->getOpcode())) {
         // We handle Loc <> Loc comparisons, but not (yet) NonLoc <> NonLoc.
         if (Loc::isLocType(SSE->getLHS()->getType())) {
           assert(Loc::isLocType(SSE->getRHS()->getType()));
@@ -685,9 +688,10 @@ RangeConstraintManager::assumeSymGE(ProgramStateRef St, SymbolRef Sym,
   return New.isEmpty() ? nullptr : St->set<ConstraintRange>(Sym, New);
 }
 
-RangeSet RangeConstraintManager::getSymLERange(const RangeSet &RS,
-                                               const llvm::APSInt &Int,
-                                               const llvm::APSInt &Adjustment) {
+RangeSet RangeConstraintManager::getSymLERange(
+      llvm::function_ref<RangeSet()> RS,
+      const llvm::APSInt &Int,
+      const llvm::APSInt &Adjustment) {
   // Before we do any real work, see if the value can even show up.
   APSIntType AdjustmentType(Adjustment);
   switch (AdjustmentType.testInRange(Int, true)) {
@@ -696,48 +700,27 @@ RangeSet RangeConstraintManager::getSymLERange(const RangeSet &RS,
   case APSIntType::RTR_Within:
     break;
   case APSIntType::RTR_Above:
-    return RS;
+    return RS();
   }
 
   // Special case for Int == Max. This is always feasible.
   llvm::APSInt ComparisonVal = AdjustmentType.convert(Int);
   llvm::APSInt Max = AdjustmentType.getMaxValue();
   if (ComparisonVal == Max)
-    return RS;
+    return RS();
 
   llvm::APSInt Min = AdjustmentType.getMinValue();
   llvm::APSInt Lower = Min - Adjustment;
   llvm::APSInt Upper = ComparisonVal - Adjustment;
 
-  return RS.Intersect(getBasicVals(), F, Lower, Upper);
+  return RS().Intersect(getBasicVals(), F, Lower, Upper);
 }
 
 RangeSet RangeConstraintManager::getSymLERange(ProgramStateRef St,
                                                SymbolRef Sym,
                                                const llvm::APSInt &Int,
                                                const llvm::APSInt &Adjustment) {
-  // Before we do any real work, see if the value can even show up.
-  APSIntType AdjustmentType(Adjustment);
-  switch (AdjustmentType.testInRange(Int, true)) {
-  case APSIntType::RTR_Below:
-    return F.getEmptySet();
-  case APSIntType::RTR_Within:
-    break;
-  case APSIntType::RTR_Above:
-    return getRange(St, Sym);
-  }
-
-  // Special case for Int == Max. This is always feasible.
-  llvm::APSInt ComparisonVal = AdjustmentType.convert(Int);
-  llvm::APSInt Max = AdjustmentType.getMaxValue();
-  if (ComparisonVal == Max)
-    return getRange(St, Sym);
-
-  llvm::APSInt Min = AdjustmentType.getMinValue();
-  llvm::APSInt Lower = Min - Adjustment;
-  llvm::APSInt Upper = ComparisonVal - Adjustment;
-
-  return getRange(St, Sym).Intersect(getBasicVals(), F, Lower, Upper);
+  return getSymLERange([&] { return getRange(St, Sym); }, Int, Adjustment);
 }
 
 ProgramStateRef
@@ -754,8 +737,8 @@ ProgramStateRef RangeConstraintManager::assumeSymWithinInclusiveRange(
   RangeSet New = getSymGERange(State, Sym, From, Adjustment);
   if (New.isEmpty())
     return nullptr;
-  New = getSymLERange(New, To, Adjustment);
-  return New.isEmpty() ? nullptr : State->set<ConstraintRange>(Sym, New);
+  RangeSet Out = getSymLERange([&] { return New; }, To, Adjustment);
+  return Out.isEmpty() ? nullptr : State->set<ConstraintRange>(Sym, Out);
 }
 
 ProgramStateRef RangeConstraintManager::assumeSymOutsideInclusiveRange(

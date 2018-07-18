@@ -47,6 +47,7 @@ add_clang_tool(zapcc
 )
 
 target_link_libraries(zapcc
+  PRIVATE
   clangBasic
   clangCodeGen
   clangDriver

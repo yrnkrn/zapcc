@@ -110,6 +110,10 @@ Non-comprehensive list of changes in this release
   If a gcc installation is found, it still prefers ``.ctors`` if the found
   gcc is older than 4.7.0.
 
+- The new builtin preprocessor macros ``__is_target_arch``,
+  ``__is_target_vendor``, ``__is_target_os``, and ``__is_target_environment``
+  can be used to to examine the individual components of the target triple.
+
 New Compiler Flags
 ------------------
 
@@ -121,6 +125,12 @@ New Compiler Flags
   number of attributes are supported outside of C++ mode. See the Clang
   attribute documentation for more information about which attributes are
   supported for each syntax.
+  
+- Added the ``-std=c17``, ``-std=gnu17``, and ``-std=iso9899:2017`` language
+  mode flags for compatibility with GCC. This enables support for the next
+  version of the C standard, expected to be published by ISO in 2018. The only
+  difference between the ``-std=c17`` and ``-std=c11`` language modes is the
+  value of the ``__STDC_VERSION__`` macro, as C17 is a bug fix release.
 
 Deprecated Compiler Flags
 -------------------------
@@ -139,6 +149,17 @@ Clang now supports the ...
 Attribute Changes in Clang
 --------------------------
 
+- Clang now supports the majority of its attributes under both the GNU-style
+  spelling (``__attribute((name))``) and the double square-bracket spelling
+  in the ``clang`` vendor namespace (``[[clang::name]]``). Attributes whose
+  syntax is specified by some other standard (such as CUDA and OpenCL
+  attributes) continue to follow their respective specification.
+  
+- Added the ``__has_c_attribute()`` builtin preprocessor macro which allows
+  users to dynamically detect whether a double square-bracket attribute is
+  supported in C mode. This attribute syntax can be enabled with the
+  ``-fdouble-square-bracket-attributes`` flag.
+  
 - The presence of __attribute__((availability(...))) on a declaration no longer
   implies default visibility for that declaration on macOS.
 
@@ -165,7 +186,10 @@ C11 Feature Support
 C++ Language Changes in Clang
 -----------------------------
 
-...
+- Clang's default C++ dialect is now ``gnu++14`` instead of ``gnu++98``. This
+  means Clang will by default accept code using features from C++14 and
+  conforming GNU extensions. Projects incompatible with C++14 can add
+  ``-std=gnu++98`` to their build settings to restore the previous behaviour.
 
 C++1z Feature Support
 ^^^^^^^^^^^^^^^^^^^^^
@@ -248,6 +272,19 @@ clang-format
 * Option -verbose added to the command line.
   Shows the list of processed files.
 
+* Option *IncludeBlocks* added to merge and regroup multiple ``#include`` blocks during sorting.
+
+  +-------------------------+-------------------------+-------------------------+
+  | Before (Preserve)       | Merge                   | Regroup                 |
+  +=========================+=========================+=========================+
+  |  .. code-block:: c++    | .. code-block:: c++     | .. code-block:: c++     |
+  |                         |                         |                         |
+  |   #include "b.h"        |   #include "a.h"        |   #include "a.h"        |
+  |                         |   #include "b.h"        |   #include "b.h"        |
+  |   #include "a.b"        |   #include <lib/main.h> |                         |
+  |   #include <lib/main.h> |                         |   #include <lib/main.h> |
+  +-------------------------+-------------------------+-------------------------+
+
 libclang
 --------
 
@@ -256,6 +293,9 @@ libclang
 
 Static Analyzer
 ---------------
+
+- Static Analyzer can now properly detect and diagnose unary pre-/post-
+  increment/decrement on an uninitialized value.
 
 ...
 

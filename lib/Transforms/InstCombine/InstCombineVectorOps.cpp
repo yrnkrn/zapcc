@@ -610,12 +610,11 @@ static Instruction *foldInsSequenceIntoBroadcast(InsertElementInst &InsElt) {
   // Walk the chain backwards, keeping track of which indices we inserted into,
   // until we hit something that isn't an insert of the splatted value.
   while (CurrIE) {
-    ConstantInt *Idx = dyn_cast<ConstantInt>(CurrIE->getOperand(2));
+    auto *Idx = dyn_cast<ConstantInt>(CurrIE->getOperand(2));
     if (!Idx || CurrIE->getOperand(1) != SplatVal)
       return nullptr;
 
-    InsertElementInst *NextIE =
-      dyn_cast<InsertElementInst>(CurrIE->getOperand(0));
+    auto *NextIE = dyn_cast<InsertElementInst>(CurrIE->getOperand(0));
     // Check none of the intermediate steps have any additional uses, except
     // for the root insertelement instruction, which can be re-used, if it
     // inserts at position 0.
@@ -781,6 +780,10 @@ Instruction *InstCombiner::visitInsertElementInst(InsertElementInst &IE) {
   Value *VecOp    = IE.getOperand(0);
   Value *ScalarOp = IE.getOperand(1);
   Value *IdxOp    = IE.getOperand(2);
+
+  if (auto *V = SimplifyInsertElementInst(
+          VecOp, ScalarOp, IdxOp, SQ.getWithInstruction(&IE)))
+    return replaceInstUsesWith(IE, V);
 
   // Inserting an undef or into an undefined place, remove this.
   if (isa<UndefValue>(ScalarOp) || isa<UndefValue>(IdxOp))

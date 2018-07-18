@@ -146,12 +146,12 @@ INITIALIZE_PASS(FixupBWInstPass, FIXUPBW_NAME, FIXUPBW_DESC, false, false)
 FunctionPass *llvm::createX86FixupBWInsts() { return new FixupBWInstPass(); }
 
 bool FixupBWInstPass::runOnMachineFunction(MachineFunction &MF) {
-  if (!FixupBWInsts || skipFunction(*MF.getFunction()))
+  if (!FixupBWInsts || skipFunction(MF.getFunction()))
     return false;
 
   this->MF = &MF;
   TII = MF.getSubtarget<X86Subtarget>().getInstrInfo();
-  OptForSize = MF.getFunction()->optForSize();
+  OptForSize = MF.getFunction().optForSize();
   MLI = &getAnalysis<MachineLoopInfo>();
   LiveRegs.init(TII->getRegisterInfo());
 
@@ -188,18 +188,19 @@ bool FixupBWInstPass::runOnMachineFunction(MachineFunction &MF) {
 /// necessary (e.g. due to register coalescing with a "truncate" copy).
 /// So, it handles pattern like this:
 ///
-///   BB#2: derived from LLVM BB %if.then
-///   Live Ins: %RDI
-///   Predecessors according to CFG: BB#0
-///   %AX<def> = MOV16rm %RDI<kill>, 1, %noreg, 0, %noreg, %EAX<imp-def>; mem:LD2[%p]
-///                                             No %EAX<imp-use>
-///   Successors according to CFG: BB#3(?%)
+///   %bb.2: derived from LLVM BB %if.then
+///   Live Ins: %rdi
+///   Predecessors according to CFG: %bb.0
+///   %ax = MOV16rm killed %rdi, 1, %noreg, 0, %noreg, implicit-def %eax;
+///   mem:LD2[%p]
+///                                             No implicit %eax
+///   Successors according to CFG: %bb.3(?%)
 ///
-///   BB#3: derived from LLVM BB %if.end
-///   Live Ins: %EAX                            Only %AX is actually live
-///   Predecessors according to CFG: BB#2 BB#1
-///   %AX<def> = KILL %AX, %EAX<imp-use,kill>
-///   RET 0, %AX
+///   %bb.3: derived from LLVM BB %if.end
+///   Live Ins: %eax                            Only %ax is actually live
+///   Predecessors according to CFG: %bb.2 %bb.1
+///   %ax = KILL %ax, implicit killed %eax
+///   RET 0, %ax
 static bool isLive(const MachineInstr &MI,
                    const LivePhysRegs &LiveRegs,
                    const TargetRegisterInfo *TRI,

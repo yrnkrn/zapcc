@@ -5178,7 +5178,7 @@ static void reuseTableCompare(
   for (auto ValuePair : Values) {
     Constant *CaseConst = ConstantExpr::getICmp(CmpInst->getPredicate(),
                                                 ValuePair.second, CmpOp1, true);
-    if (!CaseConst || CaseConst == DefaultConst)
+    if (!CaseConst || CaseConst == DefaultConst || isa<UndefValue>(CaseConst))
       return;
     assert((CaseConst == TrueConst || CaseConst == FalseConst) &&
            "Expect true or false as compare result.");
@@ -5732,7 +5732,7 @@ bool SimplifyCFGOpt::SimplifyUncondBranch(BranchInst *BI,
   BasicBlock *BB = BI->getParent();
   BasicBlock *Succ = BI->getSuccessor(0);
 
-  if (SinkCommon && SinkThenElseCodeToEnd(BI))
+  if (SinkCommon && Options.SinkCommonInsts && SinkThenElseCodeToEnd(BI))
     return true;
 
   // If the Terminator is the only non-phi instruction, simplify the block.

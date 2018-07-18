@@ -35,13 +35,13 @@
 #include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
+#include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Target/TargetLowering.h"
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -497,10 +497,10 @@ SDValue VectorLegalizer::PromoteFP_TO_INT(SDValue Op, bool isSigned) {
          "Can't promote a vector with multiple results!");
   EVT VT = Op.getValueType();
 
-  EVT NewVT;
+  EVT NewVT = VT;
   unsigned NewOpc;
   while (true) {
-    NewVT = VT.widenIntegerVectorElementType(*DAG.getContext());
+    NewVT = NewVT.widenIntegerVectorElementType(*DAG.getContext());
     assert(NewVT.isSimple() && "Promoting to a non-simple vector type!");
     if (TLI.isOperationLegalOrCustom(ISD::FP_TO_SINT, NewVT)) {
       NewOpc = ISD::FP_TO_SINT;
@@ -512,9 +512,17 @@ SDValue VectorLegalizer::PromoteFP_TO_INT(SDValue Op, bool isSigned) {
     }
   }
 
-  SDLoc loc(Op);
-  SDValue promoted  = DAG.getNode(NewOpc, SDLoc(Op), NewVT, Op.getOperand(0));
-  return DAG.getNode(ISD::TRUNCATE, SDLoc(Op), VT, promoted);
+  SDLoc dl(Op);
+  SDValue Promoted  = DAG.getNode(NewOpc, dl, NewVT, Op.getOperand(0));
+
+  // Assert that the converted value fits in the original type.  If it doesn't
+  // (eg: because the value being converted is too big), then the result of the
+  // original operation was undefined anyway, so the assert is still correct.
+  Promoted = DAG.getNode(Op->getOpcode() == ISD::FP_TO_UINT ? ISD::AssertZext
+                                                            : ISD::AssertSext,
+                         dl, NewVT, Promoted,
+                         DAG.getValueType(VT.getScalarType()));
+  return DAG.getNode(ISD::TRUNCATE, dl, VT, Promoted);
 }
 
 SDValue VectorLegalizer::ExpandLoad(SDValue Op) {
@@ -554,7 +562,6 @@ SDValue VectorLegalizer::ExpandLoad(SDValue Op) {
     unsigned Offset = 0;
     unsigned RemainingBytes = SrcVT.getStoreSize();
     SmallVector<SDValue, 8> LoadVals;
-
     while (RemainingBytes > 0) {
       SDValue ScalarLoad;
       unsigned LoadBytes = WideBytes;
@@ -580,9 +587,8 @@ SDValue VectorLegalizer::ExpandLoad(SDValue Op) {
 
       RemainingBytes -= LoadBytes;
       Offset += LoadBytes;
-      BasePTR = DAG.getNode(ISD::ADD, dl, BasePTR.getValueType(), BasePTR,
-                            DAG.getConstant(LoadBytes, dl,
-                                            BasePTR.getValueType()));
+
+      BasePTR = DAG.getObjectPtrOffset(dl, BasePTR, LoadBytes);
 
       LoadVals.push_back(ScalarLoad.getValue(0));
       LoadChains.push_back(ScalarLoad.getValue(1));

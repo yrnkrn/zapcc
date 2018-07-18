@@ -88,13 +88,6 @@ set(CLANG_TEST_PARAMS
   clang_site_config=${CMAKE_CURRENT_BINARY_DIR}/lit.site.cfg
   )
 
-if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/debuginfo-tests/CMakeLists.txt")
-  # This is a hack to keep existing build build infrastructure working while we
-  # can migrate to the new standard workflow of checking out debuginfo-tests into
-  # llvm/projects or using it in a mono-repo
-  add_subdirectory(debuginfo-tests)
-endif()
-
 if( NOT CLANG_BUILT_STANDALONE )
   list(APPEND CLANG_TEST_DEPS
     llvm-config
@@ -138,3 +131,12 @@ add_lit_testsuites(CLANG ${CMAKE_CURRENT_SOURCE_DIR}
 add_custom_target(clang-test)
 add_dependencies(clang-test check-clang)
 set_target_properties(clang-test PROPERTIES FOLDER "Clang tests")
+
+# FIXME: This logic can be removed once all buildbots have moved
+# debuginfo-test from clang/test to llvm/projects or monorepo.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/debuginfo-tests)
+  message(WARNING "Including debuginfo-tests in clang/test is deprecated.  Move to llvm/projects or use monorepo.")
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/debuginfo-tests/CMakeLists.txt)
+    add_subdirectory(debuginfo-tests)
+  endif()
+endif()

@@ -5931,7 +5931,7 @@ ExprResult Sema::CheckTemplateArgument(NonTypeTemplateParmDecl *Param,
   SourceLocation StartLoc = Arg->getLocStart();
 
   // If the parameter type somehow involves auto, deduce the type now.
-  if (getLangOpts().CPlusPlus1z && ParamType->isUndeducedType()) {
+  if (getLangOpts().CPlusPlus17 && ParamType->isUndeducedType()) {
     // During template argument deduction, we allow 'decltype(auto)' to
     // match an arbitrary dependent argument.
     // FIXME: The language rules don't say what happens in this case.
@@ -6015,8 +6015,8 @@ ExprResult Sema::CheckTemplateArgument(NonTypeTemplateParmDecl *Param,
   EnterExpressionEvaluationContext ConstantEvaluated(
       *this, Sema::ExpressionEvaluationContext::ConstantEvaluated);
 
-  if (getLangOpts().CPlusPlus1z) {
-    // C++1z [temp.arg.nontype]p1:
+  if (getLangOpts().CPlusPlus17) {
+    // C++17 [temp.arg.nontype]p1:
     //   A template-argument for a non-type template parameter shall be
     //   a converted constant expression of the type of the template-parameter.
     APValue Value;
@@ -8051,15 +8051,6 @@ bool Sema::CheckFunctionTemplateSpecialization(
   // Ignore access information;  it doesn't figure into redeclaration checking.
   FunctionDecl *Specialization = cast<FunctionDecl>(*Result);
 
-  // C++ Concepts TS [dcl.spec.concept]p7: A program shall not declare [...]
-  // an explicit specialization (14.8.3) [...] of a concept definition.
-  if (Specialization->getPrimaryTemplate()->isConcept()) {
-    Diag(FD->getLocation(), diag::err_concept_specialized)
-        << 0 /*function*/ << 1 /*explicitly specialized*/;
-    Diag(Specialization->getLocation(), diag::note_previous_declaration);
-    return true;
-  }
-
   FunctionTemplateSpecializationInfo *SpecInfo
     = Specialization->getTemplateSpecializationInfo();
   assert(SpecInfo && "Function template specialization info missing?");
@@ -8952,15 +8943,6 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
     Diag(D.getDeclSpec().getConstexprSpecLoc(),
          diag::err_explicit_instantiation_constexpr);
 
-  // C++ Concepts TS [dcl.spec.concept]p1: The concept specifier shall be
-  // applied only to the definition of a function template or variable template,
-  // declared in namespace scope.
-  if (D.getDeclSpec().isConceptSpecified()) {
-    Diag(D.getDeclSpec().getConceptSpecLoc(),
-         diag::err_concept_specified_specialization) << 0;
-    return true;
-  }
-
   // A deduction guide is not on the list of entities that can be explicitly
   // instantiated.
   if (Name.getNameKind() == DeclarationName::CXXDeductionGuideName) {
@@ -9040,15 +9022,6 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
         return true;
       }
 
-      // C++ Concepts TS [dcl.spec.concept]p7: A program shall not declare an
-      // explicit instantiation (14.8.2) [...] of a concept definition.
-      if (PrevTemplate->isConcept()) {
-        Diag(D.getIdentifierLoc(), diag::err_concept_specialized)
-            << 1 /*variable*/ << 0 /*explicitly instantiated*/;
-        Diag(PrevTemplate->getLocation(), diag::note_previous_declaration);
-        return true;
-      }
-
       // Translate the parser's template argument list into our AST format.
       TemplateArgumentListInfo TemplateArgs =
           makeTemplateArgumentListInfo(*this, *D.getName().TemplateId);
@@ -9091,7 +9064,6 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
 
     if (!HasNoEffect) {
       // Instantiate static data member or variable template.
-
       Prev->setTemplateSpecializationKind(TSK, D.getIdentifierLoc());
       if (PrevTemplate) {
         // Merge attributes.
@@ -9259,12 +9231,20 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
       return (Decl*) nullptr;
   }
 
-  Specialization->setTemplateSpecializationKind(TSK, D.getIdentifierLoc());
   if (LangOpts.CachingMode)
     Context.InstantiationChanges[Specialization] = {
         TSK_ImplicitInstantiation, SourceLocation(), TemplateLoc};
   if (Attr)
     ProcessDeclAttributeList(S, Specialization, Attr);
+
+  // In MSVC mode, dllimported explicit instantiation definitions are treated as
+  // instantiation declarations.
+  if (TSK == TSK_ExplicitInstantiationDefinition &&
+      Specialization->hasAttr<DLLImportAttr>() &&
+      Context.getTargetInfo().getCXXABI().isMicrosoft())
+    TSK = TSK_ExplicitInstantiationDeclaration;
+
+  Specialization->setTemplateSpecializationKind(TSK, D.getIdentifierLoc());
 
   if (Specialization->isDefined()) {
     // Let the ASTConsumer know that this function has been explicitly
@@ -9287,16 +9267,6 @@ DeclResult Sema::ActOnExplicitInstantiation(Scope *S,
     Diag(D.getIdentifierLoc(),
          diag::ext_explicit_instantiation_without_qualified_id)
     << Specialization << D.getCXXScopeSpec().getRange();
-
-  // C++ Concepts TS [dcl.spec.concept]p7: A program shall not declare an
-  // explicit instantiation (14.8.2) [...] of a concept definition.
-  if (FunTmpl && FunTmpl->isConcept() &&
-      !D.getDeclSpec().isConceptSpecified()) {
-    Diag(D.getIdentifierLoc(), diag::err_concept_specialized)
-        << 0 /*function*/ << 0 /*explicitly instantiated*/;
-    Diag(FunTmpl->getLocation(), diag::note_previous_declaration);
-    return true;
-  }
 
   CheckExplicitInstantiationScope(*this,
                    FunTmpl? (NamedDecl *)FunTmpl
@@ -9636,7 +9606,7 @@ Sema::CheckTypenameType(ElaboratedTypeKeyword Keyword,
     //   A type-specifier of the form
     //     typename[opt] nested-name-specifier[opt] template-name
     //   is a placeholder for a deduced class type [...].
-    if (getLangOpts().CPlusPlus1z) {
+    if (getLangOpts().CPlusPlus17) {
       if (auto *TD = getAsTypeTemplateDecl(Result.getFoundDecl())) {
         return Context.getElaboratedType(
             Keyword, QualifierLoc.getNestedNameSpecifier(),

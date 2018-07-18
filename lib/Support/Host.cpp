@@ -216,6 +216,37 @@ StringRef sys::detail::getHostCPUNameForARM(
             .Case("0xc01", "saphira")
             .Default("generic");
 
+  if (Implementer == "0x53") { // Samsung Electronics Co., Ltd.
+    // The Exynos chips have a convoluted ID scheme that doesn't seem to follow
+    // any predictive pattern across variants and parts.
+    unsigned Variant = 0, Part = 0;
+
+    // Look for the CPU variant line, whose value is a 1 digit hexadecimal
+    // number, corresponding to the Variant bits in the CP15/C0 register.
+    for (auto I : Lines)
+      if (I.consume_front("CPU variant"))
+        I.ltrim("\t :").getAsInteger(0, Variant);
+
+    // Look for the CPU part line, whose value is a 3 digit hexadecimal
+    // number, corresponding to the PartNum bits in the CP15/C0 register.
+    for (auto I : Lines)
+      if (I.consume_front("CPU part"))
+        I.ltrim("\t :").getAsInteger(0, Part);
+
+    unsigned Exynos = (Variant << 12) | Part;
+    switch (Exynos) {
+    default:
+      // Default by falling through to Exynos M1.
+      LLVM_FALLTHROUGH;
+
+    case 0x1001:
+      return "exynos-m1";
+
+    case 0x4001:
+      return "exynos-m2";
+    }
+  }
+
   return "generic";
 }
 
@@ -320,46 +351,6 @@ StringRef sys::detail::getHostCPUNameForBPF() {
 enum VendorSignatures {
   SIG_INTEL = 0x756e6547 /* Genu */,
   SIG_AMD = 0x68747541 /* Auth */
-};
-
-enum ProcessorFeatures {
-  FEATURE_CMOV = 0,
-  FEATURE_MMX,
-  FEATURE_POPCNT,
-  FEATURE_SSE,
-  FEATURE_SSE2,
-  FEATURE_SSE3,
-  FEATURE_SSSE3,
-  FEATURE_SSE4_1,
-  FEATURE_SSE4_2,
-  FEATURE_AVX,
-  FEATURE_AVX2,
-  FEATURE_SSE4_A,
-  FEATURE_FMA4,
-  FEATURE_XOP,
-  FEATURE_FMA,
-  FEATURE_AVX512F,
-  FEATURE_BMI,
-  FEATURE_BMI2,
-  FEATURE_AES,
-  FEATURE_PCLMUL,
-  FEATURE_AVX512VL,
-  FEATURE_AVX512BW,
-  FEATURE_AVX512DQ,
-  FEATURE_AVX512CD,
-  FEATURE_AVX512ER,
-  FEATURE_AVX512PF,
-  FEATURE_AVX512VBMI,
-  FEATURE_AVX512IFMA,
-  FEATURE_AVX5124VNNIW,
-  FEATURE_AVX5124FMAPS,
-  FEATURE_AVX512VPOPCNTDQ,
-  // Only one bit free left in the first 32 features.
-  FEATURE_MOVBE = 32,
-  FEATURE_ADX,
-  FEATURE_EM64T,
-  FEATURE_CLFLUSHOPT,
-  FEATURE_SHA,
 };
 
 // The check below for i386 was copied from clang's cpuid.h (__get_cpuid_max).
@@ -520,7 +511,7 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
     *Type = X86::INTEL_i486;
     break;
   case 5:
-    if (Features & (1 << FEATURE_MMX)) {
+    if (Features & (1 << X86::FEATURE_MMX)) {
       *Type = X86::INTEL_PENTIUM_MMX;
       break;
     }
@@ -637,6 +628,12 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
       *Subtype = X86::INTEL_COREI7_SKYLAKE_AVX512; // "skylake-avx512"
       break;
 
+    // Cannonlake:
+    case 0x66:
+      *Type = X86::INTEL_COREI7;
+      *Subtype = X86::INTEL_COREI7_CANNONLAKE; // "cannonlake"
+      break;
+
     case 0x1c: // Most 45 nm Intel Atom processors
     case 0x26: // 45 nm Atom Lincroft
     case 0x27: // 32 nm Atom Medfield
@@ -655,8 +652,9 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
       *Type = X86::INTEL_SILVERMONT;
       break; // "silvermont"
     // Goldmont:
-    case 0x5c:
-    case 0x5f:
+    case 0x5c: // Apollo Lake
+    case 0x5f: // Denverton
+    case 0x7a: // Gemini Lake
       *Type = X86::INTEL_GOLDMONT;
       break; // "goldmont"
     case 0x57:
@@ -667,17 +665,25 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
       break;
 
     default: // Unknown family 6 CPU, try to guess.
-      if (Features & (1 << FEATURE_AVX512F)) {
-        if (Features & (1 << FEATURE_AVX512VL)) {
-          *Type = X86::INTEL_COREI7;
-          *Subtype = X86::INTEL_COREI7_SKYLAKE_AVX512;
-        } else {
-          *Type = X86::INTEL_KNL; // knl
-        }
+      if (Features & (1 << X86::FEATURE_AVX512VBMI)) {
+        *Type = X86::INTEL_COREI7;
+        *Subtype = X86::INTEL_COREI7_CANNONLAKE;
         break;
       }
-      if (Features2 & (1 << (FEATURE_CLFLUSHOPT - 32))) {
-        if (Features2 & (1 << (FEATURE_SHA - 32))) {
+
+      if (Features & (1 << X86::FEATURE_AVX512VL)) {
+        *Type = X86::INTEL_COREI7;
+        *Subtype = X86::INTEL_COREI7_SKYLAKE_AVX512;
+        break;
+      }
+
+      if (Features & (1 << X86::FEATURE_AVX512ER)) {
+        *Type = X86::INTEL_KNL; // knl
+        break;
+      }
+
+      if (Features2 & (1 << (X86::FEATURE_CLFLUSHOPT - 32))) {
+        if (Features2 & (1 << (X86::FEATURE_SHA - 32))) {
           *Type = X86::INTEL_GOLDMONT;
         } else {
           *Type = X86::INTEL_COREI7;
@@ -685,23 +691,23 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
         }
         break;
       }
-      if (Features2 & (1 << (FEATURE_ADX - 32))) {
+      if (Features2 & (1 << (X86::FEATURE_ADX - 32))) {
         *Type = X86::INTEL_COREI7;
         *Subtype = X86::INTEL_COREI7_BROADWELL;
         break;
       }
-      if (Features & (1 << FEATURE_AVX2)) {
+      if (Features & (1 << X86::FEATURE_AVX2)) {
         *Type = X86::INTEL_COREI7;
         *Subtype = X86::INTEL_COREI7_HASWELL;
         break;
       }
-      if (Features & (1 << FEATURE_AVX)) {
+      if (Features & (1 << X86::FEATURE_AVX)) {
         *Type = X86::INTEL_COREI7;
         *Subtype = X86::INTEL_COREI7_SANDYBRIDGE;
         break;
       }
-      if (Features & (1 << FEATURE_SSE4_2)) {
-        if (Features2 & (1 << (FEATURE_MOVBE - 32))) {
+      if (Features & (1 << X86::FEATURE_SSE4_2)) {
+        if (Features2 & (1 << (X86::FEATURE_MOVBE - 32))) {
           *Type = X86::INTEL_SILVERMONT;
         } else {
           *Type = X86::INTEL_COREI7;
@@ -709,13 +715,13 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
         }
         break;
       }
-      if (Features & (1 << FEATURE_SSE4_1)) {
+      if (Features & (1 << X86::FEATURE_SSE4_1)) {
         *Type = X86::INTEL_CORE2; // "penryn"
         *Subtype = X86::INTEL_CORE2_45;
         break;
       }
-      if (Features & (1 << FEATURE_SSSE3)) {
-        if (Features2 & (1 << (FEATURE_MOVBE - 32))) {
+      if (Features & (1 << X86::FEATURE_SSSE3)) {
+        if (Features2 & (1 << (X86::FEATURE_MOVBE - 32))) {
           *Type = X86::INTEL_BONNELL; // "bonnell"
         } else {
           *Type = X86::INTEL_CORE2; // "core2"
@@ -723,24 +729,24 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
         }
         break;
       }
-      if (Features2 & (1 << (FEATURE_EM64T - 32))) {
+      if (Features2 & (1 << (X86::FEATURE_EM64T - 32))) {
         *Type = X86::INTEL_CORE2; // "core2"
         *Subtype = X86::INTEL_CORE2_65;
         break;
       }
-      if (Features & (1 << FEATURE_SSE3)) {
+      if (Features & (1 << X86::FEATURE_SSE3)) {
         *Type = X86::INTEL_CORE_DUO;
         break;
       }
-      if (Features & (1 << FEATURE_SSE2)) {
+      if (Features & (1 << X86::FEATURE_SSE2)) {
         *Type = X86::INTEL_PENTIUM_M;
         break;
       }
-      if (Features & (1 << FEATURE_SSE)) {
+      if (Features & (1 << X86::FEATURE_SSE)) {
         *Type = X86::INTEL_PENTIUM_III;
         break;
       }
-      if (Features & (1 << FEATURE_MMX)) {
+      if (Features & (1 << X86::FEATURE_MMX)) {
         *Type = X86::INTEL_PENTIUM_II;
         break;
       }
@@ -749,11 +755,11 @@ getIntelProcessorTypeAndSubtype(unsigned Family, unsigned Model,
     }
     break;
   case 15: {
-    if (Features2 & (1 << (FEATURE_EM64T - 32))) {
+    if (Features2 & (1 << (X86::FEATURE_EM64T - 32))) {
       *Type = X86::INTEL_NOCONA;
       break;
     }
-    if (Features & (1 << FEATURE_SSE3)) {
+    if (Features & (1 << X86::FEATURE_SSE3)) {
       *Type = X86::INTEL_PRESCOTT;
       break;
     }
@@ -795,14 +801,14 @@ static void getAMDProcessorTypeAndSubtype(unsigned Family, unsigned Model,
     }
     break;
   case 6:
-    if (Features & (1 << FEATURE_SSE)) {
+    if (Features & (1 << X86::FEATURE_SSE)) {
       *Type = X86::AMD_ATHLON_XP;
       break; // "athlon-xp"
     }
     *Type = X86::AMD_ATHLON;
     break; // "athlon"
   case 15:
-    if (Features & (1 << FEATURE_SSE3)) {
+    if (Features & (1 << X86::FEATURE_SSE3)) {
       *Type = X86::AMD_K8SSE3;
       break; // "k8-sse3"
     }
@@ -864,33 +870,33 @@ static void getAvailableFeatures(unsigned ECX, unsigned EDX, unsigned MaxLeaf,
   unsigned EAX, EBX;
 
   if ((EDX >> 15) & 1)
-    Features |= 1 << FEATURE_CMOV;
+    Features |= 1 << X86::FEATURE_CMOV;
   if ((EDX >> 23) & 1)
-    Features |= 1 << FEATURE_MMX;
+    Features |= 1 << X86::FEATURE_MMX;
   if ((EDX >> 25) & 1)
-    Features |= 1 << FEATURE_SSE;
+    Features |= 1 << X86::FEATURE_SSE;
   if ((EDX >> 26) & 1)
-    Features |= 1 << FEATURE_SSE2;
+    Features |= 1 << X86::FEATURE_SSE2;
 
   if ((ECX >> 0) & 1)
-    Features |= 1 << FEATURE_SSE3;
+    Features |= 1 << X86::FEATURE_SSE3;
   if ((ECX >> 1) & 1)
-    Features |= 1 << FEATURE_PCLMUL;
+    Features |= 1 << X86::FEATURE_PCLMUL;
   if ((ECX >> 9) & 1)
-    Features |= 1 << FEATURE_SSSE3;
+    Features |= 1 << X86::FEATURE_SSSE3;
   if ((ECX >> 12) & 1)
-    Features |= 1 << FEATURE_FMA;
+    Features |= 1 << X86::FEATURE_FMA;
   if ((ECX >> 19) & 1)
-    Features |= 1 << FEATURE_SSE4_1;
+    Features |= 1 << X86::FEATURE_SSE4_1;
   if ((ECX >> 20) & 1)
-    Features |= 1 << FEATURE_SSE4_2;
+    Features |= 1 << X86::FEATURE_SSE4_2;
   if ((ECX >> 23) & 1)
-    Features |= 1 << FEATURE_POPCNT;
+    Features |= 1 << X86::FEATURE_POPCNT;
   if ((ECX >> 25) & 1)
-    Features |= 1 << FEATURE_AES;
+    Features |= 1 << X86::FEATURE_AES;
 
   if ((ECX >> 22) & 1)
-    Features2 |= 1 << (FEATURE_MOVBE - 32);
+    Features2 |= 1 << (X86::FEATURE_MOVBE - 32);
 
   // If CPUID indicates support for XSAVE, XRESTORE and AVX, and XGETBV
   // indicates that the AVX registers will be saved and restored on context
@@ -901,49 +907,49 @@ static void getAvailableFeatures(unsigned ECX, unsigned EDX, unsigned MaxLeaf,
   bool HasAVX512Save = HasAVX && ((EAX & 0xe0) == 0xe0);
 
   if (HasAVX)
-    Features |= 1 << FEATURE_AVX;
+    Features |= 1 << X86::FEATURE_AVX;
 
   bool HasLeaf7 =
       MaxLeaf >= 0x7 && !getX86CpuIDAndInfoEx(0x7, 0x0, &EAX, &EBX, &ECX, &EDX);
 
   if (HasLeaf7 && ((EBX >> 3) & 1))
-    Features |= 1 << FEATURE_BMI;
+    Features |= 1 << X86::FEATURE_BMI;
   if (HasLeaf7 && ((EBX >> 5) & 1) && HasAVX)
-    Features |= 1 << FEATURE_AVX2;
+    Features |= 1 << X86::FEATURE_AVX2;
   if (HasLeaf7 && ((EBX >> 9) & 1))
-    Features |= 1 << FEATURE_BMI2;
+    Features |= 1 << X86::FEATURE_BMI2;
   if (HasLeaf7 && ((EBX >> 16) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512F;
+    Features |= 1 << X86::FEATURE_AVX512F;
   if (HasLeaf7 && ((EBX >> 17) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512DQ;
+    Features |= 1 << X86::FEATURE_AVX512DQ;
   if (HasLeaf7 && ((EBX >> 19) & 1))
-    Features2 |= 1 << (FEATURE_ADX - 32);
+    Features2 |= 1 << (X86::FEATURE_ADX - 32);
   if (HasLeaf7 && ((EBX >> 21) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512IFMA;
+    Features |= 1 << X86::FEATURE_AVX512IFMA;
   if (HasLeaf7 && ((EBX >> 23) & 1))
-    Features2 |= 1 << (FEATURE_CLFLUSHOPT - 32);
+    Features2 |= 1 << (X86::FEATURE_CLFLUSHOPT - 32);
   if (HasLeaf7 && ((EBX >> 26) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512PF;
+    Features |= 1 << X86::FEATURE_AVX512PF;
   if (HasLeaf7 && ((EBX >> 27) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512ER;
+    Features |= 1 << X86::FEATURE_AVX512ER;
   if (HasLeaf7 && ((EBX >> 28) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512CD;
+    Features |= 1 << X86::FEATURE_AVX512CD;
   if (HasLeaf7 && ((EBX >> 29) & 1))
-    Features2 |= 1 << (FEATURE_SHA - 32);
+    Features2 |= 1 << (X86::FEATURE_SHA - 32);
   if (HasLeaf7 && ((EBX >> 30) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512BW;
+    Features |= 1 << X86::FEATURE_AVX512BW;
   if (HasLeaf7 && ((EBX >> 31) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512VL;
+    Features |= 1 << X86::FEATURE_AVX512VL;
 
   if (HasLeaf7 && ((ECX >> 1) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512VBMI;
+    Features |= 1 << X86::FEATURE_AVX512VBMI;
   if (HasLeaf7 && ((ECX >> 14) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX512VPOPCNTDQ;
+    Features |= 1 << X86::FEATURE_AVX512VPOPCNTDQ;
 
   if (HasLeaf7 && ((EDX >> 2) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX5124VNNIW;
+    Features |= 1 << X86::FEATURE_AVX5124VNNIW;
   if (HasLeaf7 && ((EDX >> 3) & 1) && HasAVX512Save)
-    Features |= 1 << FEATURE_AVX5124FMAPS;
+    Features |= 1 << X86::FEATURE_AVX5124FMAPS;
 
   unsigned MaxExtLevel;
   getX86CpuIDAndInfo(0x80000000, &MaxExtLevel, &EBX, &ECX, &EDX);
@@ -951,14 +957,14 @@ static void getAvailableFeatures(unsigned ECX, unsigned EDX, unsigned MaxLeaf,
   bool HasExtLeaf1 = MaxExtLevel >= 0x80000001 &&
                      !getX86CpuIDAndInfo(0x80000001, &EAX, &EBX, &ECX, &EDX);
   if (HasExtLeaf1 && ((ECX >> 6) & 1))
-    Features |= 1 << FEATURE_SSE4_A;
+    Features |= 1 << X86::FEATURE_SSE4_A;
   if (HasExtLeaf1 && ((ECX >> 11) & 1))
-    Features |= 1 << FEATURE_XOP;
+    Features |= 1 << X86::FEATURE_XOP;
   if (HasExtLeaf1 && ((ECX >> 16) & 1))
-    Features |= 1 << FEATURE_FMA4;
+    Features |= 1 << X86::FEATURE_FMA4;
 
   if (HasExtLeaf1 && ((EDX >> 29) & 1))
-    Features2 |= 1 << (FEATURE_EM64T - 32);
+    Features2 |= 1 << (X86::FEATURE_EM64T - 32);
 
   *FeaturesOut  = Features;
   *Features2Out = Features2;
@@ -1165,95 +1171,100 @@ bool sys::getHostCPUFeatures(StringMap<bool> &Features) {
 
   getX86CpuIDAndInfo(1, &EAX, &EBX, &ECX, &EDX);
 
-  Features["cmov"] = (EDX >> 15) & 1;
-  Features["mmx"] = (EDX >> 23) & 1;
-  Features["sse"] = (EDX >> 25) & 1;
-  Features["sse2"] = (EDX >> 26) & 1;
-  Features["sse3"] = (ECX >> 0) & 1;
-  Features["ssse3"] = (ECX >> 9) & 1;
+  Features["cmov"]   = (EDX >> 15) & 1;
+  Features["mmx"]    = (EDX >> 23) & 1;
+  Features["sse"]    = (EDX >> 25) & 1;
+  Features["sse2"]   = (EDX >> 26) & 1;
+
+  Features["sse3"]   = (ECX >>  0) & 1;
+  Features["pclmul"] = (ECX >>  1) & 1;
+  Features["ssse3"]  = (ECX >>  9) & 1;
+  Features["cx16"]   = (ECX >> 13) & 1;
   Features["sse4.1"] = (ECX >> 19) & 1;
   Features["sse4.2"] = (ECX >> 20) & 1;
-
-  Features["pclmul"] = (ECX >> 1) & 1;
-  Features["cx16"] = (ECX >> 13) & 1;
-  Features["movbe"] = (ECX >> 22) & 1;
+  Features["movbe"]  = (ECX >> 22) & 1;
   Features["popcnt"] = (ECX >> 23) & 1;
-  Features["aes"] = (ECX >> 25) & 1;
-  Features["rdrnd"] = (ECX >> 30) & 1;
+  Features["aes"]    = (ECX >> 25) & 1;
+  Features["rdrnd"]  = (ECX >> 30) & 1;
 
   // If CPUID indicates support for XSAVE, XRESTORE and AVX, and XGETBV
   // indicates that the AVX registers will be saved and restored on context
   // switch, then we have full AVX support.
   bool HasAVXSave = ((ECX >> 27) & 1) && ((ECX >> 28) & 1) &&
                     !getX86XCR0(&EAX, &EDX) && ((EAX & 0x6) == 0x6);
-  Features["avx"] = HasAVXSave;
-  Features["fma"] = HasAVXSave && (ECX >> 12) & 1;
-  Features["f16c"] = HasAVXSave && (ECX >> 29) & 1;
-
-  // Only enable XSAVE if OS has enabled support for saving YMM state.
-  Features["xsave"] = HasAVXSave && (ECX >> 26) & 1;
-
   // AVX512 requires additional context to be saved by the OS.
   bool HasAVX512Save = HasAVXSave && ((EAX & 0xe0) == 0xe0);
+
+  Features["avx"]   = HasAVXSave;
+  Features["fma"]   = ((ECX >> 12) & 1) && HasAVXSave;
+  // Only enable XSAVE if OS has enabled support for saving YMM state.
+  Features["xsave"] = ((ECX >> 26) & 1) && HasAVXSave;
+  Features["f16c"]  = ((ECX >> 29) & 1) && HasAVXSave;
 
   unsigned MaxExtLevel;
   getX86CpuIDAndInfo(0x80000000, &MaxExtLevel, &EBX, &ECX, &EDX);
 
   bool HasExtLeaf1 = MaxExtLevel >= 0x80000001 &&
                      !getX86CpuIDAndInfo(0x80000001, &EAX, &EBX, &ECX, &EDX);
-  Features["lzcnt"] = HasExtLeaf1 && ((ECX >> 5) & 1);
-  Features["sse4a"] = HasExtLeaf1 && ((ECX >> 6) & 1);
-  Features["prfchw"] = HasExtLeaf1 && ((ECX >> 8) & 1);
-  Features["xop"] = HasExtLeaf1 && ((ECX >> 11) & 1) && HasAVXSave;
-  Features["lwp"] = HasExtLeaf1 && ((ECX >> 15) & 1);
-  Features["fma4"] = HasExtLeaf1 && ((ECX >> 16) & 1) && HasAVXSave;
-  Features["tbm"] = HasExtLeaf1 && ((ECX >> 21) & 1);
+  Features["lzcnt"]  = HasExtLeaf1 && ((ECX >>  5) & 1);
+  Features["sse4a"]  = HasExtLeaf1 && ((ECX >>  6) & 1);
+  Features["prfchw"] = HasExtLeaf1 && ((ECX >>  8) & 1);
+  Features["xop"]    = HasExtLeaf1 && ((ECX >> 11) & 1) && HasAVXSave;
+  Features["lwp"]    = HasExtLeaf1 && ((ECX >> 15) & 1);
+  Features["fma4"]   = HasExtLeaf1 && ((ECX >> 16) & 1) && HasAVXSave;
+  Features["tbm"]    = HasExtLeaf1 && ((ECX >> 21) & 1);
   Features["mwaitx"] = HasExtLeaf1 && ((ECX >> 29) & 1);
 
   bool HasExtLeaf8 = MaxExtLevel >= 0x80000008 &&
-                     !getX86CpuIDAndInfoEx(0x80000008,0x0, &EAX, &EBX, &ECX, &EDX);
+                     !getX86CpuIDAndInfo(0x80000008, &EAX, &EBX, &ECX, &EDX);
   Features["clzero"] = HasExtLeaf8 && ((EBX >> 0) & 1);
 
   bool HasLeaf7 =
       MaxLevel >= 7 && !getX86CpuIDAndInfoEx(0x7, 0x0, &EAX, &EBX, &ECX, &EDX);
 
+  Features["fsgsbase"]   = HasLeaf7 && ((EBX >>  0) & 1);
+  Features["sgx"]        = HasLeaf7 && ((EBX >>  2) & 1);
+  Features["bmi"]        = HasLeaf7 && ((EBX >>  3) & 1);
   // AVX2 is only supported if we have the OS save support from AVX.
-  Features["avx2"] = HasAVXSave && HasLeaf7 && ((EBX >> 5) & 1);
-
-  Features["fsgsbase"] = HasLeaf7 && ((EBX >> 0) & 1);
-  Features["sgx"] = HasLeaf7 && ((EBX >> 2) & 1);
-  Features["bmi"] = HasLeaf7 && ((EBX >> 3) & 1);
-  Features["bmi2"] = HasLeaf7 && ((EBX >> 8) & 1);
-  Features["rtm"] = HasLeaf7 && ((EBX >> 11) & 1);
-  Features["rdseed"] = HasLeaf7 && ((EBX >> 18) & 1);
-  Features["adx"] = HasLeaf7 && ((EBX >> 19) & 1);
-  Features["clflushopt"] = HasLeaf7 && ((EBX >> 23) & 1);
-  Features["clwb"] = HasLeaf7 && ((EBX >> 24) & 1);
-  Features["sha"] = HasLeaf7 && ((EBX >> 29) & 1);
-
+  Features["avx2"]       = HasLeaf7 && ((EBX >>  5) & 1) && HasAVXSave;
+  Features["bmi2"]       = HasLeaf7 && ((EBX >>  8) & 1);
+  Features["rtm"]        = HasLeaf7 && ((EBX >> 11) & 1);
   // AVX512 is only supported if the OS supports the context save for it.
-  Features["avx512f"] = HasLeaf7 && ((EBX >> 16) & 1) && HasAVX512Save;
-  Features["avx512dq"] = HasLeaf7 && ((EBX >> 17) & 1) && HasAVX512Save;
+  Features["avx512f"]    = HasLeaf7 && ((EBX >> 16) & 1) && HasAVX512Save;
+  Features["avx512dq"]   = HasLeaf7 && ((EBX >> 17) & 1) && HasAVX512Save;
+  Features["rdseed"]     = HasLeaf7 && ((EBX >> 18) & 1);
+  Features["adx"]        = HasLeaf7 && ((EBX >> 19) & 1);
   Features["avx512ifma"] = HasLeaf7 && ((EBX >> 21) & 1) && HasAVX512Save;
-  Features["avx512pf"] = HasLeaf7 && ((EBX >> 26) & 1) && HasAVX512Save;
-  Features["avx512er"] = HasLeaf7 && ((EBX >> 27) & 1) && HasAVX512Save;
-  Features["avx512cd"] = HasLeaf7 && ((EBX >> 28) & 1) && HasAVX512Save;
-  Features["avx512bw"] = HasLeaf7 && ((EBX >> 30) & 1) && HasAVX512Save;
-  Features["avx512vl"] = HasLeaf7 && ((EBX >> 31) & 1) && HasAVX512Save;
+  Features["clflushopt"] = HasLeaf7 && ((EBX >> 23) & 1);
+  Features["clwb"]       = HasLeaf7 && ((EBX >> 24) & 1);
+  Features["avx512pf"]   = HasLeaf7 && ((EBX >> 26) & 1) && HasAVX512Save;
+  Features["avx512er"]   = HasLeaf7 && ((EBX >> 27) & 1) && HasAVX512Save;
+  Features["avx512cd"]   = HasLeaf7 && ((EBX >> 28) & 1) && HasAVX512Save;
+  Features["sha"]        = HasLeaf7 && ((EBX >> 29) & 1);
+  Features["avx512bw"]   = HasLeaf7 && ((EBX >> 30) & 1) && HasAVX512Save;
+  Features["avx512vl"]   = HasLeaf7 && ((EBX >> 31) & 1) && HasAVX512Save;
 
-  Features["prefetchwt1"] = HasLeaf7 && (ECX & 1);
-  Features["avx512vbmi"] = HasLeaf7 && ((ECX >> 1) & 1) && HasAVX512Save;
+  Features["prefetchwt1"]     = HasLeaf7 && ((ECX >>  0) & 1);
+  Features["avx512vbmi"]      = HasLeaf7 && ((ECX >>  1) & 1) && HasAVX512Save;
+  Features["pku"]             = HasLeaf7 && ((ECX >>  4) & 1);
+  Features["avx512vbmi2"]     = HasLeaf7 && ((ECX >>  6) & 1) && HasAVX512Save;
+  Features["shstk"]           = HasLeaf7 && ((ECX >>  7) & 1);
+  Features["gfni"]            = HasLeaf7 && ((ECX >>  8) & 1);
+  Features["vaes"]            = HasLeaf7 && ((ECX >>  9) & 1) && HasAVXSave;
+  Features["vpclmulqdq"]      = HasLeaf7 && ((ECX >> 10) & 1) && HasAVXSave;
+  Features["avx512vnni"]      = HasLeaf7 && ((ECX >> 11) & 1) && HasAVX512Save;
+  Features["avx512bitalg"]    = HasLeaf7 && ((ECX >> 12) & 1) && HasAVX512Save;
   Features["avx512vpopcntdq"] = HasLeaf7 && ((ECX >> 14) & 1) && HasAVX512Save;
-  // Enable protection keys
-  Features["pku"] = HasLeaf7 && ((ECX >> 4) & 1);
+
+  Features["ibt"] = HasLeaf7 && ((EDX >> 20) & 1);
 
   bool HasLeafD = MaxLevel >= 0xd &&
                   !getX86CpuIDAndInfoEx(0xd, 0x1, &EAX, &EBX, &ECX, &EDX);
 
   // Only enable XSAVE if OS has enabled support for saving YMM state.
-  Features["xsaveopt"] = HasAVXSave && HasLeafD && ((EAX >> 0) & 1);
-  Features["xsavec"] = HasAVXSave && HasLeafD && ((EAX >> 1) & 1);
-  Features["xsaves"] = HasAVXSave && HasLeafD && ((EAX >> 3) & 1);
+  Features["xsaveopt"] = HasLeafD && ((EAX >> 0) & 1) && HasAVXSave;
+  Features["xsavec"]   = HasLeafD && ((EAX >> 1) & 1) && HasAVXSave;
+  Features["xsaves"]   = HasLeafD && ((EAX >> 3) & 1) && HasAVXSave;
 
   return true;
 }

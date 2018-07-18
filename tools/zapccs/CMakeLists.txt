@@ -54,6 +54,7 @@ endif()
 
 set_target_properties(zapccs PROPERTIES FOLDER "Ceemple")
 target_link_libraries(zapccs
+  PRIVATE
   clangAST
   clangBasic
   clangCodeGen

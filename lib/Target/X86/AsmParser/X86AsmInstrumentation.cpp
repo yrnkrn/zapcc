@@ -38,7 +38,7 @@
 // Currently we have only AddressSanitizer instrumentation, but we're
 // planning to implement MemorySanitizer for inline assembly too. If
 // you're not familiar with AddressSanitizer algorithm, please, read
-// https://code.google.com/p/address-sanitizer/wiki/AddressSanitizerAlgorithm.
+// https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm
 //
 // When inline assembly is parsed by an instance of X86AsmParser, all
 // instructions are emitted via EmitInstruction method. That's the
@@ -610,7 +610,7 @@ private:
     EmitInstruction(Out, MCInstBuilder(X86::CLD));
     EmitInstruction(Out, MCInstBuilder(X86::MMX_EMMS));
 
-    EmitInstruction(Out, MCInstBuilder(X86::AND64ri8)
+    EmitInstruction(Out, MCInstBuilder(X86::AND32ri8)
                              .addReg(X86::ESP)
                              .addReg(X86::ESP)
                              .addImm(-16));

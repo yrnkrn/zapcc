@@ -31,6 +31,14 @@ def warn_cxx98_compat_less_colon_colon : Warning<
   "'<::' is treated as digraph '<:' (aka '[') followed by ':' in C++98">,
   InGroup<CXX98Compat>, DefaultIgnore;
 
+def warn_cxx17_compat_spaceship : Warning<
+  "'<=>' operator is incompatible with C++ standards before C++2a">,
+  InGroup<CXXPre2aCompat>, DefaultIgnore;
+def warn_cxx2a_compat_spaceship : Warning<
+  "'<=>' is a single token in C++2a; "
+  "add a space to avoid a change in behavior">,
+  InGroup<CXX2aCompat>;
+
 // Trigraphs.
 def trigraph_ignored : Warning<"trigraph ignored">, InGroup<Trigraphs>;
 def trigraph_ignored_block_comment : Warning<
@@ -111,6 +119,9 @@ def err_non_ascii : Error<
 def ext_unicode_whitespace : ExtWarn<
   "treating Unicode character as whitespace">,
   InGroup<DiagGroup<"unicode-whitespace">>;
+def warn_utf8_symbol_homoglyph : Warning<
+  "treating Unicode character <U+%0> as identifier character rather than "
+  "as '%1' symbol">, InGroup<DiagGroup<"unicode-homoglyph">>;
 
 def err_hex_escape_no_digits : Error<
   "\\%0 used with no following hex digits">;

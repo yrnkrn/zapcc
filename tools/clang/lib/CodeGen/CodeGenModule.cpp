@@ -61,7 +61,7 @@ using namespace clang;
 using namespace CodeGen;
 
 static llvm::cl::opt<bool> LimitedCoverage(
-    "limited-coverage-experimental", llvm::cl::ZeroOrMore,
+    "limited-coverage-experimental", llvm::cl::ZeroOrMore, llvm::cl::Hidden,
     llvm::cl::desc("Emit limited coverage mapping information (experimental)"),
     llvm::cl::init(false));
 
@@ -136,7 +136,7 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
   // Enable TBAA unless it's suppressed. ThreadSanitizer needs TBAA even at O0.
   if (LangOpts.Sanitize.has(SanitizerKind::Thread) ||
       (!CodeGenOpts.RelaxedAliasing && CodeGenOpts.OptimizationLevel > 0))
-    TBAA.reset(new CodeGenTBAA(Context, VMContext, CodeGenOpts, getLangOpts(),
+    TBAA.reset(new CodeGenTBAA(Context, TheModule, CodeGenOpts, getLangOpts(),
                                getCXXABI().getMangleContext()));
 
   // If debug info or coverage generation is enabled, create the CGDebugInfo
@@ -595,13 +595,20 @@ llvm::MDNode *CodeGenModule::getTBAATypeInfo(QualType QTy) {
 }
 
 TBAAAccessInfo CodeGenModule::getTBAAAccessInfo(QualType AccessType) {
-  return TBAAAccessInfo(getTBAATypeInfo(AccessType));
+  // Pointee values may have incomplete types, but they shall never be
+  // dereferenced.
+  if (AccessType->isIncompleteType())
+    return TBAAAccessInfo::getIncompleteInfo();
+
+  uint64_t Size = Context.getTypeSizeInChars(AccessType).getQuantity();
+  return TBAAAccessInfo(getTBAATypeInfo(AccessType), Size);
 }
 
-TBAAAccessInfo CodeGenModule::getTBAAVTablePtrAccessInfo() {
+TBAAAccessInfo
+CodeGenModule::getTBAAVTablePtrAccessInfo(llvm::Type *VTablePtrType) {
   if (!TBAA)
     return TBAAAccessInfo();
-  return TBAA->getVTablePtrAccessInfo();
+  return TBAA->getVTablePtrAccessInfo(VTablePtrType);
 }
 
 llvm::MDNode *CodeGenModule::getTBAAStructInfo(QualType QTy) {
@@ -678,7 +685,8 @@ llvm::ConstantInt *CodeGenModule::getSize(CharUnits size) {
 }
 
 void CodeGenModule::setGlobalVisibility(llvm::GlobalValue *GV,
-                                        const NamedDecl *D) const {
+                                        const NamedDecl *D,
+                                        ForDefinition_t IsForDefinition) const {
   // Internal definitions always have default visibility.
   if (GV->hasLocalLinkage()) {
     GV->setVisibility(llvm::GlobalValue::DefaultVisibility);
@@ -687,7 +695,8 @@ void CodeGenModule::setGlobalVisibility(llvm::GlobalValue *GV,
 
   // Set visibility for definitions.
   LinkageInfo LV = D->getLinkageAndVisibility();
-  if (LV.isVisibilityExplicit() || !GV->hasAvailableExternallyLinkage())
+  if (LV.isVisibilityExplicit() ||
+      (IsForDefinition && !GV->hasAvailableExternallyLinkage()))
     GV->setVisibility(GetLLVMVisibility(LV.getVisibility()));
 }
 
@@ -1162,7 +1171,7 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
 void CodeGenModule::SetCommonAttributes(const Decl *D,
                                         llvm::GlobalValue *GV) {
   if (const auto *ND = dyn_cast_or_null<NamedDecl>(D))
-    setGlobalVisibility(GV, ND);
+    setGlobalVisibility(GV, ND, ForDefinition);
   else
     GV->setVisibility(llvm::GlobalValue::DefaultVisibility);
 
@@ -1218,8 +1227,8 @@ void CodeGenModule::SetInternalFunctionAttributes(const Decl *D,
   setNonAliasAttributes(D, F);
 }
 
-static void setLinkageAndVisibilityForGV(llvm::GlobalValue *GV,
-                                         const NamedDecl *ND) {
+static void setLinkageForGV(llvm::GlobalValue *GV,
+                            const NamedDecl *ND) {
   // Set linkage and visibility in case we never see a definition.
   LinkageInfo LV = ND->getLinkageAndVisibility();
   if (!isExternallyVisible(LV.getLinkage())) {
@@ -1235,10 +1244,6 @@ static void setLinkageAndVisibilityForGV(llvm::GlobalValue *GV,
       // separate linkage types for this.
       GV->setLinkage(llvm::GlobalValue::ExternalWeakLinkage);
     }
-
-    // Set visibility on a declaration only if it's explicit.
-    if (LV.isVisibilityExplicit())
-      GV->setVisibility(CodeGenModule::GetLLVMVisibility(LV.getVisibility()));
   }
 }
 
@@ -1307,7 +1312,8 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   // Only a few attributes are set on declarations; these may later be
   // overridden by a definition.
 
-  setLinkageAndVisibilityForGV(F, FD);
+  setLinkageForGV(F, FD);
+  setGlobalVisibility(F, FD, NotForDefinition);
 
   if (FD->getAttr<PragmaClangTextSectionAttr>()) {
     F->addFnAttr("implicit-section-name");
@@ -1342,6 +1348,9 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   // is handled with better precision by the receiving DSO.
   if (!CodeGenOpts.SanitizeCfiCrossDso)
     CreateFunctionTypeMetadata(FD, F);
+
+  if (getLangOpts().OpenMP && FD->hasAttr<OMPDeclareSimdDeclAttr>())
+    getOpenMPRuntime().emitDeclareSimdFunction(FD, F);
 }
 
 void CodeGenModule::addUsedGlobal(llvm::GlobalValue *GV, const Decl *D) {
@@ -1711,7 +1720,7 @@ bool CodeGenModule::isInSanitizerBlacklist(llvm::GlobalVariable *GV,
                                            StringRef Category) const {
   // For now globals can be blacklisted only in ASan and KASan.
   const SanitizerMask EnabledAsanMask = LangOpts.Sanitize.Mask &
-      (SanitizerKind::Address | SanitizerKind::KernelAddress);
+      (SanitizerKind::Address | SanitizerKind::KernelAddress | SanitizerKind::HWAddress);
   if (!EnabledAsanMask)
     return false;
   const auto &SanitizerBL = getContext().getSanitizerBlacklist();
@@ -2583,7 +2592,8 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
 
     GV->setAlignment(getContext().getDeclAlign(D).getQuantity());
 
-    setLinkageAndVisibilityForGV(GV, D);
+    setLinkageForGV(GV, D);
+    setGlobalVisibility(GV, D, NotForDefinition);
 
     if (D->getTLSKind()) {
       if (D->getTLSKind() == VarDecl::TLS_Dynamic)
@@ -3407,7 +3417,7 @@ void CodeGenModule::EmitGlobalFunctionDefinition(GlobalDecl GD,
   setFunctionDLLStorageClass(GD, Fn);
 
   // FIXME: this is redundant with part of setFunctionDefinitionAttributes
-  setGlobalVisibility(Fn, D);
+  setGlobalVisibility(Fn, D, ForDefinition);
 
   MaybeHandleStaticInExternC(D, Fn);
 
@@ -4010,7 +4020,7 @@ ConstantAddress CodeGenModule::GetAddrOfGlobalTemporary(
       /*InsertBefore=*/nullptr, llvm::GlobalVariable::NotThreadLocal, TargetAS);
   insertDeclGlobalValues(VD, GV);
   if (emitter) emitter->finalize(GV);
-  setGlobalVisibility(GV, VD);
+  setGlobalVisibility(GV, VD, ForDefinition);
   GV->setAlignment(Align.getQuantity());
   if (supportsCOMDAT() && GV->isWeakForLinker())
     GV->setComdat(TheModule.getOrInsertComdat(GV->getName()));
@@ -4442,20 +4452,10 @@ void CodeGenModule::ClearUnusedCoverageMapping(const Decl *D) {
 }
 
 void CodeGenModule::EmitDeferredUnusedCoverageMappings() {
-  std::vector<const Decl *> DeferredDecls;
-  for (const auto &I : DeferredEmptyCoverageMappingDecls) {
-    if (!I.second)
+  for (const auto &Entry : DeferredEmptyCoverageMappingDecls) {
+    if (!Entry.second)
       continue;
-    DeferredDecls.push_back(I.first);
-  }
-  // Sort the declarations by their location to make sure that the tests get a
-  // predictable order for the coverage mapping for the unused declarations.
-  if (CodeGenOpts.DumpCoverageMapping)
-    std::sort(DeferredDecls.begin(), DeferredDecls.end(),
-              [] (const Decl *LHS, const Decl *RHS) {
-      return LHS->getLocStart() < RHS->getLocStart();
-    });
-  for (const auto *D : DeferredDecls) {
+    const Decl *D = Entry.first;
     switch (D->getKind()) {
     case Decl::CXXConversion:
     case Decl::CXXMethod:

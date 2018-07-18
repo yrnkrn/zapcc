@@ -26,7 +26,14 @@ struct SA {
   T d;
   float e[I];
   T *f;
+  int bf : 20;
   void func(int arg) {
+    #pragma omp target
+    {
+      a = 0.0;
+      func(arg);
+      bf = 20;
+    }
     #pragma omp target map(arg,a,d)
     {}
     #pragma omp target map(arg[2:2],a,d) // expected-error {{subscripted value is not an array or pointer}}
@@ -267,8 +274,13 @@ void SAclient(int arg) {
   {}
   #pragma omp target map((p+1)->A)  // expected-error {{expected expression containing only member accesses and/or array sections based on named variables}}
   {}
-  #pragma omp target map(u.B)  // expected-error {{mapped storage cannot be derived from a union}}
+  #pragma omp target map(u.B)  // expected-error {{mapping of union members is not allowed}}
   {}
+  #pragma omp target
+  {
+    u.B = 0;
+    r.S.foo();
+  }
 
   #pragma omp target data map(to: r.C) //expected-note {{used here}}
   {

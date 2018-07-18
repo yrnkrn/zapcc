@@ -103,7 +103,7 @@ main_body:
 }
 
 ;CHECK-LABEL: {{^}}buffer_load_negative_offset:
-;CHECK: v_add_i32_e32 [[VOFS:v[0-9]+]], vcc, -16, v0
+;CHECK: v_add_{{[iu]}}32_e32 [[VOFS:v[0-9]+]], vcc, -16, v0
 ;CHECK: buffer_load_dwordx4 v[0:3], [[VOFS]], s[0:3], 0 offen
 define amdgpu_ps <4 x float> @buffer_load_negative_offset(<4 x i32> inreg, i32 %ofs) {
 main_body:
@@ -127,7 +127,7 @@ entry:
 }
 
 ;CHECK-LABEL: {{^}}buffer_load_x1_offen_merged:
-;CHECK-NEXT: BB#
+;CHECK-NEXT: %bb.
 ;CHECK-NEXT: buffer_load_dwordx4 v[{{[0-9]}}:{{[0-9]}}], v0, s[0:3], 0 offen offset:4
 ;CHECK-NEXT: buffer_load_dwordx2 v[{{[0-9]}}:{{[0-9]}}], v0, s[0:3], 0 offen offset:28
 ;CHECK: s_waitcnt
@@ -151,7 +151,7 @@ main_body:
 }
 
 ;CHECK-LABEL: {{^}}buffer_load_x1_offen_merged_glc_slc:
-;CHECK-NEXT: BB#
+;CHECK-NEXT: %bb.
 ;CHECK-NEXT: buffer_load_dwordx2 v[{{[0-9]}}:{{[0-9]}}], v0, s[0:3], 0 offen offset:4{{$}}
 ;CHECK-NEXT: buffer_load_dwordx2 v[{{[0-9]}}:{{[0-9]}}], v0, s[0:3], 0 offen offset:12 glc{{$}}
 ;CHECK-NEXT: buffer_load_dwordx2 v[{{[0-9]}}:{{[0-9]}}], v0, s[0:3], 0 offen offset:28 glc slc{{$}}
@@ -176,7 +176,7 @@ main_body:
 }
 
 ;CHECK-LABEL: {{^}}buffer_load_x2_offen_merged:
-;CHECK-NEXT: BB#
+;CHECK-NEXT: %bb.
 ;CHECK-NEXT: buffer_load_dwordx4 v[{{[0-9]}}:{{[0-9]}}], v0, s[0:3], 0 offen offset:4
 ;CHECK: s_waitcnt
 define amdgpu_ps void @buffer_load_x2_offen_merged(<4 x i32> inreg %rsrc, i32 %a) {
@@ -194,7 +194,7 @@ main_body:
 }
 
 ;CHECK-LABEL: {{^}}buffer_load_x1_offset_merged:
-;CHECK-NEXT: BB#
+;CHECK-NEXT: %bb.
 ;CHECK-NEXT: buffer_load_dwordx4 v[{{[0-9]}}:{{[0-9]}}], off, s[0:3], 0 offset:4
 ;CHECK-NEXT: buffer_load_dwordx2 v[{{[0-9]}}:{{[0-9]}}], off, s[0:3], 0 offset:28
 ;CHECK: s_waitcnt
@@ -212,7 +212,7 @@ main_body:
 }
 
 ;CHECK-LABEL: {{^}}buffer_load_x2_offset_merged:
-;CHECK-NEXT: BB#
+;CHECK-NEXT: %bb.
 ;CHECK-NEXT: buffer_load_dwordx4 v[{{[0-9]}}:{{[0-9]}}], off, s[0:3], 0 offset:4
 ;CHECK: s_waitcnt
 define amdgpu_ps void @buffer_load_x2_offset_merged(<4 x i32> inreg %rsrc) {

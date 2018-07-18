@@ -27,9 +27,8 @@ class LLVMConfig(object):
             # For tests that require Windows to run.
             features.add('system-windows')
 
-            lit_tools_dir = getattr(config, 'lit_tools_dir', None)
             # Seek sane tools in directories and set to $PATH.
-            path = self.lit_config.getToolsPath(lit_tools_dir,
+            path = self.lit_config.getToolsPath(config.lit_tools_dir,
                                                 config.environment['PATH'],
                                                 ['cmp.exe', 'grep.exe', 'sed.exe'])
             if path is not None:
@@ -224,12 +223,15 @@ class LLVMConfig(object):
             return True
 
         if re.match(r'^x86_64.*-apple', triple):
-            version_number = int(
-                re.search(r'version ([0-9]+)\.', version_string).group(1))
+            version_regex = re.search(r'version ([0-9]+)\.([0-9]+).([0-9]+)', version_string)
+            major_version_number = int(version_regex.group(1))
+            minor_version_number = int(version_regex.group(2))
+            patch_version_number = int(version_regex.group(3))
             if 'Apple LLVM' in version_string:
-                return version_number >= 9
+                # Apple LLVM doesn't yet support LSan
+                return False
             else:
-                return version_number >= 5
+                return major_version_number >= 5
 
         return False
 
@@ -317,7 +319,7 @@ class LLVMConfig(object):
                 return tool
 
         # Otherwise look in the path.
-        tool = lit.util.which(name, self.config.llvm_tools_dir)
+        tool = lit.util.which(name, self.config.environment['PATH'])
 
         if required and not tool:
             message = "couldn't find '{}' program".format(name)
@@ -368,10 +370,10 @@ class LLVMConfig(object):
         self.clear_environment(possibly_dangerous_env_vars)
 
         # Tweak the PATH to include the tools dir and the scripts dir.
-        paths = [self.config.llvm_tools_dir]
-        tools = getattr(self.config, 'clang_tools_dir', None)
-        if tools:
-            paths = paths + [tools]
+        # Put Clang first to avoid LLVM from overriding out-of-tree clang builds.
+        possible_paths = ['clang_tools_dir', 'llvm_tools_dir']
+        paths = [getattr(self.config, pp) for pp in possible_paths
+                 if getattr(self.config, pp, None)]
         self.with_environment('PATH', paths, append_path=True)
 
         paths = [self.config.llvm_shlib_dir, self.config.llvm_libs_dir]
@@ -399,8 +401,6 @@ class LLVMConfig(object):
             ToolSubst('%clang_cpp', command=self.config.clang, extra_args=['--driver-mode=cpp']),
             ToolSubst('%clang_cl', command=self.config.clang, extra_args=['--driver-mode=cl']),
             ToolSubst('%clangxx', command=self.config.clang, extra_args=['--driver-mode=g++']),
-            ToolSubst('%zapccxx', command=self.config.zapcc, extra_args=['-serverid %# --driver-mode=g++']),
-            ToolSubst('%zapcc_reset', command=self.config.zapcc, extra_args=['-cc1 -reset-server -serverid %#']),
             ]
         self.add_tool_substitutions(tool_substitutions)
 
@@ -420,10 +420,8 @@ class LLVMConfig(object):
             self.config.substitutions.append(
                 ('%target_itanium_abi_host_triple', ''))
 
-        clang_src_dir = getattr(self.config, 'clang_src_dir', None)
-        if clang_src_dir:
-            self.config.substitutions.append(
-                ('%src_include_dir', os.path.join(clang_src_dir, 'include')))
+        self.config.substitutions.append(
+            ('%src_include_dir', self.config.clang_src_dir + '/include'))
 
         # FIXME: Find nicer way to prohibit this.
         self.config.substitutions.append(

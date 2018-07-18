@@ -2180,9 +2180,18 @@ QualType Sema::BuildArrayType(QualType T, ArrayType::ArraySizeModifier ASM,
     Diag(Loc, diag::err_opencl_vla);
     return QualType();
   }
-  // CUDA device code doesn't support VLAs.
-  if (getLangOpts().CUDA && T->isVariableArrayType())
-    CUDADiagIfDeviceCode(Loc, diag::err_cuda_vla) << CurrentCUDATarget();
+
+  if (T->isVariableArrayType() && !Context.getTargetInfo().isVLASupported()) {
+    if (getLangOpts().CUDA) {
+      // CUDA device code doesn't support VLAs.
+      CUDADiagIfDeviceCode(Loc, diag::err_cuda_vla) << CurrentCUDATarget();
+    } else if (!getLangOpts().OpenMP ||
+               shouldDiagnoseTargetSupportFromOpenMP()) {
+      // Some targets don't support VLAs.
+      Diag(Loc, diag::err_vla_unsupported);
+      return QualType();
+    }
+  }
 
   // If this is not C99, extwarn about VLA's and C99 array size modifiers.
   if (!getLangOpts().C99) {
@@ -2835,8 +2844,8 @@ static QualType GetDeclSpecTypeForDeclarator(TypeProcessingState &state,
     case Declarator::TemplateParamContext:
       if (isa<DeducedTemplateSpecializationType>(Deduced))
         Error = 19; // Template parameter
-      else if (!SemaRef.getLangOpts().CPlusPlus1z)
-        Error = 8; // Template parameter (until C++1z)
+      else if (!SemaRef.getLangOpts().CPlusPlus17)
+        Error = 8; // Template parameter (until C++17)
       break;
     case Declarator::BlockLiteralContext:
       Error = 9; // Block literal
@@ -4286,7 +4295,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
               << T << D.getSourceRange();
             D.setInvalidType(true);
           } else if (D.getName().getKind() ==
-                         UnqualifiedId::IK_DeductionGuideName) {
+                     UnqualifiedId::IK_DeductionGuideName) {
             if (T != Context.DependentTy) {
               S.Diag(D.getDeclSpec().getLocStart(),
                      diag::err_deduction_guide_with_complex_decl)
@@ -4454,7 +4463,7 @@ static TypeSourceInfo *GetFullTypeForDeclarator(TypeProcessingState &state,
 
       // Exception specs are not allowed in typedefs. Complain, but add it
       // anyway.
-      if (IsTypedefName && FTI.getExceptionSpecType() && !LangOpts.CPlusPlus1z)
+      if (IsTypedefName && FTI.getExceptionSpecType() && !LangOpts.CPlusPlus17)
         S.Diag(FTI.getExceptionSpecLocBeg(),
                diag::err_exception_spec_in_typedef)
             << (D.getContext() == Declarator::AliasDeclContext ||
@@ -7260,31 +7269,29 @@ void Sema::completeExprArrayBound(Expr *E) {
   if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParens())) {
     if (VarDecl *Var = dyn_cast<VarDecl>(DRE->getDecl())) {
       if (isTemplateInstantiation(Var->getTemplateSpecializationKind())) {
-        SourceLocation PointOfInstantiation = E->getExprLoc();
+        auto *Def = Var->getDefinition();
+        if (!Def) {
+          SourceLocation PointOfInstantiation = E->getExprLoc();
+          InstantiateVariableDefinition(PointOfInstantiation, Var);
+          Def = Var->getDefinition();
 
-        if (MemberSpecializationInfo *MSInfo =
-                Var->getMemberSpecializationInfo()) {
-          // If we don't already have a point of instantiation, this is it.
-          if (MSInfo->getPointOfInstantiation().isInvalid()) {
-            MSInfo->setPointOfInstantiation(PointOfInstantiation);
-
-            // This is a modification of an existing AST node. Notify
-            // listeners.
-            if (ASTMutationListener *L = getASTMutationListener())
-              L->StaticDataMemberInstantiated(Var);
+          // If we don't already have a point of instantiation, and we managed
+          // to instantiate a definition, this is the point of instantiation.
+          // Otherwise, we don't request an end-of-TU instantiation, so this is
+          // not a point of instantiation.
+          // FIXME: Is this really the right behavior?
+          if (Var->getPointOfInstantiation().isInvalid() && Def) {
+            assert(Var->getTemplateSpecializationKind() ==
+                       TSK_ImplicitInstantiation &&
+                   "explicit instantiation with no point of instantiation");
+            Var->setTemplateSpecializationKind(
+                Var->getTemplateSpecializationKind(), PointOfInstantiation);
           }
-        } else {
-          VarTemplateSpecializationDecl *VarSpec =
-              cast<VarTemplateSpecializationDecl>(Var);
-          if (VarSpec->getPointOfInstantiation().isInvalid())
-            VarSpec->setPointOfInstantiation(PointOfInstantiation);
         }
 
-        InstantiateVariableDefinition(PointOfInstantiation, Var);
-
-        // Update the type to the newly instantiated definition's type both
-        // here and within the expression.
-        if (VarDecl *Def = Var->getDefinition()) {
+        // Update the type to the definition's type both here and within the
+        // expression.
+        if (Def) {
           DRE->setDecl(Def);
           QualType T = Def->getType();
           DRE->setType(T);

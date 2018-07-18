@@ -1597,6 +1597,10 @@ example:
 ``sanitize_thread``
     This attribute indicates that ThreadSanitizer checks
     (dynamic thread safety analysis) are enabled for this function.
+``sanitize_hwaddress``
+    This attribute indicates that HWAddressSanitizer checks
+    (dynamic address safety analysis based on tagged pointers) are enabled for
+    this function.
 ``speculatable``
     This function attribute indicates that the function does not have any
     effects besides calculating its result and does not have undefined behavior.
@@ -6827,10 +6831,12 @@ Both arguments must have identical types.
 Semantics:
 """"""""""
 
-This instruction returns the *remainder* of a division. The remainder
-has the same sign as the dividend. This instruction can also take any
-number of :ref:`fast-math flags <fastmath>`, which are optimization hints
-to enable otherwise unsafe floating point optimizations:
+Return the same value as a libm '``fmod``' function but without trapping or 
+setting ``errno``.
+
+The remainder has the same sign as the dividend. This instruction can also 
+take any number of :ref:`fast-math flags <fastmath>`, which are optimization
+hints to enable otherwise unsafe floating-point optimizations:
 
 Example:
 """"""""
@@ -12817,10 +12823,13 @@ This intrinsic indicates that the memory is mutable again.
 
 Syntax:
 """""""
+This is an overloaded intrinsic. The memory object can belong to any address
+space. The returned pointer must belong to the same address space as the
+argument.
 
 ::
 
-      declare i8* @llvm.invariant.group.barrier(i8* <ptr>)
+      declare i8* @llvm.invariant.group.barrier.p0i8(i8* <ptr>)
 
 Overview:
 """""""""

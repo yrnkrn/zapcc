@@ -13,7 +13,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "X86.h"
-#include "X86InstrBuilder.h"
 #include "X86MachineFunctionInfo.h"
 #include "X86RegisterInfo.h"
 #include "X86Subtarget.h"
@@ -21,8 +20,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineInstrBuilder.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Function.h"
@@ -194,6 +191,7 @@ namespace {
     bool matchLoadInAddress(LoadSDNode *N, X86ISelAddressMode &AM);
     bool matchWrapper(SDValue N, X86ISelAddressMode &AM);
     bool matchAddress(SDValue N, X86ISelAddressMode &AM);
+    bool matchVectorAddress(SDValue N, X86ISelAddressMode &AM);
     bool matchAdd(SDValue N, X86ISelAddressMode &AM, unsigned Depth);
     bool matchAddressRecursively(SDValue N, X86ISelAddressMode &AM,
                                  unsigned Depth);
@@ -455,7 +453,8 @@ static bool isLegalMaskCompare(SDNode *N, const X86Subtarget *Subtarget) {
   unsigned Opcode = N->getOpcode();
   if (Opcode == X86ISD::PCMPEQM || Opcode == X86ISD::PCMPGTM ||
       Opcode == X86ISD::CMPM || Opcode == X86ISD::TESTM ||
-      Opcode == X86ISD::TESTNM || Opcode == X86ISD::CMPMU) {
+      Opcode == X86ISD::TESTNM || Opcode == X86ISD::CMPMU ||
+      Opcode == X86ISD::CMPM_RND) {
     // We can get 256-bit 8 element types here without VLX being enabled. When
     // this happens we will use 512-bit operations and the mask will not be
     // zero extended.
@@ -620,8 +619,8 @@ static bool isCalleeLoad(SDValue Callee, SDValue &Chain, bool HasCallSeq) {
 
 void X86DAGToDAGISel::PreprocessISelDAG() {
   // OptFor[Min]Size are used in pattern predicates that isel is matching.
-  OptForSize = MF->getFunction()->optForSize();
-  OptForMinSize = MF->getFunction()->optForMinSize();
+  OptForSize = MF->getFunction().optForSize();
+  OptForMinSize = MF->getFunction().optForMinSize();
   assert((!OptForMinSize || OptForSize) && "OptForMinSize implies OptForSize");
 
   for (SelectionDAG::allnodes_iterator I = CurDAG->allnodes_begin(),
@@ -754,9 +753,9 @@ void X86DAGToDAGISel::emitSpecialCodeForMain() {
 
 void X86DAGToDAGISel::EmitFunctionEntryCode() {
   // If this is main, emit special code for main.
-  if (const Function *Fn = MF->getFunction())
-    if (Fn->hasExternalLinkage() && Fn->getName() == "main")
-      emitSpecialCodeForMain();
+  const Function &F = MF->getFunction();
+  if (F.hasExternalLinkage() && F.getName() == "main")
+    emitSpecialCodeForMain();
 }
 
 static bool isDispSafeForFrameIndex(int64_t Val) {
@@ -1502,22 +1501,29 @@ bool X86DAGToDAGISel::matchAddressBase(SDValue N, X86ISelAddressMode &AM) {
   return false;
 }
 
+/// Helper for selectVectorAddr. Handles things that can be folded into a
+/// gather scatter address. The index register and scale should have already
+/// been handled.
+bool X86DAGToDAGISel::matchVectorAddress(SDValue N, X86ISelAddressMode &AM) {
+  // TODO: Support other operations.
+  switch (N.getOpcode()) {
+  case X86ISD::Wrapper:
+    if (!matchWrapper(N, AM))
+      return false;
+    break;
+  }
+
+  return matchAddressBase(N, AM);
+}
+
 bool X86DAGToDAGISel::selectVectorAddr(SDNode *Parent, SDValue N, SDValue &Base,
                                        SDValue &Scale, SDValue &Index,
                                        SDValue &Disp, SDValue &Segment) {
-  unsigned ScalarSize;
-  if (auto Mgs = dyn_cast<MaskedGatherScatterSDNode>(Parent)) {
-    Base = Mgs->getBasePtr();
-    Index = Mgs->getIndex();
-    ScalarSize = Mgs->getValue().getScalarValueSizeInBits();
-  } else {
-    auto X86Gather = cast<X86MaskedGatherSDNode>(Parent);
-    Base = X86Gather->getBasePtr();
-    Index = X86Gather->getIndex();
-    ScalarSize = X86Gather->getValue().getScalarValueSizeInBits();
-  }
-
   X86ISelAddressMode AM;
+  auto *Mgs = cast<X86MaskedGatherScatterSDNode>(Parent);
+  AM.IndexReg = Mgs->getIndex();
+  AM.Scale = Mgs->getValue().getScalarValueSizeInBits() / 8;
+
   unsigned AddrSpace = cast<MemSDNode>(Parent)->getPointerInfo().getAddrSpace();
   // AddrSpace 256 -> GS, 257 -> FS, 258 -> SS.
   if (AddrSpace == 256)
@@ -1527,21 +1533,23 @@ bool X86DAGToDAGISel::selectVectorAddr(SDNode *Parent, SDValue N, SDValue &Base,
   if (AddrSpace == 258)
     AM.Segment = CurDAG->getRegister(X86::SS, MVT::i16);
 
-  SDLoc DL(N);
-  Scale = getI8Imm(ScalarSize/8, DL);
-
   // If Base is 0, the whole address is in index and the Scale is 1
-  if (isa<ConstantSDNode>(Base)) {
-    assert(cast<ConstantSDNode>(Base)->isNullValue() &&
+  if (isa<ConstantSDNode>(N)) {
+    assert(cast<ConstantSDNode>(N)->isNullValue() &&
            "Unexpected base in gather/scatter");
-    Scale = getI8Imm(1, DL);
-    Base = CurDAG->getRegister(0, MVT::i32);
+    AM.Scale = 1;
   }
-  if (AM.Segment.getNode())
-    Segment = AM.Segment;
-  else
-    Segment = CurDAG->getRegister(0, MVT::i32);
-  Disp = CurDAG->getTargetConstant(0, DL, MVT::i32);
+  // Otherwise, try to match into the base and displacement fields.
+  else if (matchVectorAddress(N, AM))
+    return false;
+
+  MVT VT = N.getSimpleValueType();
+  if (AM.BaseType == X86ISelAddressMode::RegBase) {
+    if (!AM.Base_Reg.getNode())
+      AM.Base_Reg = CurDAG->getRegister(0, VT);
+  }
+
+  getAddressOperands(AM, SDLoc(N), Base, Scale, Index, Disp, Segment);
   return true;
 }
 

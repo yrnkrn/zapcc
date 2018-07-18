@@ -72,10 +72,8 @@ using namespace PatternMatch;
 
 STATISTIC(NumCallSiteSplit, "Number of call-site split");
 
-static void addNonNullAttribute(Instruction *CallI, Instruction *&NewCallI,
+static void addNonNullAttribute(Instruction *CallI, Instruction *NewCallI,
                                 Value *Op) {
-  if (!NewCallI)
-    NewCallI = CallI->clone();
   CallSite CS(NewCallI);
   unsigned ArgNo = 0;
   for (auto &I : CS.args()) {
@@ -85,10 +83,8 @@ static void addNonNullAttribute(Instruction *CallI, Instruction *&NewCallI,
   }
 }
 
-static void setConstantInArgument(Instruction *CallI, Instruction *&NewCallI,
+static void setConstantInArgument(Instruction *CallI, Instruction *NewCallI,
                                   Value *Op, Constant *ConstValue) {
-  if (!NewCallI)
-    NewCallI = CallI->clone();
   CallSite CS(NewCallI);
   unsigned ArgNo = 0;
   for (auto &I : CS.args()) {
@@ -98,80 +94,85 @@ static void setConstantInArgument(Instruction *CallI, Instruction *&NewCallI,
   }
 }
 
-static bool createCallSitesOnOrPredicatedArgument(
-    CallSite CS, Instruction *&NewCSTakenFromHeader,
-    Instruction *&NewCSTakenFromNextCond,
-    SmallVectorImpl<BranchInst *> &BranchInsts, BasicBlock *HeaderBB) {
-  assert(BranchInsts.size() <= 2 &&
-         "Unexpected number of blocks in the OR predicated condition");
-  Instruction *Instr = CS.getInstruction();
-  BasicBlock *CallSiteBB = Instr->getParent();
-  TerminatorInst *HeaderTI = HeaderBB->getTerminator();
-  bool IsCSInTakenPath = CallSiteBB == HeaderTI->getSuccessor(0);
-
-  for (unsigned I = 0, E = BranchInsts.size(); I != E; ++I) {
-    BranchInst *PBI = BranchInsts[I];
-    assert(isa<ICmpInst>(PBI->getCondition()) &&
-           "Unexpected condition in a conditional branch.");
-    ICmpInst *Cmp = cast<ICmpInst>(PBI->getCondition());
-    Value *Arg = Cmp->getOperand(0);
-    assert(isa<Constant>(Cmp->getOperand(1)) &&
-           "Expected op1 to be a constant.");
-    Constant *ConstVal = cast<Constant>(Cmp->getOperand(1));
-    CmpInst::Predicate Pred = Cmp->getPredicate();
-
-    if (PBI->getParent() == HeaderBB) {
-      Instruction *&CallTakenFromHeader =
-          IsCSInTakenPath ? NewCSTakenFromHeader : NewCSTakenFromNextCond;
-      Instruction *&CallUntakenFromHeader =
-          IsCSInTakenPath ? NewCSTakenFromNextCond : NewCSTakenFromHeader;
-
-      assert((Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_NE) &&
-             "Unexpected predicate in an OR condition");
-
-      // Set the constant value for agruments in the call predicated based on
-      // the OR condition.
-      Instruction *&CallToSetConst = Pred == ICmpInst::ICMP_EQ
-                                         ? CallTakenFromHeader
-                                         : CallUntakenFromHeader;
-      setConstantInArgument(Instr, CallToSetConst, Arg, ConstVal);
-
-      // Add the NonNull attribute if compared with the null pointer.
-      if (ConstVal->getType()->isPointerTy() && ConstVal->isNullValue()) {
-        Instruction *&CallToSetAttr = Pred == ICmpInst::ICMP_EQ
-                                          ? CallUntakenFromHeader
-                                          : CallTakenFromHeader;
-        addNonNullAttribute(Instr, CallToSetAttr, Arg);
-      }
+static bool isCondRelevantToAnyCallArgument(ICmpInst *Cmp, CallSite CS) {
+  assert(isa<Constant>(Cmp->getOperand(1)) && "Expected a constant operand.");
+  Value *Op0 = Cmp->getOperand(0);
+  unsigned ArgNo = 0;
+  for (CallSite::arg_iterator I = CS.arg_begin(), E = CS.arg_end(); I != E;
+       ++I, ++ArgNo) {
+    // Don't consider constant or arguments that are already known non-null.
+    if (isa<Constant>(*I) || CS.paramHasAttr(ArgNo, Attribute::NonNull))
       continue;
-    }
 
-    if (Pred == ICmpInst::ICMP_EQ) {
-      if (PBI->getSuccessor(0) == Instr->getParent()) {
-        // Set the constant value for the call taken from the second block in
-        // the OR condition.
-        setConstantInArgument(Instr, NewCSTakenFromNextCond, Arg, ConstVal);
-      } else {
-        // Add the NonNull attribute if compared with the null pointer for the
-        // call taken from the second block in the OR condition.
-        if (ConstVal->getType()->isPointerTy() && ConstVal->isNullValue())
-          addNonNullAttribute(Instr, NewCSTakenFromNextCond, Arg);
-      }
-    } else {
-      if (PBI->getSuccessor(0) == Instr->getParent()) {
-        // Add the NonNull attribute if compared with the null pointer for the
-        // call taken from the second block in the OR condition.
-        if (ConstVal->getType()->isPointerTy() && ConstVal->isNullValue())
-          addNonNullAttribute(Instr, NewCSTakenFromNextCond, Arg);
-      } else if (Pred == ICmpInst::ICMP_NE) {
-        // Set the constant value for the call in the untaken path from the
-        // header block.
-        setConstantInArgument(Instr, NewCSTakenFromNextCond, Arg, ConstVal);
-      } else
-        llvm_unreachable("Unexpected condition");
+    if (*I == Op0)
+      return true;
+  }
+  return false;
+}
+
+/// If From has a conditional jump to To, add the condition to Conditions,
+/// if it is relevant to any argument at CS.
+static void
+recordCondition(const CallSite &CS, BasicBlock *From, BasicBlock *To,
+                SmallVectorImpl<std::pair<ICmpInst *, unsigned>> &Conditions) {
+  auto *BI = dyn_cast<BranchInst>(From->getTerminator());
+  if (!BI || !BI->isConditional())
+    return;
+
+  CmpInst::Predicate Pred;
+  Value *Cond = BI->getCondition();
+  if (!match(Cond, m_ICmp(Pred, m_Value(), m_Constant())))
+    return;
+
+  ICmpInst *Cmp = cast<ICmpInst>(Cond);
+  if (Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_NE)
+    if (isCondRelevantToAnyCallArgument(Cmp, CS))
+      Conditions.push_back({Cmp, From->getTerminator()->getSuccessor(0) == To
+                                     ? Pred
+                                     : Cmp->getInversePredicate()});
+}
+
+/// Record ICmp conditions relevant to any argument in CS following Pred's
+/// single successors. If there are conflicting conditions along a path, like
+/// x == 1 and x == 0, the first condition will be used.
+static void
+recordConditions(const CallSite &CS, BasicBlock *Pred,
+                 SmallVectorImpl<std::pair<ICmpInst *, unsigned>> &Conditions) {
+  recordCondition(CS, Pred, CS.getInstruction()->getParent(), Conditions);
+  BasicBlock *From = Pred;
+  BasicBlock *To = Pred;
+  SmallPtrSet<BasicBlock *, 4> Visited = {From};
+  while (!Visited.count(From->getSinglePredecessor()) &&
+         (From = From->getSinglePredecessor())) {
+    recordCondition(CS, From, To, Conditions);
+    To = From;
+  }
+}
+
+static Instruction *
+addConditions(CallSite &CS,
+              SmallVectorImpl<std::pair<ICmpInst *, unsigned>> &Conditions) {
+  if (Conditions.empty())
+    return nullptr;
+
+  Instruction *NewCI = CS.getInstruction()->clone();
+  for (auto &Cond : Conditions) {
+    Value *Arg = Cond.first->getOperand(0);
+    Constant *ConstVal = cast<Constant>(Cond.first->getOperand(1));
+    if (Cond.second == ICmpInst::ICMP_EQ)
+      setConstantInArgument(CS.getInstruction(), NewCI, Arg, ConstVal);
+    else if (ConstVal->getType()->isPointerTy() && ConstVal->isNullValue()) {
+      assert(Cond.second == ICmpInst::ICMP_NE);
+      addNonNullAttribute(CS.getInstruction(), NewCI, Arg);
     }
   }
-  return NewCSTakenFromHeader || NewCSTakenFromNextCond;
+  return NewCI;
+}
+
+static SmallVector<BasicBlock *, 2> getTwoPredecessors(BasicBlock *BB) {
+  SmallVector<BasicBlock *, 2> Preds(predecessors((BB)));
+  assert(Preds.size() == 2 && "Expected exactly 2 predecessors!");
+  return Preds;
 }
 
 static bool canSplitCallSite(CallSite CS) {
@@ -186,20 +187,12 @@ static bool canSplitCallSite(CallSite CS) {
   // call instruction, and we do not move a call-site across any other
   // instruction.
   BasicBlock *CallSiteBB = Instr->getParent();
-  if (Instr != CallSiteBB->getFirstNonPHI())
+  if (Instr != CallSiteBB->getFirstNonPHIOrDbg())
     return false;
 
-  pred_iterator PII = pred_begin(CallSiteBB);
-  pred_iterator PIE = pred_end(CallSiteBB);
-  unsigned NumPreds = std::distance(PII, PIE);
-
-  // Allow only one extra call-site. No more than two from one call-site.
-  if (NumPreds != 2)
-    return false;
-
-  // Cannot split an edge from an IndirectBrInst.
-  BasicBlock *Preds[2] = {*PII++, *PII};
-  if (isa<IndirectBrInst>(Preds[0]->getTerminator()) ||
+  // Need 2 predecessors and cannot split an edge from an IndirectBrInst.
+  SmallVector<BasicBlock *, 2> Preds(predecessors(CallSiteBB));
+  if (Preds.size() != 2 || isa<IndirectBrInst>(Preds[0]->getTerminator()) ||
       isa<IndirectBrInst>(Preds[1]->getTerminator()))
     return false;
 
@@ -208,11 +201,10 @@ static bool canSplitCallSite(CallSite CS) {
 
 /// Return true if the CS is split into its new predecessors which are directly
 /// hooked to each of its orignial predecessors pointed by PredBB1 and PredBB2.
-/// Note that PredBB1 and PredBB2 are decided in findPredicatedArgument(),
-/// especially for the OR predicated case where PredBB1 will point the header,
-/// and PredBB2 will point the the second compare block. CallInst1 and CallInst2
-/// will be the new call-sites placed in the new predecessors split for PredBB1
-/// and PredBB2, repectively. Therefore, CallInst1 will be the call-site placed
+/// In OR predicated case, PredBB1 will point the header, and PredBB2 will point
+/// to the second compare block. CallInst1 and CallInst2 will be the new
+/// call-sites placed in the new predecessors split for PredBB1 and PredBB2,
+/// repectively. Therefore, CallInst1 will be the call-site placed
 /// between Header and Tail, and CallInst2 will be the call-site between TBB and
 /// Tail. For example, in the IR below with an OR condition, the call-site can
 /// be split
@@ -252,7 +244,7 @@ static void splitCallSite(CallSite CS, BasicBlock *PredBB1, BasicBlock *PredBB2,
                           Instruction *CallInst1, Instruction *CallInst2) {
   Instruction *Instr = CS.getInstruction();
   BasicBlock *TailBB = Instr->getParent();
-  assert(Instr == (TailBB->getFirstNonPHI()) && "Unexpected call-site");
+  assert(Instr == (TailBB->getFirstNonPHIOrDbg()) && "Unexpected call-site");
 
   BasicBlock *SplitBlock1 =
       SplitBlockPredecessors(TailBB, PredBB1, ".predBB1.split");
@@ -289,7 +281,8 @@ static void splitCallSite(CallSite CS, BasicBlock *PredBB1, BasicBlock *PredBB2,
 
   // Replace users of the original call with a PHI mering call-sites split.
   if (Instr->getNumUses()) {
-    PHINode *PN = PHINode::Create(Instr->getType(), 2, "phi.call", Instr);
+    PHINode *PN = PHINode::Create(Instr->getType(), 2, "phi.call",
+                                  TailBB->getFirstNonPHI());
     PN->addIncoming(CallInst1, SplitBlock1);
     PN->addIncoming(CallInst2, SplitBlock2);
     Instr->replaceAllUsesWith(PN);
@@ -303,52 +296,12 @@ static void splitCallSite(CallSite CS, BasicBlock *PredBB1, BasicBlock *PredBB2,
   NumCallSiteSplit++;
 }
 
-static bool isCondRelevantToAnyCallArgument(ICmpInst *Cmp, CallSite CS) {
-  assert(isa<Constant>(Cmp->getOperand(1)) && "Expected a constant operand.");
-  Value *Op0 = Cmp->getOperand(0);
-  unsigned ArgNo = 0;
-  for (CallSite::arg_iterator I = CS.arg_begin(), E = CS.arg_end(); I != E;
-       ++I, ++ArgNo) {
-    // Don't consider constant or arguments that are already known non-null.
-    if (isa<Constant>(*I) || CS.paramHasAttr(ArgNo, Attribute::NonNull))
-      continue;
-
-    if (*I == Op0)
-      return true;
-  }
-  return false;
-}
-
-static void findOrCondRelevantToCallArgument(
-    CallSite CS, BasicBlock *PredBB, BasicBlock *OtherPredBB,
-    SmallVectorImpl<BranchInst *> &BranchInsts, BasicBlock *&HeaderBB) {
-  auto *PBI = dyn_cast<BranchInst>(PredBB->getTerminator());
-  if (!PBI || !PBI->isConditional())
-    return;
-
-  if (PBI->getSuccessor(0) == OtherPredBB ||
-      PBI->getSuccessor(1) == OtherPredBB)
-    if (PredBB == OtherPredBB->getSinglePredecessor()) {
-      assert(!HeaderBB && "Expect to find only a single header block");
-      HeaderBB = PredBB;
-    }
-
-  CmpInst::Predicate Pred;
-  Value *Cond = PBI->getCondition();
-  if (!match(Cond, m_ICmp(Pred, m_Value(), m_Constant())))
-    return;
-  ICmpInst *Cmp = cast<ICmpInst>(Cond);
-  if (Pred == ICmpInst::ICMP_EQ || Pred == ICmpInst::ICMP_NE)
-    if (isCondRelevantToAnyCallArgument(Cmp, CS))
-      BranchInsts.push_back(PBI);
-}
-
 // Return true if the call-site has an argument which is a PHI with only
 // constant incoming values.
 static bool isPredicatedOnPHI(CallSite CS) {
   Instruction *Instr = CS.getInstruction();
   BasicBlock *Parent = Instr->getParent();
-  if (Instr != Parent->getFirstNonPHI())
+  if (Instr != Parent->getFirstNonPHIOrDbg())
     return false;
 
   for (auto &BI : *Parent) {
@@ -371,63 +324,46 @@ static bool isPredicatedOnPHI(CallSite CS) {
   return false;
 }
 
-// Return true if an agument in CS is predicated on an 'or' condition.
-// Create new call-site with arguments constrained based on the OR condition.
-static bool findPredicatedOnOrCondition(CallSite CS, BasicBlock *PredBB1,
-                                        BasicBlock *PredBB2,
-                                        Instruction *&NewCallTakenFromHeader,
-                                        Instruction *&NewCallTakenFromNextCond,
-                                        BasicBlock *&HeaderBB) {
-  SmallVector<BranchInst *, 4> BranchInsts;
-  findOrCondRelevantToCallArgument(CS, PredBB1, PredBB2, BranchInsts, HeaderBB);
-  findOrCondRelevantToCallArgument(CS, PredBB2, PredBB1, BranchInsts, HeaderBB);
-  if (BranchInsts.empty() || !HeaderBB)
+static bool tryToSplitOnPHIPredicatedArgument(CallSite CS) {
+  if (!isPredicatedOnPHI(CS))
     return false;
 
-  // If an OR condition is detected, try to create call sites with constrained
-  // arguments (e.g., NonNull attribute or constant value).
-  return createCallSitesOnOrPredicatedArgument(CS, NewCallTakenFromHeader,
-                                               NewCallTakenFromNextCond,
-                                               BranchInsts, HeaderBB);
+  auto Preds = getTwoPredecessors(CS.getInstruction()->getParent());
+  splitCallSite(CS, Preds[0], Preds[1], nullptr, nullptr);
+  return true;
+}
+// Check if one of the predecessors is a single predecessors of the other.
+// This is a requirement for control flow modeling an OR. HeaderBB points to
+// the single predecessor and OrBB points to other node. HeaderBB potentially
+// contains the first compare of the OR and OrBB the second.
+static bool isOrHeader(BasicBlock *HeaderBB, BasicBlock *OrBB) {
+  return OrBB->getSinglePredecessor() == HeaderBB &&
+         HeaderBB->getTerminator()->getNumSuccessors() == 2;
 }
 
-static bool findPredicatedArgument(CallSite CS, Instruction *&CallInst1,
-                                   Instruction *&CallInst2,
-                                   BasicBlock *&PredBB1, BasicBlock *&PredBB2) {
-  BasicBlock *CallSiteBB = CS.getInstruction()->getParent();
-  pred_iterator PII = pred_begin(CallSiteBB);
-  pred_iterator PIE = pred_end(CallSiteBB);
-  assert(std::distance(PII, PIE) == 2 && "Expect only two predecessors.");
-  (void)PIE;
-  BasicBlock *Preds[2] = {*PII++, *PII};
-  BasicBlock *&HeaderBB = PredBB1;
-  if (!findPredicatedOnOrCondition(CS, Preds[0], Preds[1], CallInst1, CallInst2,
-                                   HeaderBB) &&
-      !isPredicatedOnPHI(CS))
+static bool tryToSplitOnOrPredicatedArgument(CallSite CS) {
+  auto Preds = getTwoPredecessors(CS.getInstruction()->getParent());
+  if (!isOrHeader(Preds[0], Preds[1]) && !isOrHeader(Preds[1], Preds[0]))
     return false;
 
-  if (!PredBB1)
-    PredBB1 = Preds[0];
+  SmallVector<std::pair<ICmpInst *, unsigned>, 2> C1, C2;
+  recordConditions(CS, Preds[0], C1);
+  recordConditions(CS, Preds[1], C2);
 
-  PredBB2 = PredBB1 == Preds[0] ? Preds[1] : Preds[0];
+  Instruction *CallInst1 = addConditions(CS, C1);
+  Instruction *CallInst2 = addConditions(CS, C2);
+  if (!CallInst1 && !CallInst2)
+    return false;
+
+  splitCallSite(CS, Preds[1], Preds[0], CallInst2, CallInst1);
   return true;
 }
 
 static bool tryToSplitCallSite(CallSite CS) {
-  if (!CS.arg_size())
+  if (!CS.arg_size() || !canSplitCallSite(CS))
     return false;
-
-  BasicBlock *PredBB1 = nullptr;
-  BasicBlock *PredBB2 = nullptr;
-  Instruction *CallInst1 = nullptr;
-  Instruction *CallInst2 = nullptr;
-  if (!canSplitCallSite(CS) ||
-      !findPredicatedArgument(CS, CallInst1, CallInst2, PredBB1, PredBB2)) {
-    assert(!CallInst1 && !CallInst2 && "Unexpected new call-sites cloned.");
-    return false;
-  }
-  splitCallSite(CS, PredBB1, PredBB2, CallInst1, CallInst2);
-  return true;
+  return tryToSplitOnOrPredicatedArgument(CS) ||
+         tryToSplitOnPHIPredicatedArgument(CS);
 }
 
 static bool doCallSiteSplitting(Function &F, TargetLibraryInfo &TLI) {

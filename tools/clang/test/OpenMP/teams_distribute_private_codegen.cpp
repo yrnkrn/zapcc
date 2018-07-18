@@ -72,13 +72,13 @@ int main() {
   // LAMBDA: call void [[OUTER_LAMBDA:@.+]](
   [&]() {
     // LAMBDA: define{{.*}} internal{{.*}} void [[OUTER_LAMBDA]](
-    // LAMBDA: call i32 @__tgt_target(i32 -1, i8* @{{[^,]+}}, i32 3, i8** %{{[^,]+}}, i8** %{{[^,]+}}, i{{64|32}}* {{.+}}@{{[^,]+}}, i32 0, i32 0), i32* {{.+}}@{{[^,]+}}, i32 0, i32 0))
+    // LAMBDA: call i32 @__tgt_target_teams(i64 -1, i8* @{{[^,]+}}, i32 1, i8** %{{[^,]+}}, i8** %{{[^,]+}}, i{{64|32}}* {{.+}}@{{[^,]+}}, i32 0, i32 0), i64* {{.+}}@{{[^,]+}}, i32 0, i32 0), i32 0, i32 0)
     // LAMBDA: call void @[[LOFFL1:.+]](
     // LAMBDA:  ret
 #pragma omp target
 #pragma omp teams distribute private(g, g1, sivar)
   for (int i = 0; i < 2; ++i) {
-    // LAMBDA: define{{.*}} internal{{.*}} void @[[LOFFL1]](i{{64|32}} {{%.+}}, i{{64|32}} {{%.+}})
+    // LAMBDA: define{{.*}} internal{{.*}} void @[[LOFFL1]](i{{64|32}} {{%.+}})
     // LAMBDA: call void {{.+}} @__kmpc_fork_teams({{.+}}, i32 0, {{.+}} @[[LOUTL1:.+]] to {{.+}})
     // LAMBDA: ret void
 
@@ -91,12 +91,12 @@ int main() {
     // LAMBDA: alloca i32,
     // LAMBDA: alloca i32,
     // LAMBDA: alloca i32,
+    // LAMBDA: alloca i32,
     // LAMBDA: [[G_PRIV:%.+]] = alloca i{{[0-9]+}},
     // LAMBDA: [[G1_PRIV:%.+]] = alloca i{{[0-9]+}}
     // LAMBDA: [[TMP:%.+]] = alloca i{{[0-9]+}}*,
     // LAMBDA: [[SIVAR_PRIV:%.+]] = alloca i{{[0-9]+}},
     // LAMBDA: store{{.+}} [[G1_PRIV]], {{.+}} [[TMP]],
-    
     g = 1;
     g1 = 1;
     sivar = 2;
@@ -141,12 +141,12 @@ int main() {
 }
 
 // CHECK: define {{.*}}i{{[0-9]+}} @main()
-// CHECK: call i32 @__tgt_target(i32 -1, i8* @{{[^,]+}}, i32 5, i8** %{{[^,]+}}, i8** %{{[^,]+}}, i{{64|32}}* {{.+}}@{{[^,]+}}, i32 0, i32 0), i32* {{.+}}@{{[^,]+}}, i32 0, i32 0))
-// CHECK: call void @[[OFFL1:.+]](i{{64|32}} %{{.+}})
+// CHECK: call i32 @__tgt_target_teams(i64 -1, i8* @{{[^,]+}}, i32 0, i8** null, i8** null, i{{64|32}}* null, i64* null, i32 0, i32 0)
+// CHECK: call void @[[OFFL1:.+]]()
 // CHECK: {{%.+}} = call{{.*}} i32 @[[TMAIN_INT:.+]]()
 // CHECK:  ret
 
-// CHECK: define{{.*}} void @[[OFFL1]]({{.+}})
+// CHECK: define{{.*}} void @[[OFFL1]]()
 // CHECK: call void {{.+}} @__kmpc_fork_teams({{.+}}, i32 0, {{.+}} @[[OUTL1:.+]] to {{.+}})
 // CHECK: ret void
 
@@ -159,12 +159,12 @@ int main() {
 // CHECK: {{.+}} = alloca i32,
 // CHECK: {{.+}} = alloca i32,
 // CHECK: {{.+}} = alloca i32,
+// CHECK: {{.+}} = alloca i32,
 // CHECK-DAG: [[T_VAR_PRIV:%.+]] = alloca i{{[0-9]+}},
 // CHECK-DAG: [[VEC_PRIV:%.+]] = alloca [2 x i{{[0-9]+}}],
 // CHECK-DAG: [[S_ARR_PRIV:%.+]] = alloca [2 x [[S_FLOAT_TY]]],
 // CHECK-DAG: [[VAR_PRIV:%.+]] = alloca [[S_FLOAT_TY]],
 // CHECK-DAG: [[SIVAR_PRIV:%.+]] = alloca i{{[0-9]+}},
-// CHECK: alloca i32,
 
 // private(s_arr)
 // CHECK-DAG: [[S_ARR_PRIV_BGN:%.+]] = getelementptr{{.*}} [2 x [[S_FLOAT_TY]]], [2 x [[S_FLOAT_TY]]]* [[S_ARR_PRIV]],
@@ -186,7 +186,7 @@ int main() {
 
 
 // CHECK: define{{.*}} i{{[0-9]+}} @[[TMAIN_INT]]()
-// CHECK: call i32 @__tgt_target(i32 -1, i8* @{{[^,]+}}, i32 0,
+// CHECK: call i32 @__tgt_target_teams(i64 -1, i8* @{{[^,]+}}, i32 0,
 // CHECK: call void @[[TOFFL1:.+]]()
 // CHECK:  ret
 
@@ -203,12 +203,12 @@ int main() {
 // CHECK: alloca i{{[0-9]+}},
 // CHECK: alloca i{{[0-9]+}},
 // CHECK: alloca i{{[0-9]+}},
+// CHECK: alloca i{{[0-9]+}},
 // CHECK: [[T_VAR_PRIV:%.+]] = alloca i{{[0-9]+}},
 // CHECK: [[VEC_PRIV:%.+]] = alloca [2 x i{{[0-9]+}}],
 // CHECK: [[S_ARR_PRIV:%.+]] = alloca [2 x [[S_INT_TY]]],
 // CHECK: [[VAR_PRIV:%.+]] = alloca [[S_INT_TY]],
 // CHECK: [[TMP:%.+]] = alloca [[S_INT_TY]]*,
-// CHECK: alloca i32,
 
 // private(s_arr)
 // CHECK-DAG: [[S_ARR_PRIV_BGN:%.+]] = getelementptr{{.*}} [2 x [[S_INT_TY]]], [2 x [[S_INT_TY]]]* [[S_ARR_PRIV]],

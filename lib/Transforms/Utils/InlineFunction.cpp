@@ -1496,7 +1496,8 @@ static void updateCalleeCount(BlockFrequencyInfo *CallerBFI, BasicBlock *CallBB,
 /// exists in the instruction stream.  Similarly this will inline a recursive
 /// function by one level.
 bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
-                          AAResults *CalleeAAR, bool InsertLifetime) {
+                          AAResults *CalleeAAR, bool InsertLifetime,
+                          Function *ForwardVarArgsTo) {
   Instruction *TheCall = CS.getInstruction();
   assert(TheCall->getParent() && TheCall->getFunction()
          && "Instruction not in function!");
@@ -1506,8 +1507,9 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
 
   Function *CalledFunc = CS.getCalledFunction();
   if (!CalledFunc ||              // Can't inline external function or indirect
-      CalledFunc->isDeclaration() || // call, or call to a vararg function!
-      CalledFunc->getFunctionType()->isVarArg()) return false;
+      CalledFunc->isDeclaration() ||
+      (!ForwardVarArgsTo && CalledFunc->isVarArg())) // call, or call to a vararg function!
+      return false;
 
   // The inliner does not know how to inline through calls with operand bundles
   // in general ...
@@ -1634,8 +1636,8 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
 
     auto &DL = Caller->getParent()->getDataLayout();
 
-    assert(CalledFunc->arg_size() == CS.arg_size() &&
-           "No varargs calls can be inlined!");
+    assert((CalledFunc->arg_size() == CS.arg_size() || ForwardVarArgsTo) &&
+           "Varargs calls can only be inlined if the Varargs are forwarded!");
 
     // Calculate the vector of arguments to pass into the function cloner, which
     // matches up the formal to the actual argument values.
@@ -1814,8 +1816,14 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
     // Move any dbg.declares describing the allocas into the entry basic block.
     DIBuilder DIB(*Caller->getParent());
     for (auto &AI : IFI.StaticAllocas)
-      replaceDbgDeclareForAlloca(AI, AI, DIB, /*Deref=*/false);
+      replaceDbgDeclareForAlloca(AI, AI, DIB, DIExpression::NoDeref, 0,
+                                 DIExpression::NoDeref);
   }
+
+  SmallVector<Value*,4> VarArgsToForward;
+  for (unsigned i = CalledFunc->getFunctionType()->getNumParams();
+       i < CS.getNumArgOperands(); i++)
+    VarArgsToForward.push_back(CS.getArgOperand(i));
 
   bool InlinedMustTailCalls = false, InlinedDeoptimizeCalls = false;
   if (InlinedFunctionInfo.ContainsCalls) {
@@ -1825,7 +1833,8 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
 
     for (Function::iterator BB = FirstNewBlock, E = Caller->end(); BB != E;
          ++BB) {
-      for (Instruction &I : *BB) {
+      for (auto II = BB->begin(); II != BB->end();) {
+        Instruction &I = *II++;
         CallInst *CI = dyn_cast<CallInst>(&I);
         if (!CI)
           continue;
@@ -1848,7 +1857,8 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
         //    f ->          g -> musttail f  ==>  f ->          f
         //    f ->          g ->     tail f  ==>  f ->          f
         CallInst::TailCallKind ChildTCK = CI->getTailCallKind();
-        ChildTCK = std::min(CallSiteTailKind, ChildTCK);
+        if (ChildTCK != CallInst::TCK_NoTail)
+          ChildTCK = std::min(CallSiteTailKind, ChildTCK);
         CI->setTailCallKind(ChildTCK);
         InlinedMustTailCalls |= CI->isMustTailCall();
 
@@ -1856,6 +1866,16 @@ bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
         // 'nounwind'.
         if (MarkNoUnwind)
           CI->setDoesNotThrow();
+
+        if (ForwardVarArgsTo && !VarArgsToForward.empty() &&
+            CI->getCalledFunction() == ForwardVarArgsTo) {
+          SmallVector<Value*, 6> Params(CI->arg_operands());
+          Params.append(VarArgsToForward.begin(), VarArgsToForward.end());
+          CallInst *Call = CallInst::Create(CI->getCalledFunction(), Params, "", CI);
+          Call->setDebugLoc(CI->getDebugLoc());
+          CI->replaceAllUsesWith(Call);
+          CI->eraseFromParent();
+        }
       }
     }
   }

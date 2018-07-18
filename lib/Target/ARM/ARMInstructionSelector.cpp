@@ -35,11 +35,11 @@ public:
   ARMInstructionSelector(const ARMBaseTargetMachine &TM, const ARMSubtarget &STI,
                          const ARMRegisterBankInfo &RBI);
 
-  bool select(MachineInstr &I) const override;
+  bool select(MachineInstr &I, CodeGenCoverage &CoverageInfo) const override;
   static const char *getName() { return DEBUG_TYPE; }
 
 private:
-  bool selectImpl(MachineInstr &I) const;
+  bool selectImpl(MachineInstr &I, CodeGenCoverage &CoverageInfo) const;
 
   struct CmpConstants;
   struct InsertInfo;
@@ -538,8 +538,12 @@ bool ARMInstructionSelector::selectGlobal(MachineInstrBuilder &MIB,
             : (Indirect ? ARM::LDRLIT_ga_pcrel_ldr : ARM::LDRLIT_ga_pcrel);
     MIB->setDesc(TII.get(Opc));
 
+    int TargetFlags = ARMII::MO_NO_FLAG;
     if (STI.isTargetDarwin())
-      MIB->getOperand(1).setTargetFlags(ARMII::MO_NONLAZY);
+      TargetFlags |= ARMII::MO_NONLAZY;
+    if (STI.isGVInGOT(GV))
+      TargetFlags |= ARMII::MO_GOT;
+    MIB->getOperand(1).setTargetFlags(TargetFlags);
 
     if (Indirect)
       MIB.addMemOperand(MF.getMachineMemOperand(
@@ -649,7 +653,8 @@ bool ARMInstructionSelector::selectShift(unsigned ShiftOpc,
   return constrainSelectedInstRegOperands(*MIB, TII, TRI, RBI);
 }
 
-bool ARMInstructionSelector::select(MachineInstr &I) const {
+bool ARMInstructionSelector::select(MachineInstr &I,
+                                    CodeGenCoverage &CoverageInfo) const {
   assert(I.getParent() && "Instruction should be in a basic block!");
   assert(I.getParent()->getParent() && "Instruction should be in a function!");
 
@@ -664,7 +669,7 @@ bool ARMInstructionSelector::select(MachineInstr &I) const {
     return true;
   }
 
-  if (selectImpl(I))
+  if (selectImpl(I, CoverageInfo))
     return true;
 
   MachineInstrBuilder MIB{MF, I};
@@ -792,28 +797,6 @@ bool ARMInstructionSelector::select(MachineInstr &I) const {
     I.setDesc(TII.get(ARM::ADDri));
     MIB.addImm(0).add(predOps(ARMCC::AL)).add(condCodeOp());
     break;
-  case G_CONSTANT: {
-    unsigned Reg = I.getOperand(0).getReg();
-
-    if (!validReg(MRI, Reg, 32, ARM::GPRRegBankID))
-      return false;
-
-    I.setDesc(TII.get(ARM::MOVi));
-    MIB.add(predOps(ARMCC::AL)).add(condCodeOp());
-
-    auto &Val = I.getOperand(1);
-    if (Val.isCImm()) {
-      if (Val.getCImm()->getBitWidth() > 32)
-        return false;
-      Val.ChangeToImmediate(Val.getCImm()->getZExtValue());
-    }
-
-    if (!Val.isImm()) {
-      return false;
-    }
-
-    break;
-  }
   case G_GLOBAL_VALUE:
     return selectGlobal(MIB, MRI);
   case G_STORE:
@@ -872,7 +855,7 @@ bool ARMInstructionSelector::select(MachineInstr &I) const {
     // Branch conditionally.
     auto Branch = BuildMI(*I.getParent(), I, I.getDebugLoc(), TII.get(ARM::Bcc))
                       .add(I.getOperand(1))
-                      .add(predOps(ARMCC::EQ, ARM::CPSR));
+                      .add(predOps(ARMCC::NE, ARM::CPSR));
     if (!constrainSelectedInstRegOperands(*Branch, TII, TRI, RBI))
       return false;
     I.eraseFromParent();

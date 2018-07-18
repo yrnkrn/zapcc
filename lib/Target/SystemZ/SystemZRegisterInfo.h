@@ -11,7 +11,7 @@
 #define LLVM_LIB_TARGET_SYSTEMZ_SYSTEMZREGISTERINFO_H
 
 #include "SystemZ.h"
-#include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 
 #define GET_REGINFO_HEADER
 #include "SystemZGenRegisterInfo.inc"
@@ -50,6 +50,8 @@ public:
                              const MachineFunction &MF,
                              const VirtRegMap *VRM,
                              const LiveRegMatrix *Matrix) const override;
+
+  bool enableMultipleCopyHints() const override { return true; }
 
   // Override TargetRegisterInfo.h.
   bool requiresRegisterScavenging(const MachineFunction &MF) const override {

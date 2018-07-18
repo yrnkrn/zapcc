@@ -26,10 +26,10 @@
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/MC/MCSchedule.h"
 #include "llvm/Target/TargetOptions.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 #include <memory>
 #include <string>
 
@@ -752,7 +752,7 @@ public:
   bool isGVIndirectSymbol(const GlobalValue *GV) const;
 
   /// Returns the constant pool modifier needed to access the GV.
-  ARMCP::ARMCPModifier getCPModifier(const GlobalValue *GV) const;
+  bool isGVInGOT(const GlobalValue *GV) const;
 
   /// True if fast-isel is used.
   bool useFastISel() const;
@@ -766,6 +766,13 @@ public:
     if (hasV4TOps())
       return ARM::BX_RET;
     return ARM::MOVPCLR;
+  }
+
+  /// Allow movt+movw for PIC global address calculation.
+  /// ELF does not have GOT relocations for movt+movw.
+  /// ROPI does not use GOT.
+  bool allowPositionIndependentMovt() const {
+    return isROPI() || !isTargetELF();
   }
 };
 

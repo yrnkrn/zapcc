@@ -13,11 +13,9 @@
 
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
-#include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/CodeGen/CommandFlags.def"
 #include "llvm/FuzzMutate/FuzzerCLI.h"
 #include "llvm/FuzzMutate/IRMutator.h"
-#include "llvm/FuzzMutate/Operations.h"
-#include "llvm/FuzzMutate/Random.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/SourceMgr.h"
@@ -36,42 +34,6 @@ static cl::opt<std::string> PassPipeline(
 
 static std::unique_ptr<IRMutator> Mutator;
 static std::unique_ptr<TargetMachine> TM;
-
-// This function is mostly copied from the llvm-isel-fuzzer.
-// TODO: Move this into FuzzMutate library and reuse.
-static std::unique_ptr<Module> parseModule(const uint8_t *Data, size_t Size,
-                                           LLVMContext &Context) {
-
-  if (Size <= 1)
-    // We get bogus data given an empty corpus - just create a new module.
-    return llvm::make_unique<Module>("M", Context);
-
-  auto Buffer = MemoryBuffer::getMemBuffer(
-      StringRef(reinterpret_cast<const char *>(Data), Size), "Fuzzer input",
-      /*RequiresNullTerminator=*/false);
-
-  SMDiagnostic Err;
-  auto M = parseBitcodeFile(Buffer->getMemBufferRef(), Context);
-  if (Error E = M.takeError()) {
-    errs() << toString(std::move(E)) << "\n";
-    return nullptr;
-  }
-  return std::move(M.get());
-}
-
-// This function is copied from the llvm-isel-fuzzer.
-// TODO: Move this into FuzzMutate library and reuse.
-static size_t writeModule(const Module &M, uint8_t *Dest, size_t MaxSize) {
-  std::string Buf;
-  {
-    raw_string_ostream OS(Buf);
-    WriteBitcodeToFile(&M, OS);
-  }
-  if (Buf.size() > MaxSize)
-      return 0;
-  memcpy(Dest, Buf.data(), Buf.size());
-  return Buf.size();
-}
 
 std::unique_ptr<IRMutator> createOptMutator() {
   std::vector<TypeGetter> Types{

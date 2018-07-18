@@ -23,8 +23,8 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/CodeGen/ScheduleDAGMutation.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/MC/MCInstrItineraries.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -50,9 +50,12 @@ class HexagonSubtarget : public HexagonGenSubtargetInfo {
   bool UseLongCalls;
   bool ModeIEEERndNear;
 
+  bool HasMemNoShuf = false;
+  bool EnableDuplex = false;
 public:
   Hexagon::ArchEnum HexagonArchVersion;
   Hexagon::ArchEnum HexagonHVXVersion = Hexagon::ArchEnum::V4;
+  CodeGenOpt::Level OptLevel;
   /// True if the target should use Back-Skip-Back scheduling. This is the
   /// default for V60.
   bool UseBSBScheduling;
@@ -137,11 +140,18 @@ public:
   bool hasV62TOpsOnly() const {
     return getHexagonArchVersion() == Hexagon::ArchEnum::V62;
   }
+  bool hasV65TOps() const {
+    return getHexagonArchVersion() >= Hexagon::ArchEnum::V65;
+  }
+  bool hasV65TOpsOnly() const {
+    return getHexagonArchVersion() == Hexagon::ArchEnum::V65;
+  }
 
   bool modeIEEERndNear() const { return ModeIEEERndNear; }
   bool useHVXOps() const { return HexagonHVXVersion > Hexagon::ArchEnum::V4; }
   bool useHVX128BOps() const { return useHVXOps() && UseHVX128BOps; }
   bool useHVX64BOps() const { return useHVXOps() && UseHVX64BOps; }
+  bool hasMemNoShuf() const { return HasMemNoShuf; }
   bool useLongCalls() const { return UseLongCalls; }
   bool usePredicatedCalls() const;
 
@@ -177,9 +187,32 @@ public:
       std::vector<std::unique_ptr<ScheduleDAGMutation>> &Mutations)
       const override;
 
+  /// \brief Enable use of alias analysis during code generation (during MI
+  /// scheduling, DAGCombine, etc.).
+  bool useAA() const override;
+
   /// \brief Perform target specific adjustments to the latency of a schedule
   /// dependency.
   void adjustSchedDependency(SUnit *def, SUnit *use, SDep& dep) const override;
+
+  unsigned getVectorLength() const {
+    assert(useHVXOps());
+    if (useHVX64BOps())
+      return 64;
+    if (useHVX128BOps())
+      return 128;
+    llvm_unreachable("Invalid HVX vector length settings");
+  }
+
+  bool isHVXVectorType(MVT VecTy) const {
+    if (!VecTy.isVector() || !useHVXOps())
+      return false;
+    unsigned ElemWidth = VecTy.getVectorElementType().getSizeInBits();
+    if (ElemWidth < 8 || ElemWidth > 64)
+      return false;
+    unsigned VecWidth = VecTy.getSizeInBits();
+    return VecWidth == 8*getVectorLength() || VecWidth == 16*getVectorLength();
+  }
 
   unsigned getL1CacheLineSize() const;
   unsigned getL1PrefetchDistance() const;

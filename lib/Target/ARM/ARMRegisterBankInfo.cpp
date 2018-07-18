@@ -17,7 +17,7 @@
 #include "llvm/CodeGen/GlobalISel/RegisterBank.h"
 #include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
-#include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 
 #define GET_TARGET_REGBANK_IMPL
 #include "ARMGenRegisterBank.inc"
@@ -243,7 +243,9 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
     break;
   }
   case G_FADD:
-  case G_FSUB: {
+  case G_FSUB:
+  case G_FMUL:
+  case G_FDIV: {
     LLT Ty = MRI.getType(MI.getOperand(0).getReg());
     OperandsMapping =Ty.getSizeInBits() == 64
                           ? &ARM::ValueMappings[ARM::DPR3OpsIdx]

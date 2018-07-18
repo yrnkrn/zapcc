@@ -7,8 +7,9 @@ set(PACKAGE_VENDOR Fuchsia CACHE STRING "")
 
 set(LLVM_INCLUDE_EXAMPLES OFF CACHE BOOL "")
 set(LLVM_INCLUDE_DOCS OFF CACHE BOOL "")
-set(LLVM_ENABLE_ZLIB ON CACHE BOOL "")
 set(LLVM_ENABLE_BACKTRACES OFF CACHE BOOL "")
+set(LLVM_ENABLE_TERMINFO OFF CACHE BOOL "")
+set(LLVM_ENABLE_ZLIB ON CACHE BOOL "")
 set(LLVM_EXTERNALIZE_DEBUGINFO ON CACHE BOOL "")
 set(CLANG_PLUGIN_SUPPORT OFF CACHE BOOL "")
 
@@ -17,13 +18,6 @@ if(NOT APPLE)
   set(LLVM_ENABLE_LLD ON CACHE BOOL "")
   set(CLANG_DEFAULT_LINKER lld CACHE STRING "")
 endif()
-
-# This is a "Does your linker support it?" option that only applies
-# to x86-64 ELF targets.  All Fuchsia target linkers do support it.
-# For x86-64 Linux, it's supported by LLD and by GNU linkers since
-# binutils 2.27, so one can hope that all Linux hosts in use handle it.
-# Ideally this would be settable as a per-target option.
-set(ENABLE_X86_RELAX_RELOCATIONS ON CACHE BOOL "")
 
 if(APPLE)
   set(LLDB_CODESIGN_IDENTITY "" CACHE STRING "")

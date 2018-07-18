@@ -2198,6 +2198,7 @@ ASTDeclReader::VisitVarTemplateSpecializationDeclImpl(
   D->TemplateArgs = TemplateArgumentList::CreateCopy(C, TemplArgs);
   D->PointOfInstantiation = ReadSourceLocation();
   D->SpecializationKind = (TemplateSpecializationKind)Record.readInt();
+  D->IsCompleteDefinition = Record.readInt();
 
   bool writtenAsCanonicalDecl = Record.readInt();
   if (writtenAsCanonicalDecl) {
@@ -2821,7 +2822,7 @@ static bool isSameEntity(NamedDecl *X, NamedDecl *Y) {
       // FIXME: Do we need to check for C++14 deduced return types here too?
       auto *XFPT = FuncX->getType()->getAs<FunctionProtoType>();
       auto *YFPT = FuncY->getType()->getAs<FunctionProtoType>();
-      if (C.getLangOpts().CPlusPlus1z && XFPT && YFPT &&
+      if (C.getLangOpts().CPlusPlus17 && XFPT && YFPT &&
           (isUnresolvedExceptionSpec(XFPT->getExceptionSpecType()) ||
            isUnresolvedExceptionSpec(YFPT->getExceptionSpecType())) &&
           C.hasSameFunctionTypeIgnoringExceptionSpec(FuncX->getType(),
@@ -3983,10 +3984,8 @@ void ASTDeclReader::UpdateDecl(Decl *D,
       break;
     }
 
-    case UPD_CXX_INSTANTIATED_STATIC_DATA_MEMBER: {
+    case UPD_CXX_ADDED_VAR_DEFINITION: {
       VarDecl *VD = cast<VarDecl>(D);
-      VD->getMemberSpecializationInfo()->setPointOfInstantiation(
-          ReadSourceLocation());
       VD->NonParmVarDeclBits.IsInline = Record.readInt();
       VD->NonParmVarDeclBits.IsInlineSpecified = Record.readInt();
       uint64_t Val = Record.readInt();
@@ -3997,6 +3996,25 @@ void ASTDeclReader::UpdateDecl(Decl *D,
           Eval->CheckedICE = true;
           Eval->IsICE = Val == 3;
         }
+      }
+      break;
+    }
+
+    case UPD_CXX_POINT_OF_INSTANTIATION: {
+      SourceLocation POI = Record.readSourceLocation();
+      if (VarTemplateSpecializationDecl *VTSD =
+              dyn_cast<VarTemplateSpecializationDecl>(D)) {
+        VTSD->setPointOfInstantiation(POI);
+      } else if (auto *VD = dyn_cast<VarDecl>(D)) {
+        VD->getMemberSpecializationInfo()->setPointOfInstantiation(POI);
+      } else {
+        auto *FD = cast<FunctionDecl>(D);
+        if (auto *FTSInfo = FD->TemplateOrSpecialization
+                    .dyn_cast<FunctionTemplateSpecializationInfo *>())
+          FTSInfo->setPointOfInstantiation(POI);
+        else
+          FD->TemplateOrSpecialization.get<MemberSpecializationInfo *>()
+              ->setPointOfInstantiation(POI);
       }
       break;
     }

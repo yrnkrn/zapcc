@@ -1220,6 +1220,7 @@ bool ASTReader::ParseLineTable(ModuleFile &F,
 
   // Parse the file names
   std::map<int, int> FileIDs;
+  FileIDs[-1] = -1; // For unspecified filenames.
   for (unsigned I = 0; Record[Idx]; ++I) {
     // Extract the file name
     auto Filename = ReadPath(F, Record, Idx);
@@ -3569,15 +3570,22 @@ ASTReader::ReadModuleMapFileBlock(RecordData &Record, ModuleFile &F,
     if (!ModMap) {
       assert(ImportedBy && "top-level import should be verified");
       if ((ClientLoadCapabilities & ARR_OutOfDate) == 0) {
-        if (auto *ASTFE = M ? M->getASTFile() : nullptr)
+        if (auto *ASTFE = M ? M->getASTFile() : nullptr) {
           // This module was defined by an imported (explicit) module.
           Diag(diag::err_module_file_conflict) << F.ModuleName << F.FileName
                                                << ASTFE->getName();
-        else
+        } else {
           // This module was built with a different module map.
           Diag(diag::err_imported_module_not_found)
               << F.ModuleName << F.FileName << ImportedBy->FileName
               << F.ModuleMapPath;
+          // In case it was imported by a PCH, there's a chance the user is
+          // just missing to include the search path to the directory containing
+          // the modulemap.
+          if (ImportedBy->Kind == MK_PCH)
+            Diag(diag::note_imported_by_pch_module_not_found)
+                << llvm::sys::path::parent_path(F.ModuleMapPath);
+        }
       }
       return OutOfDate;
     }

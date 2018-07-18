@@ -17,10 +17,10 @@
 #include "llvm/CodeGen/GlobalISel/LegalizerHelper.h"
 #include "llvm/CodeGen/LowLevelType.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Type.h"
-#include "llvm/Target/TargetOpcodes.h"
 
 using namespace llvm;
 
@@ -148,7 +148,7 @@ ARMLegalizerInfo::ARMLegalizerInfo(const ARMSubtarget &ST) {
     setAction({G_ICMP, 1, Ty}, Legal);
 
   if (!ST.useSoftFloat() && ST.hasVFP2()) {
-    for (unsigned BinOp : {G_FADD, G_FSUB})
+    for (unsigned BinOp : {G_FADD, G_FSUB, G_FMUL, G_FDIV})
       for (auto Ty : {s32, s64})
         setAction({BinOp, Ty}, Legal);
 
@@ -158,8 +158,13 @@ ARMLegalizerInfo::ARMLegalizerInfo(const ARMSubtarget &ST) {
     setAction({G_FCMP, s1}, Legal);
     setAction({G_FCMP, 1, s32}, Legal);
     setAction({G_FCMP, 1, s64}, Legal);
+
+    setAction({G_MERGE_VALUES, s64}, Legal);
+    setAction({G_MERGE_VALUES, 1, s32}, Legal);
+    setAction({G_UNMERGE_VALUES, s32}, Legal);
+    setAction({G_UNMERGE_VALUES, 1, s64}, Legal);
   } else {
-    for (unsigned BinOp : {G_FADD, G_FSUB})
+    for (unsigned BinOp : {G_FADD, G_FSUB, G_FMUL, G_FDIV})
       for (auto Ty : {s32, s64})
         setAction({BinOp, Ty}, Libcall);
 
@@ -309,7 +314,7 @@ bool ARMLegalizerInfo::legalizeCustom(MachineInstr &MI,
 
     // Our divmod libcalls return a struct containing the quotient and the
     // remainder. We need to create a virtual register for it.
-    auto &Ctx = MIRBuilder.getMF().getFunction()->getContext();
+    auto &Ctx = MIRBuilder.getMF().getFunction().getContext();
     Type *ArgTy = Type::getInt32Ty(Ctx);
     StructType *RetTy = StructType::get(Ctx, {ArgTy, ArgTy}, /* Packed */ true);
     auto RetVal = MRI.createGenericVirtualRegister(
@@ -350,7 +355,7 @@ bool ARMLegalizerInfo::legalizeCustom(MachineInstr &MI,
       return true;
     }
 
-    auto &Ctx = MIRBuilder.getMF().getFunction()->getContext();
+    auto &Ctx = MIRBuilder.getMF().getFunction().getContext();
     assert((OpSize == 32 || OpSize == 64) && "Unsupported operand size");
     auto *ArgTy = OpSize == 32 ? Type::getFloatTy(Ctx) : Type::getDoubleTy(Ctx);
     auto *RetTy = Type::getInt32Ty(Ctx);

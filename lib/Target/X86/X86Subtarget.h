@@ -24,10 +24,10 @@
 #include "llvm/CodeGen/GlobalISel/InstructionSelector.h"
 #include "llvm/CodeGen/GlobalISel/LegalizerInfo.h"
 #include "llvm/CodeGen/GlobalISel/RegisterBankInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/MC/MCInstrItineraries.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetSubtargetInfo.h"
 #include <memory>
 
 #define GET_SUBTARGETINFO_HEADER
@@ -51,17 +51,9 @@ enum Style {
 } // end namespace PICStyles
 
 class X86Subtarget final : public X86GenSubtargetInfo {
-protected:
-  enum X86SSEEnum {
-    NoSSE, SSE1, SSE2, SSE3, SSSE3, SSE41, SSE42, AVX, AVX2, AVX512F
-  };
-
-  enum X863DNowEnum {
-    NoThreeDNow, MMX, ThreeDNow, ThreeDNowA
-  };
-
+public:  
   enum X86ProcFamilyEnum {
-    Others, 
+    Others,
     IntelAtom,
     IntelSLM,
     IntelGLM,
@@ -70,7 +62,17 @@ protected:
     IntelSkylake,
     IntelKNL,
     IntelSKX,
-    IntelCannonlake
+    IntelCannonlake,
+    IntelIcelake,
+  };
+
+protected:
+  enum X86SSEEnum {
+    NoSSE, SSE1, SSE2, SSE3, SSSE3, SSE41, SSE42, AVX, AVX2, AVX512F
+  };
+
+  enum X863DNowEnum {
+    NoThreeDNow, MMX, ThreeDNow, ThreeDNowA
   };
 
   /// X86 processor family: Intel Atom, and others
@@ -105,6 +107,7 @@ protected:
 
   /// Target has AES instructions
   bool HasAES;
+  bool HasVAES;
 
   /// Target has FXSAVE/FXRESTOR instructions
   bool HasFXSR;
@@ -123,6 +126,10 @@ protected:
 
   /// Target has carry-less multiplication
   bool HasPCLMUL;
+  bool HasVPCLMULQDQ;
+
+  /// Target has Galois Field Arithmetic instructions
+  bool HasGFNI;
 
   /// Target has 3-operand fused multiply-add
   bool HasFMA;
@@ -162,6 +169,9 @@ protected:
 
   /// Processor has VBMI instructions.
   bool HasVBMI;
+
+  /// Processor has VBMI2 instructions.
+  bool HasVBMI2;
 
   /// Processor has Integer Fused Multiply Add
   bool HasIFMA;
@@ -221,6 +231,10 @@ protected:
   /// True if there is no performance penalty to writing only the lower parts
   /// of a YMM or ZMM register without clearing the upper part.
   bool HasFastPartialYMMorZMMWrite;
+
+  /// True if gather is reasonably fast. This is true for Skylake client and
+  /// all AVX-512 CPUs.
+  bool HasFastGather;
 
   /// True if hardware SQRTSS instruction is at least as fast (latency) as
   /// RSQRTSS followed by a Newton-Raphson iteration.
@@ -297,8 +311,22 @@ protected:
   /// Processor has PKU extenstions
   bool HasPKU;
 
+  /// Processor has AVX-512 Vector Neural Network Instructions
+  bool HasVNNI;
+
+  /// Processor has AVX-512 Bit Algorithms instructions
+  bool HasBITALG;
+
   /// Processor supports MPX - Memory Protection Extensions
   bool HasMPX;
+
+  /// Processor supports CET SHSTK - Control-Flow Enforcement Technology
+  /// using Shadow Stack
+  bool HasSHSTK;
+
+  /// Processor supports CET IBT - Control-Flow Enforcement Technology
+  /// using Indirect Branch Tracking
+  bool HasIBT;
 
   /// Processor has Software Guard Extensions
   bool HasSGX;
@@ -455,15 +483,18 @@ public:
   bool has3DNowA() const { return X863DNowLevel >= ThreeDNowA; }
   bool hasPOPCNT() const { return HasPOPCNT; }
   bool hasAES() const { return HasAES; }
+  bool hasVAES() const { return HasVAES; }
   bool hasFXSR() const { return HasFXSR; }
   bool hasXSAVE() const { return HasXSAVE; }
   bool hasXSAVEOPT() const { return HasXSAVEOPT; }
   bool hasXSAVEC() const { return HasXSAVEC; }
   bool hasXSAVES() const { return HasXSAVES; }
   bool hasPCLMUL() const { return HasPCLMUL; }
+  bool hasVPCLMULQDQ() const { return HasVPCLMULQDQ; }
+  bool hasGFNI() const { return HasGFNI; }
   // Prefer FMA4 to FMA - its better for commutation/memory folding and
   // has equal or better performance on all supported targets.
-  bool hasFMA() const { return HasFMA && !HasFMA4; }
+  bool hasFMA() const { return HasFMA; }
   bool hasFMA4() const { return HasFMA4; }
   bool hasAnyFMA() const { return hasFMA() || hasFMA4(); }
   bool hasXOP() const { return HasXOP; }
@@ -477,6 +508,7 @@ public:
   bool hasBMI() const { return HasBMI; }
   bool hasBMI2() const { return HasBMI2; }
   bool hasVBMI() const { return HasVBMI; }
+  bool hasVBMI2() const { return HasVBMI2; }
   bool hasIFMA() const { return HasIFMA; }
   bool hasRTM() const { return HasRTM; }
   bool hasADX() const { return HasADX; }
@@ -498,6 +530,7 @@ public:
   bool hasFastPartialYMMorZMMWrite() const {
     return HasFastPartialYMMorZMMWrite;
   }
+  bool hasFastGather() const { return HasFastGather; }
   bool hasFastScalarFSQRT() const { return HasFastScalarFSQRT; }
   bool hasFastVectorFSQRT() const { return HasFastVectorFSQRT; }
   bool hasFastLZCNT() const { return HasFastLZCNT; }
@@ -520,7 +553,11 @@ public:
   bool hasBWI() const { return HasBWI; }
   bool hasVLX() const { return HasVLX; }
   bool hasPKU() const { return HasPKU; }
+  bool hasVNNI() const { return HasVNNI; }
+  bool hasBITALG() const { return HasBITALG; }
   bool hasMPX() const { return HasMPX; }
+  bool hasSHSTK() const { return HasSHSTK; }
+  bool hasIBT() const { return HasIBT; }
   bool hasCLFLUSHOPT() const { return HasCLFLUSHOPT; }
   bool hasCLWB() const { return HasCLWB; }
 

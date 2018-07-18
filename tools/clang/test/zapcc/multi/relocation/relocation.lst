@@ -12,6 +12,6 @@
 // RUN: %zapccxx -c -o %T/file2.o -target x86_64-unknown-linux-gnu -fpic -O -x c++ %S/file2.cpp
 // RUN: llvm-objdump -r %T/file1.o > %T/4.txt
 
-// RUN: diff --unified=5 %T/1.txt %T/3.txt
-// RUN: diff --unified=5 %T/2.txt %T/4.txt
+// RUN: diff %T/1.txt %T/3.txt
+// RUN: diff %T/2.txt %T/4.txt
 // Bug 810

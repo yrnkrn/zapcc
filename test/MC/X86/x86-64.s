@@ -417,7 +417,7 @@ enter $0x7ace,$0x7f
 
 // rdar://8456364
 // CHECK: movw	%cs, %ax
-mov %CS, %ax
+mov %cs, %ax
 
 // rdar://8456391
 fcmovb %st(1), %st(0)   // CHECK: fcmovb	%st(1), %st(0)
@@ -452,6 +452,12 @@ mov %rdx, %cr8
 mov %rdx, %cr15
 // CHECK: movq	%rdx, %cr15
 // CHECK: encoding: [0x44,0x0f,0x22,0xfa]
+mov %rdx, %dr15
+// CHECK: movq	%rdx, %dr15
+// CHECK: encoding: [0x44,0x0f,0x23,0xfa]
+mov %rdx, %db15
+// CHECK: movq	%rdx, %dr15
+// CHECK: encoding: [0x44,0x0f,0x23,0xfa]
 
 // rdar://8456371 - Handle commutable instructions written backward.
 // CHECK: 	faddp	%st(1)
@@ -583,8 +589,8 @@ movmskpd	%xmm6, %eax
 fdivrp %st(0), %st(1) // CHECK: encoding: [0xde,0xf9]
 fdivrp %st(1), %st(0) // CHECK: encoding: [0xde,0xf9]
 
-fsubrp %ST(0), %ST(1) // CHECK: encoding: [0xde,0xe9]
-fsubrp %ST(1), %ST(0) // CHECK: encoding: [0xde,0xe9]
+fsubrp %st(0), %st(1) // CHECK: encoding: [0xde,0xe9]
+fsubrp %st(1), %st(0) // CHECK: encoding: [0xde,0xe9]
 
 // also PR8861
 fdivp %st(0), %st(1) // CHECK: encoding: [0xde,0xf1]
@@ -1082,8 +1088,8 @@ decl %eax // CHECK:	decl	%eax # encoding: [0xff,0xc8]
 
 
 // rdar://8208615
-mov (%rsi), %gs  // CHECK: movl	(%rsi), %gs # encoding: [0x8e,0x2e]
-mov %gs, (%rsi)  // CHECK: movl	%gs, (%rsi) # encoding: [0x8c,0x2e]
+mov (%rsi), %gs  // CHECK: movw	(%rsi), %gs # encoding: [0x8e,0x2e]
+mov %gs, (%rsi)  // CHECK: movw	%gs, (%rsi) # encoding: [0x8c,0x2e]
 
 
 // rdar://8431864

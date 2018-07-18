@@ -60,6 +60,7 @@ static const char *const GCCRegNames[] = {
     "k2",    "k3",    "k4",    "k5",    "k6",      "k7",
     "cr0",   "cr2",   "cr3",   "cr4",   "cr8",
     "dr0",   "dr1",   "dr2",   "dr3",   "dr6",     "dr7",
+    "bnd0",  "bnd1",  "bnd2",  "bnd3",
 };
 
 const TargetInfo::AddlRegName AddlRegNames[] = {
@@ -130,6 +131,9 @@ bool X86TargetInfo::initFeatureMap(
     setFeatureEnabledImpl(Features, "mmx", true);
     break;
 
+  case CK_Icelake:
+    // TODO: Add icelake features here.
+    LLVM_FALLTHROUGH;
   case CK_Cannonlake:
     setFeatureEnabledImpl(Features, "avx512ifma", true);
     setFeatureEnabledImpl(Features, "avx512vbmi", true);
@@ -681,6 +685,10 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasSHA = true;
     } else if (Feature == "+mpx") {
       HasMPX = true;
+    } else if (Feature == "+shstk") {
+      HasSHSTK = true;
+    } else if (Feature == "+ibt") {
+      HasIBT = true;
     } else if (Feature == "+movbe") {
       HasMOVBE = true;
     } else if (Feature == "+sgx") {
@@ -836,15 +844,13 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   case CK_Haswell:
   case CK_Broadwell:
   case CK_SkylakeClient:
+  case CK_SkylakeServer:
+  case CK_Cannonlake:
+  case CK_Icelake:
     // FIXME: Historically, we defined this legacy name, it would be nice to
     // remove it at some point. We've never exposed fine-grained names for
     // recent primary x86 CPUs, and we should keep it that way.
     defineCPUMacros(Builder, "corei7");
-    break;
-  case CK_SkylakeServer:
-    defineCPUMacros(Builder, "skx");
-    break;
-  case CK_Cannonlake:
     break;
   case CK_KNL:
     defineCPUMacros(Builder, "knl");
@@ -1029,6 +1035,8 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__CLWB__");
   if (HasMPX)
     Builder.defineMacro("__MPX__");
+  if (HasSHSTK)
+    Builder.defineMacro("__SHSTK__");
   if (HasSGX)
     Builder.defineMacro("__SGX__");
   if (HasPREFETCHWT1)
@@ -1149,8 +1157,6 @@ bool X86TargetInfo::isValidFeatureName(StringRef Name) const {
       .Case("fxsr", true)
       .Case("lwp", true)
       .Case("lzcnt", true)
-      .Case("mm3dnow", true)
-      .Case("mm3dnowa", true)
       .Case("mmx", true)
       .Case("movbe", true)
       .Case("mpx", true)
@@ -1215,6 +1221,8 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
       .Case("mmx", MMX3DNowLevel >= MMX)
       .Case("movbe", HasMOVBE)
       .Case("mpx", HasMPX)
+      .Case("shstk", HasSHSTK)
+      .Case("ibt", HasIBT)
       .Case("pclmul", HasPCLMUL)
       .Case("pku", HasPKU)
       .Case("popcnt", HasPOPCNT)
@@ -1251,37 +1259,8 @@ bool X86TargetInfo::hasFeature(StringRef Feature) const {
 // X86TargetInfo::hasFeature for a somewhat comprehensive list).
 bool X86TargetInfo::validateCpuSupports(StringRef FeatureStr) const {
   return llvm::StringSwitch<bool>(FeatureStr)
-      .Case("cmov", true)
-      .Case("mmx", true)
-      .Case("popcnt", true)
-      .Case("sse", true)
-      .Case("sse2", true)
-      .Case("sse3", true)
-      .Case("ssse3", true)
-      .Case("sse4.1", true)
-      .Case("sse4.2", true)
-      .Case("avx", true)
-      .Case("avx2", true)
-      .Case("sse4a", true)
-      .Case("fma4", true)
-      .Case("xop", true)
-      .Case("fma", true)
-      .Case("avx512f", true)
-      .Case("bmi", true)
-      .Case("bmi2", true)
-      .Case("aes", true)
-      .Case("pclmul", true)
-      .Case("avx512vl", true)
-      .Case("avx512bw", true)
-      .Case("avx512dq", true)
-      .Case("avx512cd", true)
-      .Case("avx512er", true)
-      .Case("avx512pf", true)
-      .Case("avx512vbmi", true)
-      .Case("avx512ifma", true)
-      .Case("avx5124vnniw", true)
-      .Case("avx5124fmaps", true)
-      .Case("avx512vpopcntdq", true)
+#define X86_FEATURE_COMPAT(VAL, ENUM, STR) .Case(STR, true)
+#include "llvm/Support/X86TargetParser.def"
       .Default(false);
 }
 
@@ -1291,36 +1270,12 @@ bool X86TargetInfo::validateCpuSupports(StringRef FeatureStr) const {
 // rather than the full range of cpus.
 bool X86TargetInfo::validateCpuIs(StringRef FeatureStr) const {
   return llvm::StringSwitch<bool>(FeatureStr)
-      .Case("amd", true)
-      .Case("amdfam10h", true)
-      .Case("amdfam15h", true)
-      .Case("amdfam17h", true)
-      .Case("atom", true)
-      .Case("barcelona", true)
-      .Case("bdver1", true)
-      .Case("bdver2", true)
-      .Case("bdver3", true)
-      .Case("bdver4", true)
-      .Case("bonnell", true)
-      .Case("broadwell", true)
-      .Case("btver1", true)
-      .Case("btver2", true)
-      .Case("core2", true)
-      .Case("corei7", true)
-      .Case("haswell", true)
-      .Case("intel", true)
-      .Case("istanbul", true)
-      .Case("ivybridge", true)
-      .Case("knl", true)
-      .Case("nehalem", true)
-      .Case("sandybridge", true)
-      .Case("shanghai", true)
-      .Case("silvermont", true)
-      .Case("skylake", true)
-      .Case("skylake-avx512", true)
-      .Case("slm", true)
-      .Case("westmere", true)
-      .Case("znver1", true)
+#define X86_VENDOR(ENUM, STRING) .Case(STRING, true)
+#define X86_CPU_TYPE_COMPAT_WITH_ALIAS(ARCHNAME, ENUM, STR, ALIAS)             \
+  .Cases(STR, ALIAS, true)
+#define X86_CPU_TYPE_COMPAT(ARCHNAME, ENUM, STR) .Case(STR, true)
+#define X86_CPU_SUBTYPE_COMPAT(ARCHNAME, ENUM, STR) .Case(STR, true)
+#include "llvm/Support/X86TargetParser.def"
       .Default(false);
 }
 
@@ -1528,121 +1483,19 @@ bool X86TargetInfo::checkCPUKind(CPUKind Kind) const {
   case CK_Generic:
     // No processor selected!
     return false;
-
-  case CK_i386:
-  case CK_i486:
-  case CK_WinChipC6:
-  case CK_WinChip2:
-  case CK_C3:
-  case CK_i586:
-  case CK_Pentium:
-  case CK_PentiumMMX:
-  case CK_PentiumPro:
-  case CK_Pentium2:
-  case CK_Pentium3:
-  case CK_PentiumM:
-  case CK_Yonah:
-  case CK_C3_2:
-  case CK_Pentium4:
-  case CK_Lakemont:
-  case CK_Prescott:
-  case CK_K6:
-  case CK_K6_2:
-  case CK_K6_3:
-  case CK_Athlon:
-  case CK_AthlonXP:
-  case CK_Geode:
-    // Only accept certain architectures when compiling in 32-bit mode.
-    if (getTriple().getArch() != llvm::Triple::x86)
-      return false;
-
-    LLVM_FALLTHROUGH;
-  case CK_Nocona:
-  case CK_Core2:
-  case CK_Penryn:
-  case CK_Bonnell:
-  case CK_Silvermont:
-  case CK_Goldmont:
-  case CK_Nehalem:
-  case CK_Westmere:
-  case CK_SandyBridge:
-  case CK_IvyBridge:
-  case CK_Haswell:
-  case CK_Broadwell:
-  case CK_SkylakeClient:
-  case CK_SkylakeServer:
-  case CK_Cannonlake:
-  case CK_KNL:
-  case CK_KNM:
-  case CK_K8:
-  case CK_K8SSE3:
-  case CK_AMDFAM10:
-  case CK_BTVER1:
-  case CK_BTVER2:
-  case CK_BDVER1:
-  case CK_BDVER2:
-  case CK_BDVER3:
-  case CK_BDVER4:
-  case CK_ZNVER1:
-  case CK_x86_64:
-    return true;
+#define PROC(ENUM, STRING, IS64BIT)                                            \
+  case CK_##ENUM:                                                              \
+    return IS64BIT || getTriple().getArch() == llvm::Triple::x86;
+#include "clang/Basic/X86Target.def"
   }
   llvm_unreachable("Unhandled CPU kind");
 }
 
 X86TargetInfo::CPUKind X86TargetInfo::getCPUKind(StringRef CPU) const {
   return llvm::StringSwitch<CPUKind>(CPU)
-      .Case("i386", CK_i386)
-      .Case("i486", CK_i486)
-      .Case("winchip-c6", CK_WinChipC6)
-      .Case("winchip2", CK_WinChip2)
-      .Case("c3", CK_C3)
-      .Case("i586", CK_i586)
-      .Case("pentium", CK_Pentium)
-      .Case("pentium-mmx", CK_PentiumMMX)
-      .Cases("i686", "pentiumpro", CK_PentiumPro)
-      .Case("pentium2", CK_Pentium2)
-      .Cases("pentium3", "pentium3m", CK_Pentium3)
-      .Case("pentium-m", CK_PentiumM)
-      .Case("c3-2", CK_C3_2)
-      .Case("yonah", CK_Yonah)
-      .Cases("pentium4", "pentium4m", CK_Pentium4)
-      .Case("prescott", CK_Prescott)
-      .Case("nocona", CK_Nocona)
-      .Case("core2", CK_Core2)
-      .Case("penryn", CK_Penryn)
-      .Cases("bonnell", "atom", CK_Bonnell)
-      .Cases("silvermont", "slm", CK_Silvermont)
-      .Case("goldmont", CK_Goldmont)
-      .Cases("nehalem", "corei7", CK_Nehalem)
-      .Case("westmere", CK_Westmere)
-      .Cases("sandybridge", "corei7-avx", CK_SandyBridge)
-      .Cases("ivybridge", "core-avx-i", CK_IvyBridge)
-      .Cases("haswell", "core-avx2", CK_Haswell)
-      .Case("broadwell", CK_Broadwell)
-      .Case("skylake", CK_SkylakeClient)
-      .Cases("skylake-avx512", "skx", CK_SkylakeServer)
-      .Case("cannonlake", CK_Cannonlake)
-      .Case("knl", CK_KNL)
-      .Case("knm", CK_KNM)
-      .Case("lakemont", CK_Lakemont)
-      .Case("k6", CK_K6)
-      .Case("k6-2", CK_K6_2)
-      .Case("k6-3", CK_K6_3)
-      .Cases("athlon", "athlon-tbird", CK_Athlon)
-      .Cases("athlon-xp", "athlon-mp", "athlon-4", CK_AthlonXP)
-      .Cases("k8", "athlon64", "athlon-fx", "opteron", CK_K8)
-      .Cases("k8-sse3", "athlon64-sse3", "opteron-sse3", CK_K8SSE3)
-      .Cases("amdfam10", "barcelona", CK_AMDFAM10)
-      .Case("btver1", CK_BTVER1)
-      .Case("btver2", CK_BTVER2)
-      .Case("bdver1", CK_BDVER1)
-      .Case("bdver2", CK_BDVER2)
-      .Case("bdver3", CK_BDVER3)
-      .Case("bdver4", CK_BDVER4)
-      .Case("znver1", CK_ZNVER1)
-      .Case("x86-64", CK_x86_64)
-      .Case("geode", CK_Geode)
+#define PROC(ENUM, STRING, IS64BIT) .Case(STRING, CK_##ENUM)
+#define PROC_ALIAS(ENUM, ALIAS) .Case(ALIAS, CK_##ENUM)
+#include "clang/Basic/X86Target.def"
       .Default(CK_Generic);
 }
 

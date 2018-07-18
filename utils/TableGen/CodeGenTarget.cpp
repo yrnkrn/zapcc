@@ -82,6 +82,7 @@ StringRef llvm::getEnumName(MVT::SimpleValueType T) {
   case MVT::v16i1:    return "MVT::v16i1";
   case MVT::v32i1:    return "MVT::v32i1";
   case MVT::v64i1:    return "MVT::v64i1";
+  case MVT::v128i1:   return "MVT::v128i1";
   case MVT::v512i1:   return "MVT::v512i1";
   case MVT::v1024i1:  return "MVT::v1024i1";
   case MVT::v1i8:     return "MVT::v1i8";
@@ -348,7 +349,7 @@ GetInstByName(const char *Name,
 void CodeGenTarget::ComputeInstrsByEnum() const {
   static const char *const FixedInstrs[] = {
 #define HANDLE_TARGET_OPCODE(OPC) #OPC,
-#include "llvm/Target/TargetOpcodes.def"
+#include "llvm/CodeGen/TargetOpcodes.def"
       nullptr};
   const auto &Insts = getInstructions();
   for (const char *const *p = FixedInstrs; *p; ++p) {

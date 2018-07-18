@@ -66,16 +66,14 @@ public:
     ISAVersion7_0_1,
     ISAVersion7_0_2,
     ISAVersion7_0_3,
+    ISAVersion7_0_4,
     ISAVersion8_0_0,
     ISAVersion8_0_1,
     ISAVersion8_0_2,
     ISAVersion8_0_3,
-    ISAVersion8_0_4,
     ISAVersion8_1_0,
     ISAVersion9_0_0,
-    ISAVersion9_0_1,
-    ISAVersion9_0_2,
-    ISAVersion9_0_3
+    ISAVersion9_0_2
   };
 
   enum TrapHandlerAbi {
@@ -130,6 +128,7 @@ protected:
   bool DebuggerEmitPrologue;
 
   // Used as options.
+  bool EnableHugePrivateBuffer;
   bool EnableVGPRSpilling;
   bool EnablePromoteAlloca;
   bool EnableLoadStoreOpt;
@@ -139,6 +138,7 @@ protected:
 
   // Subtarget statically properties set by tablegen
   bool FP64;
+  bool FMA;
   bool IsGCN;
   bool GCN3Encoding;
   bool CIInsts;
@@ -228,6 +228,10 @@ public:
     return WavefrontSize;
   }
 
+  unsigned getWavefrontSizeLog2() const {
+    return Log2_32(WavefrontSize);
+  }
+
   int getLocalMemorySize() const {
     return LocalMemorySize;
   }
@@ -256,7 +260,7 @@ public:
     return HasVOP3PInsts;
   }
 
-  bool hasHWFP64() const {
+  bool hasFP64() const {
     return FP64;
   }
 
@@ -343,8 +347,16 @@ public:
     return CaymanISA;
   }
 
+  bool hasFMA() const {
+    return FMA;
+  }
+
   TrapHandlerAbi getTrapHandlerAbi() const {
     return isAmdHsaOS() ? TrapHandlerAbiHsa : TrapHandlerAbiNone;
+  }
+
+  bool enableHugePrivateBuffer() const {
+    return EnableHugePrivateBuffer;
   }
 
   bool isPromoteAllocaEnabled() const {
@@ -370,7 +382,7 @@ public:
 
   unsigned getOccupancyWithLocalMemSize(const MachineFunction &MF) const {
     const auto *MFI = MF.getInfo<SIMachineFunctionInfo>();
-    return getOccupancyWithLocalMemSize(MFI->getLDSSize(), *MF.getFunction());
+    return getOccupancyWithLocalMemSize(MFI->getLDSSize(), MF.getFunction());
   }
 
   bool hasFP16Denormals() const {
@@ -398,11 +410,17 @@ public:
   }
 
   bool enableIEEEBit(const MachineFunction &MF) const {
-    return AMDGPU::isCompute(MF.getFunction()->getCallingConv());
+    return AMDGPU::isCompute(MF.getFunction().getCallingConv());
   }
 
   bool useFlatForGlobal() const {
     return FlatForGlobal;
+  }
+
+  /// \returns If MUBUF instructions always perform range checking, even for
+  /// buffer resources used for private memory access.
+  bool privateMemoryResourceIsRangeChecked() const {
+    return getGeneration() < AMDGPUSubtarget::GFX9;
   }
 
   bool hasAutoWaitcntBeforeBarrier() const {
@@ -453,17 +471,23 @@ public:
     return getGeneration() >= GFX9;
   }
 
+  /// Return if most LDS instructions have an m0 use that require m0 to be
+  /// iniitalized.
+  bool ldsRequiresM0Init() const {
+    return getGeneration() < GFX9;
+  }
+
   bool hasAddNoCarry() const {
     return AddNoCarryInsts;
   }
 
   bool isMesaKernel(const MachineFunction &MF) const {
-    return isMesa3DOS() && !AMDGPU::isShader(MF.getFunction()->getCallingConv());
+    return isMesa3DOS() && !AMDGPU::isShader(MF.getFunction().getCallingConv());
   }
 
   // Covers VS/PS/CS graphics shaders
   bool isMesaGfxShader(const MachineFunction &MF) const {
-    return isMesa3DOS() && AMDGPU::isShader(MF.getFunction()->getCallingConv());
+    return isMesa3DOS() && AMDGPU::isShader(MF.getFunction().getCallingConv());
   }
 
   bool isAmdCodeObjectV2(const MachineFunction &MF) const {
@@ -797,8 +821,12 @@ public:
     return getGeneration() >= AMDGPUSubtarget::GFX9;
   }
 
-  bool hasReadM0Hazard() const {
+  bool hasReadM0MovRelInterpHazard() const {
     return getGeneration() >= AMDGPUSubtarget::GFX9;
+  }
+
+  bool hasReadM0SendMsgHazard() const {
+    return getGeneration() >= AMDGPUSubtarget::VOLCANIC_ISLANDS;
   }
 
   unsigned getKernArgSegmentSize(const MachineFunction &MF,

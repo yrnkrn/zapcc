@@ -18,7 +18,7 @@ struct SS{
   // CK1: define {{.*}}i32 @{{.+}}foo{{.+}}(
   int foo(void) {
     
-    // CK1: call i32 @__tgt_target(
+    // CK1: call i32 @__tgt_target_teams(
     // CK1: call void @[[OFFL1:.+]](
     #pragma omp target
     #pragma omp teams distribute collapse(2)
@@ -33,6 +33,8 @@ struct SS{
     
     // CK1: define internal void @[[OUTL1]]({{.+}})
     // discard loop variables not needed here
+    // CK1: = alloca i32,
+    // CK1: = alloca i32,
     // CK1: = alloca i32,
     // CK1: = alloca i32,
     // CK1: [[OMP_UB:%.+]] = alloca i32,
@@ -89,7 +91,7 @@ int main (int argc, char **argv) {
 }
 
 // CK2: define {{.*}}i32 @{{[^,]+}}(i{{.+}}{{.+}} %[[ARGC:.+]], {{.+}})
-// CK2: call i32 @__tgt_target(
+// CK2: call i32 @__tgt_target_teams(
 // CK2: call void @[[OFFL1:.+]]({{.+}})
 // CK2: {{%.+}} = call{{.*}} i32 @[[TMAIN:.+]]({{.+}})
 // CK2: ret
@@ -105,7 +107,7 @@ int main (int argc, char **argv) {
 // CK2: call void @__kmpc_for_static_fini(
 // CK2: ret void
 // CK2: define {{.*}}i32 @[[TMAIN]]({{.+}})
-// CK2: call i32 @__tgt_target(
+// CK2: call i32 @__tgt_target_teams(
 // CK2: call void @[[OFFLT1:.+]]({{.+}})
 // CK2:  ret
 // CK2-NEXT: }

@@ -31,6 +31,9 @@
 #include "llvm/CodeGen/MachineValueType.h"
 #include "llvm/CodeGen/RuntimeLibcalls.h"
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/CodeGen/TargetLowering.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/CallingConv.h"
@@ -48,15 +51,12 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
-#include "llvm/Target/TargetLowering.h"
 #include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOpcodes.h"
-#include "llvm/Target/TargetRegisterInfo.h"
 #include <algorithm>
 #include <cassert>
-#include <cstring>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <string>
 #include <tuple>
@@ -520,6 +520,7 @@ TargetLoweringBase::TargetLoweringBase(const TargetMachine &tm) : TM(tm) {
   MaxAtomicSizeInBitsSupported = 1024;
 
   MinCmpXchgSizeInBits = 0;
+  SupportsUnalignedAtomics = false;
 
   std::fill(std::begin(LibcallRoutineNames), std::end(LibcallRoutineNames), nullptr);
 
@@ -1591,8 +1592,8 @@ void TargetLoweringBase::setMaximumJumpTableSize(unsigned Val) {
 /// Get the reciprocal estimate attribute string for a function that will
 /// override the target defaults.
 static StringRef getRecipEstimateForFunc(MachineFunction &MF) {
-  const Function *F = MF.getFunction();
-  return F->getFnAttribute("reciprocal-estimates").getValueAsString();
+  const Function &F = MF.getFunction();
+  return F.getFnAttribute("reciprocal-estimates").getValueAsString();
 }
 
 /// Construct a string for the given reciprocal operation of the given type.

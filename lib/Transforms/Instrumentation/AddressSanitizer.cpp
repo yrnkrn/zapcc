@@ -9,7 +9,7 @@
 //
 // This file is a part of AddressSanitizer, an address sanity checker.
 // Details of the algorithm:
-//  http://code.google.com/p/address-sanitizer/wiki/AddressSanitizerAlgorithm
+//  https://github.com/google/sanitizers/wiki/AddressSanitizerAlgorithm
 //
 //===----------------------------------------------------------------------===//
 
@@ -97,9 +97,10 @@ static const uint64_t kDynamicShadowSentinel =
 static const uint64_t kIOSShadowOffset32 = 1ULL << 30;
 static const uint64_t kIOSSimShadowOffset32 = 1ULL << 30;
 static const uint64_t kIOSSimShadowOffset64 = kDefaultShadowOffset64;
-static const uint64_t kSmallX86_64ShadowOffset = 0x7FFF8000;  // < 2G.
+static const uint64_t kSmallX86_64ShadowOffsetBase = 0x7FFFFFFF;  // < 2G.
+static const uint64_t kSmallX86_64ShadowOffsetAlignMask = ~0xFFFULL;
 static const uint64_t kLinuxKasan_ShadowOffset64 = 0xdffffc0000000000;
-static const uint64_t kPPC64_ShadowOffset64 = 1ULL << 41;
+static const uint64_t kPPC64_ShadowOffset64 = 1ULL << 44;
 static const uint64_t kSystemZ_ShadowOffset64 = 1ULL << 52;
 static const uint64_t kMIPS32_ShadowOffset32 = 0x0aaa0000;
 static const uint64_t kMIPS64_ShadowOffset64 = 1ULL << 37;
@@ -211,7 +212,13 @@ static cl::opt<bool>
     ClWithIfunc("asan-with-ifunc",
                 cl::desc("Access dynamic shadow through an ifunc global on "
                          "platforms that support this"),
-                cl::Hidden, cl::init(false));
+                cl::Hidden, cl::init(true));
+
+static cl::opt<bool> ClWithIfuncSuppressRemat(
+    "asan-with-ifunc-suppress-remat",
+    cl::desc("Suppress rematerialization of dynamic shadow address by passing "
+             "it through inline asm in prologue."),
+    cl::Hidden, cl::init(true));
 
 // This flag limits the number of instructions to be instrumented
 // in any given BB. Normally, this should be set to unlimited (INT_MAX),
@@ -489,6 +496,11 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
 
   ShadowMapping Mapping;
 
+  Mapping.Scale = kDefaultShadowScale;
+  if (ClMappingScale.getNumOccurrences() > 0) {
+    Mapping.Scale = ClMappingScale;
+  }
+
   if (LongSize == 32) {
     if (IsAndroid)
       Mapping.Offset = kDynamicShadowSentinel;
@@ -522,7 +534,8 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
       if (IsKasan)
         Mapping.Offset = kLinuxKasan_ShadowOffset64;
       else
-        Mapping.Offset = kSmallX86_64ShadowOffset;
+        Mapping.Offset = (kSmallX86_64ShadowOffsetBase &
+                          (kSmallX86_64ShadowOffsetAlignMask << Mapping.Scale));
     } else if (IsWindows && IsX86_64) {
       Mapping.Offset = kWindowsShadowOffset64;
     } else if (IsMIPS64)
@@ -542,11 +555,6 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
     Mapping.Offset = kDynamicShadowSentinel;
   }
 
-  Mapping.Scale = kDefaultShadowScale;
-  if (ClMappingScale.getNumOccurrences() > 0) {
-    Mapping.Scale = ClMappingScale;
-  }
-
   if (ClMappingOffset.getNumOccurrences() > 0) {
     Mapping.Offset = ClMappingOffset;
   }
@@ -559,7 +567,9 @@ static ShadowMapping getShadowMapping(Triple &TargetTriple, int LongSize,
   Mapping.OrShadowOffset = !IsAArch64 && !IsPPC64 && !IsSystemZ && !IsPS4CPU &&
                            !(Mapping.Offset & (Mapping.Offset - 1)) &&
                            Mapping.Offset != kDynamicShadowSentinel;
-  Mapping.InGlobal = ClWithIfunc && IsAndroid && IsArmOrThumb;
+  bool IsAndroidWithIfuncSupport =
+      IsAndroid && !TargetTriple.isAndroidVersionLT(21);
+  Mapping.InGlobal = ClWithIfunc && IsAndroidWithIfuncSupport && IsArmOrThumb;
 
   return Mapping;
 }
@@ -988,8 +998,9 @@ struct FunctionStackPoisoner : public InstVisitor<FunctionStackPoisoner> {
   void visitCallSite(CallSite CS) {
     Instruction *I = CS.getInstruction();
     if (CallInst *CI = dyn_cast<CallInst>(I)) {
-      HasNonEmptyInlineAsm |=
-          CI->isInlineAsm() && !CI->isIdenticalTo(EmptyInlineAsm.get());
+      HasNonEmptyInlineAsm |= CI->isInlineAsm() &&
+                              !CI->isIdenticalTo(EmptyInlineAsm.get()) &&
+                              I != ASan.LocalDynamicShadow;
       HasReturnsTwiceCall |= CI->canReturnTwice();
     }
   }
@@ -1121,11 +1132,6 @@ Value *AddressSanitizer::memToShadow(Value *Shadow, IRBuilder<> &IRB) {
   if (Mapping.Offset == 0) return Shadow;
   // (Shadow >> scale) | offset
   Value *ShadowBase;
-  if (Mapping.InGlobal)
-    return IRB.CreatePtrToInt(
-        IRB.CreateGEP(AsanShadowGlobal,
-                      {ConstantInt::get(IntptrTy, 0), Shadow}),
-        IntptrTy);
   if (LocalDynamicShadow)
     ShadowBase = LocalDynamicShadow;
   else
@@ -1642,7 +1648,7 @@ bool AddressSanitizerModule::ShouldInstrumentGlobal(GlobalVariable *G) {
 
     // Callbacks put into the CRT initializer/terminator sections
     // should not be instrumented.
-    // See https://code.google.com/p/address-sanitizer/issues/detail?id=305
+    // See https://github.com/google/sanitizers/issues/305
     // and http://msdn.microsoft.com/en-US/en-en/library/bb918180(v=vs.120).aspx
     if (Section.startswith(".CRT")) {
       DEBUG(dbgs() << "Ignoring a global initializer callback: " << *G << "\n");
@@ -1665,7 +1671,7 @@ bool AddressSanitizerModule::ShouldInstrumentGlobal(GlobalVariable *G) {
         DEBUG(dbgs() << "Ignoring ObjC runtime global: " << *G << "\n");
         return false;
       }
-      // See http://code.google.com/p/address-sanitizer/issues/detail?id=32
+      // See https://github.com/google/sanitizers/issues/32
       // Constant CFString instances are compiled in the following way:
       //  -- the string buffer is emitted into
       //     __TEXT,__cstring,cstring_literals
@@ -1974,6 +1980,8 @@ void AddressSanitizerModule::InstrumentGlobalsWithMetadataArray(
   auto AllGlobals = new GlobalVariable(
       M, ArrayOfGlobalStructTy, false, GlobalVariable::InternalLinkage,
       ConstantArray::get(ArrayOfGlobalStructTy, MetadataInitializers), "");
+  if (Mapping.Scale > 3)
+    AllGlobals->setAlignment(1ULL << Mapping.Scale);
 
   IRB.CreateCall(AsanRegisterGlobals,
                  {IRB.CreatePointerCast(AllGlobals, IntptrTy),
@@ -2345,13 +2353,29 @@ bool AddressSanitizer::maybeInsertAsanInitAtFunctionEntry(Function &F) {
 
 void AddressSanitizer::maybeInsertDynamicShadowAtFunctionEntry(Function &F) {
   // Generate code only when dynamic addressing is needed.
-  if (Mapping.Offset != kDynamicShadowSentinel || Mapping.InGlobal)
+  if (Mapping.Offset != kDynamicShadowSentinel)
     return;
 
   IRBuilder<> IRB(&F.front().front());
-  Value *GlobalDynamicAddress = F.getParent()->getOrInsertGlobal(
-      kAsanShadowMemoryDynamicAddress, IntptrTy);
-  LocalDynamicShadow = IRB.CreateLoad(GlobalDynamicAddress);
+  if (Mapping.InGlobal) {
+    if (ClWithIfuncSuppressRemat) {
+      // An empty inline asm with input reg == output reg.
+      // An opaque pointer-to-int cast, basically.
+      InlineAsm *Asm = InlineAsm::get(
+          FunctionType::get(IntptrTy, {AsanShadowGlobal->getType()}, false),
+          StringRef(""), StringRef("=r,0"),
+          /*hasSideEffects=*/false);
+      LocalDynamicShadow =
+          IRB.CreateCall(Asm, {AsanShadowGlobal}, ".asan.shadow");
+    } else {
+      LocalDynamicShadow =
+          IRB.CreatePointerCast(AsanShadowGlobal, IntptrTy, ".asan.shadow");
+    }
+  } else {
+    Value *GlobalDynamicAddress = F.getParent()->getOrInsertGlobal(
+        kAsanShadowMemoryDynamicAddress, IntptrTy);
+    LocalDynamicShadow = IRB.CreateLoad(GlobalDynamicAddress);
+  }
 }
 
 void AddressSanitizer::markEscapedLocalAllocas(Function &F) {
@@ -2498,7 +2522,7 @@ bool AddressSanitizer::runOnFunction(Function &F) {
   bool ChangedStack = FSP.runOnFunction();
 
   // We must unpoison the stack before every NoReturn call (throw, _exit, etc).
-  // See e.g. http://code.google.com/p/address-sanitizer/issues/detail?id=37
+  // See e.g. https://github.com/google/sanitizers/issues/37
   for (auto CI : NoReturnCalls) {
     IRBuilder<> IRB(CI);
     IRB.CreateCall(AsanHandleNoReturnFunc, {});
@@ -2799,9 +2823,10 @@ void FunctionStackPoisoner::processStaticAllocas() {
 
   // Minimal header size (left redzone) is 4 pointers,
   // i.e. 32 bytes on 64-bit platforms and 16 bytes in 32-bit platforms.
-  size_t MinHeaderSize = ASan.LongSize / 2;
+  size_t Granularity = 1ULL << Mapping.Scale;
+  size_t MinHeaderSize = std::max((size_t)ASan.LongSize / 2, Granularity);
   const ASanStackFrameLayout &L =
-      ComputeASanStackFrameLayout(SVD, 1ULL << Mapping.Scale, MinHeaderSize);
+      ComputeASanStackFrameLayout(SVD, Granularity, MinHeaderSize);
 
   // Build AllocaToSVDMap for ASanStackVariableDescription lookup.
   DenseMap<const AllocaInst *, ASanStackVariableDescription *> AllocaToSVDMap;
@@ -2846,8 +2871,12 @@ void FunctionStackPoisoner::processStaticAllocas() {
 
   Value *FakeStack;
   Value *LocalStackBase;
+  Value *LocalStackBaseAlloca;
+  bool Deref;
 
   if (DoStackMalloc) {
+    LocalStackBaseAlloca =
+        IRB.CreateAlloca(IntptrTy, nullptr, "asan_local_stack_base");
     // void *FakeStack = __asan_option_detect_stack_use_after_return
     //     ? __asan_stack_malloc_N(LocalStackSize)
     //     : nullptr;
@@ -2878,24 +2907,31 @@ void FunctionStackPoisoner::processStaticAllocas() {
     IRBIf.SetCurrentDebugLocation(EntryDebugLocation);
     Value *AllocaValue =
         DoDynamicAlloca ? createAllocaForLayout(IRBIf, L, true) : StaticAlloca;
+
     IRB.SetInsertPoint(InsBefore);
     IRB.SetCurrentDebugLocation(EntryDebugLocation);
     LocalStackBase = createPHI(IRB, NoFakeStack, AllocaValue, Term, FakeStack);
+    IRB.SetCurrentDebugLocation(EntryDebugLocation);
+    IRB.CreateStore(LocalStackBase, LocalStackBaseAlloca);
+    Deref = true;
   } else {
     // void *FakeStack = nullptr;
     // void *LocalStackBase = alloca(LocalStackSize);
     FakeStack = ConstantInt::get(IntptrTy, 0);
     LocalStackBase =
         DoDynamicAlloca ? createAllocaForLayout(IRB, L, true) : StaticAlloca;
+    LocalStackBaseAlloca = LocalStackBase;
+    Deref = false;
   }
 
   // Replace Alloca instructions with base+offset.
   for (const auto &Desc : SVD) {
     AllocaInst *AI = Desc.AI;
+    replaceDbgDeclareForAlloca(AI, LocalStackBaseAlloca, DIB, Deref,
+                               Desc.Offset, DIExpression::NoDeref);
     Value *NewAllocaPtr = IRB.CreateIntToPtr(
         IRB.CreateAdd(LocalStackBase, ConstantInt::get(IntptrTy, Desc.Offset)),
         AI->getType());
-    replaceDbgDeclareForAlloca(AI, NewAllocaPtr, DIB, DIExpression::NoDeref);
     AI->replaceAllUsesWith(NewAllocaPtr);
   }
 

@@ -161,6 +161,9 @@ def SIpc_add_rel_offset : SDNode<"AMDGPUISD::PC_ADD_REL_OFFSET",
 defm atomic_inc_global : global_binary_atomic_op<SIatomic_inc>;
 defm atomic_dec_global : global_binary_atomic_op<SIatomic_dec>;
 
+def atomic_inc_local : local_binary_atomic_op<SIatomic_inc>;
+def atomic_dec_local : local_binary_atomic_op<SIatomic_dec>;
+
 //===----------------------------------------------------------------------===//
 // SDNodes PatFrags for loads/stores with a glue input.
 // This is for SDNodes and PatFrag for local loads and stores to
@@ -842,6 +845,9 @@ def VOP3OpSelMods  : ComplexPattern<untyped, 2, "SelectVOP3OpSelMods">;
 def VOP3OpSelMods0 : ComplexPattern<untyped, 3, "SelectVOP3OpSelMods0">;
 
 def VOP3PMadMixMods  : ComplexPattern<untyped, 2, "SelectVOP3PMadMixMods">;
+
+
+def Hi16Elt  : ComplexPattern<untyped, 1, "SelectHi16Elt">;
 
 //===----------------------------------------------------------------------===//
 // SI assembler operands
@@ -1817,7 +1823,31 @@ def getBasicFromSDWAOp : InstrMapping {
   let ValueCols = [["Default"]];
 }
 
-def getMaskedMIMGOp : InstrMapping {
+def getMaskedMIMGOp1 : InstrMapping {
+  let FilterClass = "MIMG_Mask";
+  let RowFields = ["Op"];
+  let ColFields = ["Channels"];
+  let KeyCol = ["1"];
+  let ValueCols = [["2"], ["3"], ["4"] ];
+}
+
+def getMaskedMIMGOp2 : InstrMapping {
+  let FilterClass = "MIMG_Mask";
+  let RowFields = ["Op"];
+  let ColFields = ["Channels"];
+  let KeyCol = ["2"];
+  let ValueCols = [["1"], ["3"], ["4"] ];
+}
+
+def getMaskedMIMGOp3 : InstrMapping {
+  let FilterClass = "MIMG_Mask";
+  let RowFields = ["Op"];
+  let ColFields = ["Channels"];
+  let KeyCol = ["3"];
+  let ValueCols = [["1"], ["2"], ["4"] ];
+}
+
+def getMaskedMIMGOp4 : InstrMapping {
   let FilterClass = "MIMG_Mask";
   let RowFields = ["Op"];
   let ColFields = ["Channels"];
