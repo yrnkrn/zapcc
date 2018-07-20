@@ -49,7 +49,7 @@ add_clang_tool(zapccs
 )
 
 if(UNIX)
-  target_link_libraries(zapccs pthread)
+  target_link_libraries(zapccs PRIVATE pthread)
 endif()
 
 set_target_properties(zapccs PROPERTIES FOLDER "Ceemple")
