@@ -226,12 +226,30 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case G_SEXT:
   case G_ZEXT:
   case G_ANYEXT:
-  case G_TRUNC:
   case G_GEP:
+  case G_INTTOPTR:
+  case G_PTRTOINT:
     // FIXME: We're abusing the fact that everything lives in a GPR for now; in
     // the real world we would use different mappings.
     OperandsMapping = &ARM::ValueMappings[ARM::GPR3OpsIdx];
     break;
+  case G_TRUNC: {
+    // In some cases we may end up with a G_TRUNC from a 64-bit value to a
+    // 32-bit value. This isn't a real floating point trunc (that would be a
+    // G_FPTRUNC). Instead it is an integer trunc in disguise, which can appear
+    // because the legalizer doesn't distinguish between integer and floating
+    // point values so it may leave some 64-bit integers un-narrowed. Until we
+    // have a more principled solution that doesn't let such things sneak all
+    // the way to this point, just map the source to a DPR and the destination
+    // to a GPR.
+    LLT LargeTy = MRI.getType(MI.getOperand(1).getReg());
+    OperandsMapping =
+        LargeTy.getSizeInBits() <= 32
+            ? &ARM::ValueMappings[ARM::GPR3OpsIdx]
+            : getOperandsMapping({&ARM::ValueMappings[ARM::GPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::DPR3OpsIdx]});
+    break;
+  }
   case G_LOAD:
   case G_STORE: {
     LLT Ty = MRI.getType(MI.getOperand(0).getReg());
@@ -245,11 +263,72 @@ ARMRegisterBankInfo::getInstrMapping(const MachineInstr &MI) const {
   case G_FADD:
   case G_FSUB:
   case G_FMUL:
-  case G_FDIV: {
+  case G_FDIV:
+  case G_FNEG: {
     LLT Ty = MRI.getType(MI.getOperand(0).getReg());
     OperandsMapping =Ty.getSizeInBits() == 64
                           ? &ARM::ValueMappings[ARM::DPR3OpsIdx]
                           : &ARM::ValueMappings[ARM::SPR3OpsIdx];
+    break;
+  }
+  case G_FMA: {
+    LLT Ty = MRI.getType(MI.getOperand(0).getReg());
+    OperandsMapping =
+        Ty.getSizeInBits() == 64
+            ? getOperandsMapping({&ARM::ValueMappings[ARM::DPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::DPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::DPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::DPR3OpsIdx]})
+            : getOperandsMapping({&ARM::ValueMappings[ARM::SPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::SPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::SPR3OpsIdx],
+                                  &ARM::ValueMappings[ARM::SPR3OpsIdx]});
+    break;
+  }
+  case G_FPEXT: {
+    LLT ToTy = MRI.getType(MI.getOperand(0).getReg());
+    LLT FromTy = MRI.getType(MI.getOperand(1).getReg());
+    if (ToTy.getSizeInBits() == 64 && FromTy.getSizeInBits() == 32)
+      OperandsMapping =
+          getOperandsMapping({&ARM::ValueMappings[ARM::DPR3OpsIdx],
+                              &ARM::ValueMappings[ARM::SPR3OpsIdx]});
+    break;
+  }
+  case G_FPTRUNC: {
+    LLT ToTy = MRI.getType(MI.getOperand(0).getReg());
+    LLT FromTy = MRI.getType(MI.getOperand(1).getReg());
+    if (ToTy.getSizeInBits() == 32 && FromTy.getSizeInBits() == 64)
+      OperandsMapping =
+          getOperandsMapping({&ARM::ValueMappings[ARM::SPR3OpsIdx],
+                              &ARM::ValueMappings[ARM::DPR3OpsIdx]});
+    break;
+  }
+  case G_FPTOSI:
+  case G_FPTOUI: {
+    LLT ToTy = MRI.getType(MI.getOperand(0).getReg());
+    LLT FromTy = MRI.getType(MI.getOperand(1).getReg());
+    if ((FromTy.getSizeInBits() == 32 || FromTy.getSizeInBits() == 64) &&
+        ToTy.getSizeInBits() == 32)
+      OperandsMapping =
+          FromTy.getSizeInBits() == 64
+              ? getOperandsMapping({&ARM::ValueMappings[ARM::GPR3OpsIdx],
+                                    &ARM::ValueMappings[ARM::DPR3OpsIdx]})
+              : getOperandsMapping({&ARM::ValueMappings[ARM::GPR3OpsIdx],
+                                    &ARM::ValueMappings[ARM::SPR3OpsIdx]});
+    break;
+  }
+  case G_SITOFP:
+  case G_UITOFP: {
+    LLT ToTy = MRI.getType(MI.getOperand(0).getReg());
+    LLT FromTy = MRI.getType(MI.getOperand(1).getReg());
+    if (FromTy.getSizeInBits() == 32 &&
+        (ToTy.getSizeInBits() == 32 || ToTy.getSizeInBits() == 64))
+      OperandsMapping =
+          ToTy.getSizeInBits() == 64
+              ? getOperandsMapping({&ARM::ValueMappings[ARM::DPR3OpsIdx],
+                                    &ARM::ValueMappings[ARM::GPR3OpsIdx]})
+              : getOperandsMapping({&ARM::ValueMappings[ARM::SPR3OpsIdx],
+                                    &ARM::ValueMappings[ARM::GPR3OpsIdx]});
     break;
   }
   case G_CONSTANT:

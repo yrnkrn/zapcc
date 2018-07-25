@@ -34,12 +34,14 @@ namespace llvm {
 
 class MachineFrameInfo;
 class MachineFunction;
+class SIInstrInfo;
 class TargetRegisterClass;
 
 class AMDGPUImagePseudoSourceValue : public PseudoSourceValue {
 public:
+  // TODO: Is the img rsrc useful?
   explicit AMDGPUImagePseudoSourceValue(const TargetInstrInfo &TII) :
-    PseudoSourceValue(PseudoSourceValue::TargetCustom, TII) { }
+    PseudoSourceValue(PseudoSourceValue::TargetCustom, TII) {}
 
   bool isConstant(const MachineFrameInfo *) const override {
     // This should probably be true for most images, but we will start by being
@@ -48,15 +50,11 @@ public:
   }
 
   bool isAliased(const MachineFrameInfo *) const override {
-    // FIXME: If we ever change image intrinsics to accept fat pointers, then
-    // this could be true for some cases.
-    return false;
+    return true;
   }
 
   bool mayAlias(const MachineFrameInfo *) const override {
-    // FIXME: If we ever change image intrinsics to accept fat pointers, then
-    // this could be true for some cases.
-    return false;
+    return true;
   }
 };
 
@@ -135,8 +133,10 @@ class SIMachineFunctionInfo final : public AMDGPUMachineFunction {
   // Stack object indices for work item IDs.
   std::array<int, 3> DebuggerWorkItemIDStackObjectIndices = {{0, 0, 0}};
 
-  AMDGPUBufferPseudoSourceValue BufferPSV;
-  AMDGPUImagePseudoSourceValue ImagePSV;
+  DenseMap<const Value *,
+           std::unique_ptr<const AMDGPUBufferPseudoSourceValue>> BufferPSVs;
+  DenseMap<const Value *,
+           std::unique_ptr<const AMDGPUImagePseudoSourceValue>> ImagePSVs;
 
 private:
   unsigned LDSWaveSpillSize = 0;
@@ -185,6 +185,8 @@ private:
   // for AMDPAL OS type. 0xffffffff represents no hard-wired high half, since
   // current hardware only allows a 16 bit value.
   unsigned GITPtrHigh;
+
+  unsigned HighBitsOf32BitAddress;
 
   MCPhysReg getNextUserSGPR() const {
     assert(NumSystemSGPRs == 0 && "System SGPRs must be added after user SGPRs");
@@ -411,6 +413,10 @@ public:
     return GITPtrHigh;
   }
 
+  unsigned get32BitAddressHighBits() const {
+    return HighBitsOf32BitAddress;
+  }
+
   unsigned getNumUserSGPRs() const {
     return NumUserSGPRs;
   }
@@ -629,12 +635,22 @@ public:
     return LDSWaveSpillSize;
   }
 
-  const AMDGPUBufferPseudoSourceValue *getBufferPSV() const {
-    return &BufferPSV;
+  const AMDGPUBufferPseudoSourceValue *getBufferPSV(const SIInstrInfo &TII,
+                                                    const Value *BufferRsrc) {
+    assert(BufferRsrc);
+    auto PSV = BufferPSVs.try_emplace(
+      BufferRsrc,
+      llvm::make_unique<AMDGPUBufferPseudoSourceValue>(TII));
+    return PSV.first->second.get();
   }
 
-  const AMDGPUImagePseudoSourceValue *getImagePSV() const {
-    return &ImagePSV;
+  const AMDGPUImagePseudoSourceValue *getImagePSV(const SIInstrInfo &TII,
+                                                  const Value *ImgRsrc) {
+    assert(ImgRsrc);
+    auto PSV = ImagePSVs.try_emplace(
+      ImgRsrc,
+      llvm::make_unique<AMDGPUImagePseudoSourceValue>(TII));
+    return PSV.first->second.get();
   }
 };
 

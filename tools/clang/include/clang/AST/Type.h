@@ -808,6 +808,11 @@ public:
   /// Return true if this is a trivially copyable type (C++0x [basic.types]p9)
   bool isTriviallyCopyableType(const ASTContext &Context) const;
 
+  /// Determine whether this is a class whose triviality for the purpose of
+  /// calls is overridden to be trivial because the class or the type of one of
+  /// its subobjects has attribute "trivial_abi".
+  bool hasTrivialABIOverride() const;
+
   // Don't promise in the API that anything besides 'const' can be
   // easily added.
 
@@ -976,16 +981,14 @@ public:
     return LHS.Value != RHS.Value;
   }
 
-  std::string getAsString() const {
-    return getAsString(split());
+  static std::string getAsString(SplitQualType split,
+                                 const PrintingPolicy &Policy) {
+    return getAsString(split.Ty, split.Quals, Policy);
   }
+  static std::string getAsString(const Type *ty, Qualifiers qs,
+                                 const PrintingPolicy &Policy);
 
-  static std::string getAsString(SplitQualType split) {
-    return getAsString(split.Ty, split.Quals);
-  }
-
-  static std::string getAsString(const Type *ty, Qualifiers qs);
-
+  std::string getAsString() const; 
   std::string getAsString(const PrintingPolicy &Policy) const;
 
   void print(raw_ostream &OS, const PrintingPolicy &Policy,
@@ -1730,6 +1733,7 @@ public:
   bool isAnyComplexType() const;   // C99 6.2.5p11 (complex) + Complex Int.
   bool isFloatingType() const;     // C99 6.2.5p11 (real floating + complex)
   bool isHalfType() const;         // OpenCL 6.1.1.1, NEON (IEEE 754-2008 half)
+  bool isFloat16Type() const;      // C11 extension ISO/IEC TS 18661
   bool isRealType() const;         // C99 6.2.5p17 (real floating + integer)
   bool isArithmeticType() const;   // C99 6.2.5p18 (integer + floating)
   bool isVoidType() const;         // C99 6.2.5p19
@@ -6192,6 +6196,12 @@ inline bool Type::isHalfType() const {
   if (const BuiltinType *BT = dyn_cast<BuiltinType>(CanonicalType))
     return BT->getKind() == BuiltinType::Half;
   // FIXME: Should we allow complex __fp16? Probably not.
+  return false;
+}
+
+inline bool Type::isFloat16Type() const {
+  if (const BuiltinType *BT = dyn_cast<BuiltinType>(CanonicalType))
+    return BT->getKind() == BuiltinType::Float16;
   return false;
 }
 

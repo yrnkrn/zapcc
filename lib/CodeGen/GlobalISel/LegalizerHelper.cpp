@@ -26,6 +26,7 @@
 #define DEBUG_TYPE "legalizer"
 
 using namespace llvm;
+using namespace LegalizeActions;
 
 LegalizerHelper::LegalizerHelper(MachineFunction &MF)
     : MRI(MF.getRegInfo()), LI(*MF.getSubtarget().getLegalizerInfo()) {
@@ -36,27 +37,27 @@ LegalizerHelper::LegalizeResult
 LegalizerHelper::legalizeInstrStep(MachineInstr &MI) {
   DEBUG(dbgs() << "Legalizing: "; MI.print(dbgs()));
 
-  auto Action = LI.getAction(MI, MRI);
-  switch (std::get<0>(Action)) {
-  case LegalizerInfo::Legal:
+  auto Step = LI.getAction(MI, MRI);
+  switch (Step.Action) {
+  case Legal:
     DEBUG(dbgs() << ".. Already legal\n");
     return AlreadyLegal;
-  case LegalizerInfo::Libcall:
+  case Libcall:
     DEBUG(dbgs() << ".. Convert to libcall\n");
     return libcall(MI);
-  case LegalizerInfo::NarrowScalar:
+  case NarrowScalar:
     DEBUG(dbgs() << ".. Narrow scalar\n");
-    return narrowScalar(MI, std::get<1>(Action), std::get<2>(Action));
-  case LegalizerInfo::WidenScalar:
+    return narrowScalar(MI, Step.TypeIdx, Step.NewType);
+  case WidenScalar:
     DEBUG(dbgs() << ".. Widen scalar\n");
-    return widenScalar(MI, std::get<1>(Action), std::get<2>(Action));
-  case LegalizerInfo::Lower:
+    return widenScalar(MI, Step.TypeIdx, Step.NewType);
+  case Lower:
     DEBUG(dbgs() << ".. Lower\n");
-    return lower(MI, std::get<1>(Action), std::get<2>(Action));
-  case LegalizerInfo::FewerElements:
+    return lower(MI, Step.TypeIdx, Step.NewType);
+  case FewerElements:
     DEBUG(dbgs() << ".. Reduce number of elements\n");
-    return fewerElementsVector(MI, std::get<1>(Action), std::get<2>(Action));
-  case LegalizerInfo::Custom:
+    return fewerElementsVector(MI, Step.TypeIdx, Step.NewType);
+  case Custom:
     DEBUG(dbgs() << ".. Custom legalization\n");
     return LI.legalizeCustom(MI, MRI, MIRBuilder) ? Legalized
                                                   : UnableToLegalize;
@@ -103,6 +104,9 @@ static RTLIB::Libcall getRTLibDesc(unsigned Opcode, unsigned Size) {
     return Size == 64 ? RTLIB::REM_F64 : RTLIB::REM_F32;
   case TargetOpcode::G_FPOW:
     return Size == 64 ? RTLIB::POW_F64 : RTLIB::POW_F32;
+  case TargetOpcode::G_FMA:
+    assert((Size == 32 || Size == 64) && "Unsupported size");
+    return Size == 64 ? RTLIB::FMA_F64 : RTLIB::FMA_F32;
   }
   llvm_unreachable("Unknown libcall function");
 }
@@ -123,13 +127,47 @@ llvm::createLibcall(MachineIRBuilder &MIRBuilder, RTLIB::Libcall Libcall,
   return LegalizerHelper::Legalized;
 }
 
+// Useful for libcalls where all operands have the same type.
 static LegalizerHelper::LegalizeResult
 simpleLibcall(MachineInstr &MI, MachineIRBuilder &MIRBuilder, unsigned Size,
               Type *OpType) {
   auto Libcall = getRTLibDesc(MI.getOpcode(), Size);
+
+  SmallVector<CallLowering::ArgInfo, 3> Args;
+  for (unsigned i = 1; i < MI.getNumOperands(); i++)
+    Args.push_back({MI.getOperand(i).getReg(), OpType});
   return createLibcall(MIRBuilder, Libcall, {MI.getOperand(0).getReg(), OpType},
-                       {{MI.getOperand(1).getReg(), OpType},
-                        {MI.getOperand(2).getReg(), OpType}});
+                       Args);
+}
+
+static RTLIB::Libcall getConvRTLibDesc(unsigned Opcode, Type *ToType,
+                                       Type *FromType) {
+  auto ToMVT = MVT::getVT(ToType);
+  auto FromMVT = MVT::getVT(FromType);
+
+  switch (Opcode) {
+  case TargetOpcode::G_FPEXT:
+    return RTLIB::getFPEXT(FromMVT, ToMVT);
+  case TargetOpcode::G_FPTRUNC:
+    return RTLIB::getFPROUND(FromMVT, ToMVT);
+  case TargetOpcode::G_FPTOSI:
+    return RTLIB::getFPTOSINT(FromMVT, ToMVT);
+  case TargetOpcode::G_FPTOUI:
+    return RTLIB::getFPTOUINT(FromMVT, ToMVT);
+  case TargetOpcode::G_SITOFP:
+    return RTLIB::getSINTTOFP(FromMVT, ToMVT);
+  case TargetOpcode::G_UITOFP:
+    return RTLIB::getUINTTOFP(FromMVT, ToMVT);
+  }
+  llvm_unreachable("Unsupported libcall function");
+}
+
+static LegalizerHelper::LegalizeResult
+conversionLibcall(MachineInstr &MI, MachineIRBuilder &MIRBuilder, Type *ToType,
+                  Type *FromType) {
+  RTLIB::Libcall Libcall = getConvRTLibDesc(MI.getOpcode(), ToType, FromType);
+  return createLibcall(MIRBuilder, Libcall, {MI.getOperand(0).getReg(), ToType},
+                       {{MI.getOperand(1).getReg(), FromType}});
 }
 
 LegalizerHelper::LegalizeResult
@@ -157,10 +195,64 @@ LegalizerHelper::libcall(MachineInstr &MI) {
   case TargetOpcode::G_FSUB:
   case TargetOpcode::G_FMUL:
   case TargetOpcode::G_FDIV:
+  case TargetOpcode::G_FMA:
   case TargetOpcode::G_FPOW:
   case TargetOpcode::G_FREM: {
     Type *HLTy = Size == 64 ? Type::getDoubleTy(Ctx) : Type::getFloatTy(Ctx);
     auto Status = simpleLibcall(MI, MIRBuilder, Size, HLTy);
+    if (Status != Legalized)
+      return Status;
+    break;
+  }
+  case TargetOpcode::G_FPEXT: {
+    // FIXME: Support other floating point types (half, fp128 etc)
+    unsigned FromSize = MRI.getType(MI.getOperand(1).getReg()).getSizeInBits();
+    unsigned ToSize = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits();
+    if (ToSize != 64 || FromSize != 32)
+      return UnableToLegalize;
+    LegalizeResult Status = conversionLibcall(
+        MI, MIRBuilder, Type::getDoubleTy(Ctx), Type::getFloatTy(Ctx));
+    if (Status != Legalized)
+      return Status;
+    break;
+  }
+  case TargetOpcode::G_FPTRUNC: {
+    // FIXME: Support other floating point types (half, fp128 etc)
+    unsigned FromSize = MRI.getType(MI.getOperand(1).getReg()).getSizeInBits();
+    unsigned ToSize = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits();
+    if (ToSize != 32 || FromSize != 64)
+      return UnableToLegalize;
+    LegalizeResult Status = conversionLibcall(
+        MI, MIRBuilder, Type::getFloatTy(Ctx), Type::getDoubleTy(Ctx));
+    if (Status != Legalized)
+      return Status;
+    break;
+  }
+  case TargetOpcode::G_FPTOSI:
+  case TargetOpcode::G_FPTOUI: {
+    // FIXME: Support other types
+    unsigned FromSize = MRI.getType(MI.getOperand(1).getReg()).getSizeInBits();
+    unsigned ToSize = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits();
+    if (ToSize != 32 || (FromSize != 32 && FromSize != 64))
+      return UnableToLegalize;
+    LegalizeResult Status = conversionLibcall(
+        MI, MIRBuilder, Type::getInt32Ty(Ctx),
+        FromSize == 64 ? Type::getDoubleTy(Ctx) : Type::getFloatTy(Ctx));
+    if (Status != Legalized)
+      return Status;
+    break;
+  }
+  case TargetOpcode::G_SITOFP:
+  case TargetOpcode::G_UITOFP: {
+    // FIXME: Support other types
+    unsigned FromSize = MRI.getType(MI.getOperand(1).getReg()).getSizeInBits();
+    unsigned ToSize = MRI.getType(MI.getOperand(0).getReg()).getSizeInBits();
+    if (FromSize != 32 || (ToSize != 32 && ToSize != 64))
+      return UnableToLegalize;
+    LegalizeResult Status = conversionLibcall(
+        MI, MIRBuilder,
+        ToSize == 64 ? Type::getDoubleTy(Ctx) : Type::getFloatTy(Ctx),
+        Type::getInt32Ty(Ctx));
     if (Status != Legalized)
       return Status;
     break;
@@ -617,9 +709,12 @@ LegalizerHelper::widenScalar(MachineInstr &MI, unsigned TypeIdx, LLT WideTy) {
     return Legalized;
   }
   case TargetOpcode::G_LOAD: {
-    assert(alignTo(MRI.getType(MI.getOperand(0).getReg()).getSizeInBits(), 8) ==
-               WideTy.getSizeInBits() &&
-           "illegal to increase number of bytes loaded");
+    // For some types like i24, we might try to widen to i32. To properly handle
+    // this we should be using a dedicated extending load, until then avoid
+    // trying to legalize.
+    if (alignTo(MRI.getType(MI.getOperand(0).getReg()).getSizeInBits(), 8) !=
+        WideTy.getSizeInBits())
+      return UnableToLegalize;
 
     unsigned DstExt = MRI.createGenericVirtualRegister(WideTy);
     MIRBuilder.buildLoad(DstExt, MI.getOperand(1).getReg(),
@@ -661,7 +756,24 @@ LegalizerHelper::widenScalar(MachineInstr &MI, unsigned TypeIdx, LLT WideTy) {
   }
   case TargetOpcode::G_FCONSTANT: {
     unsigned DstExt = MRI.createGenericVirtualRegister(WideTy);
-    MIRBuilder.buildFConstant(DstExt, *MI.getOperand(1).getFPImm());
+    const ConstantFP *CFP = MI.getOperand(1).getFPImm();
+    APFloat Val = CFP->getValueAPF();
+    LLVMContext &Ctx = MIRBuilder.getMF().getFunction().getContext();
+    auto LLT2Sem = [](LLT Ty) {
+      switch (Ty.getSizeInBits()) {
+      case 32:
+        return &APFloat::IEEEsingle();
+        break;
+      case 64:
+        return &APFloat::IEEEdouble();
+        break;
+      default:
+        llvm_unreachable("Unhandled fp widen type");
+      }
+    };
+    bool LosesInfo;
+    Val.convert(*LLT2Sem(WideTy), APFloat::rmTowardZero, &LosesInfo);
+    MIRBuilder.buildFConstant(DstExt, *ConstantFP::get(Ctx, Val));
     MIRBuilder.buildFPTrunc(MI.getOperand(0).getReg(), DstExt);
     MI.eraseFromParent();
     return Legalized;
@@ -813,7 +925,21 @@ LegalizerHelper::lower(MachineInstr &MI, unsigned TypeIdx, LLT Ty) {
 
     unsigned Zero = MRI.createGenericVirtualRegister(Ty);
     MIRBuilder.buildConstant(Zero, 0);
-    MIRBuilder.buildICmp(CmpInst::ICMP_NE, Overflow, HiPart, Zero);
+
+    // For *signed* multiply, overflow is detected by checking:
+    // (hi != (lo >> bitwidth-1))
+    if (Opcode == TargetOpcode::G_SMULH) {
+      unsigned Shifted = MRI.createGenericVirtualRegister(Ty);
+      unsigned ShiftAmt = MRI.createGenericVirtualRegister(Ty);
+      MIRBuilder.buildConstant(ShiftAmt, Ty.getSizeInBits() - 1);
+      MIRBuilder.buildInstr(TargetOpcode::G_ASHR)
+        .addDef(Shifted)
+        .addUse(Res)
+        .addUse(ShiftAmt);
+      MIRBuilder.buildICmp(CmpInst::ICMP_NE, Overflow, HiPart, Shifted);
+    } else {
+      MIRBuilder.buildICmp(CmpInst::ICMP_NE, Overflow, HiPart, Zero);
+    }
     MI.eraseFromParent();
     return Legalized;
   }
@@ -835,6 +961,9 @@ LegalizerHelper::lower(MachineInstr &MI, unsigned TypeIdx, LLT Ty) {
     case 64:
       ZeroTy = Type::getDoubleTy(Ctx);
       break;
+    case 128:
+      ZeroTy = Type::getFP128Ty(Ctx);
+      break;
     default:
       llvm_unreachable("unexpected floating-point type");
     }
@@ -853,7 +982,7 @@ LegalizerHelper::lower(MachineInstr &MI, unsigned TypeIdx, LLT Ty) {
     // Lower (G_FSUB LHS, RHS) to (G_FADD LHS, (G_FNEG RHS)).
     // First, check if G_FNEG is marked as Lower. If so, we may
     // end up with an infinite loop as G_FSUB is used to legalize G_FNEG.
-    if (LI.getAction({G_FNEG, Ty}).first == LegalizerInfo::Lower)
+    if (LI.getAction({G_FNEG, {Ty}}).Action == Lower)
       return UnableToLegalize;
     unsigned Res = MI.getOperand(0).getReg();
     unsigned LHS = MI.getOperand(1).getReg();

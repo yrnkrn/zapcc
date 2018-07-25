@@ -156,8 +156,7 @@ static list<std::string> Name(
          "the -regex option <pattern> is interpreted as a regular expression."),
     value_desc("pattern"), cat(DwarfDumpCategory));
 static alias NameAlias("n", desc("Alias for -name"), aliasopt(Name));
-static opt<unsigned>
-    Lookup("lookup",
+static opt<unsigned long long> Lookup("lookup",
            desc("Lookup <address> in the debug information and print out any"
                 "available file, function, block and line table details."),
            value_desc("address"), cat(DwarfDumpCategory));
@@ -364,7 +363,7 @@ static bool dumpObjectFile(ObjectFile &Obj, DWARFContext &DICtx, Twine Filename,
   if (!Find.empty()) {
     DumpOffsets[DIDT_ID_DebugInfo] = [&]() -> llvm::Optional<uint64_t> {
       for (auto Name : Find) {
-        auto find = [&](const DWARFAcceleratorTable &Accel)
+        auto find = [&](const AppleAcceleratorTable &Accel)
             -> llvm::Optional<uint64_t> {
           for (auto Entry : Accel.equal_range(Name))
             for (auto Atom : Entry)
@@ -378,6 +377,7 @@ static bool dumpObjectFile(ObjectFile &Obj, DWARFContext &DICtx, Twine Filename,
           return DumpOffsets[DIDT_ID_DebugInfo] = *Offset;
         if (auto Offset = find(DICtx.getAppleNamespaces()))
           return DumpOffsets[DIDT_ID_DebugInfo] = *Offset;
+        // TODO: Add .debug_names support
       }
       return None;
     }();
@@ -478,6 +478,8 @@ static bool handleFile(StringRef Filename, HandlerFn HandleObj,
 static std::vector<std::string> expandBundle(const std::string &InputPath) {
   std::vector<std::string> BundlePaths;
   SmallString<256> BundlePath(InputPath);
+  // Normalize input path. This is necessary to accept `bundle.dSYM/`.
+  sys::path::remove_dots(BundlePath);
   // Manually open up the bundle to avoid introducing additional dependencies.
   if (sys::fs::is_directory(BundlePath) &&
       sys::path::extension(BundlePath) == ".dSYM") {

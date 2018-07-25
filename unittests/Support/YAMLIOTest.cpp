@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Endian.h"
@@ -532,6 +533,7 @@ struct StringTypes {
   std::string stdstr9;
   std::string stdstr10;
   std::string stdstr11;
+  std::string stdstr12;
 };
 
 namespace llvm {
@@ -561,6 +563,7 @@ namespace yaml {
       io.mapRequired("stdstr9",   st.stdstr9);
       io.mapRequired("stdstr10",  st.stdstr10);
       io.mapRequired("stdstr11",  st.stdstr11);
+      io.mapRequired("stdstr12",  st.stdstr12);
     }
   };
 }
@@ -592,6 +595,7 @@ TEST(YAMLIO, TestReadWriteStringTypes) {
     map.stdstr9 = "~";
     map.stdstr10 = "0.2e20";
     map.stdstr11 = "0x30";
+    map.stdstr12 = "- match";
 
     llvm::raw_string_ostream ostr(intermediate);
     Output yout(ostr);
@@ -610,6 +614,7 @@ TEST(YAMLIO, TestReadWriteStringTypes) {
   EXPECT_NE(llvm::StringRef::npos, flowOut.find("'~'\n"));
   EXPECT_NE(llvm::StringRef::npos, flowOut.find("'0.2e20'\n"));
   EXPECT_NE(llvm::StringRef::npos, flowOut.find("'0x30'\n"));
+  EXPECT_NE(llvm::StringRef::npos, flowOut.find("'- match'\n"));
   EXPECT_NE(std::string::npos, flowOut.find("'''eee"));
   EXPECT_NE(std::string::npos, flowOut.find("'\"fff'"));
   EXPECT_NE(std::string::npos, flowOut.find("'`ggg'"));
@@ -2450,94 +2455,34 @@ TEST(YAMLIO, TestCustomMappingStruct) {
   EXPECT_EQ(4, y["bar"].bar);
 }
 
-TEST(YAMLIO, InvalidInput) {
-  // polluting 1 value in the sequence
-  Input yin("---\n- foo:  3\n  bar:  5\n1\n- foo:  3\n  bar:  5\n...\n");
-  std::vector<FooBar> Data;
-  yin >> Data;
-  EXPECT_TRUE((bool)yin.error());
-}
-
-TEST(YAMLIO, TestEscapedSingleQuote) {
-  std::string Id = "@abc@";
-
+static void TestEscaped(llvm::StringRef Input, llvm::StringRef Expected) {
   std::string out;
   llvm::raw_string_ostream ostr(out);
   Output xout(ostr, nullptr, 0);
 
   llvm::yaml::EmptyContext Ctx;
-  yamlize(xout, Id, true, Ctx);
+  yamlize(xout, Input, true, Ctx);
 
   ostr.flush();
-  EXPECT_EQ("'@abc@'", out);
+  EXPECT_EQ(Expected, out);
 }
 
-TEST(YAMLIO, TestEscapedNoQuote) {
-  std::string Id = "abc/";
-
-  std::string out;
-  llvm::raw_string_ostream ostr(out);
-  Output xout(ostr, nullptr, 0);
-
-  llvm::yaml::EmptyContext Ctx;
-  yamlize(xout, Id, true, Ctx);
-
-  ostr.flush();
-  EXPECT_EQ("abc/", out);
-}
-
-TEST(YAMLIO, TestEscapedDoubleQuoteNonPrintable) {
-  std::string Id = "\01@abc@";
-
-  std::string out;
-  llvm::raw_string_ostream ostr(out);
-  Output xout(ostr, nullptr, 0);
-
-  llvm::yaml::EmptyContext Ctx;
-  yamlize(xout, Id, true, Ctx);
-
-  ostr.flush();
-  EXPECT_EQ("\"\\x01@abc@\"", out);
-}
-
-TEST(YAMLIO, TestEscapedDoubleQuoteInsideSingleQuote) {
-  std::string Id = "abc\"fdf";
-
-  std::string out;
-  llvm::raw_string_ostream ostr(out);
-  Output xout(ostr, nullptr, 0);
-
-  llvm::yaml::EmptyContext Ctx;
-  yamlize(xout, Id, true, Ctx);
-
-  ostr.flush();
-  EXPECT_EQ("'abc\"fdf'", out);
-}
-
-TEST(YAMLIO, TestEscapedDoubleQuoteInsideDoubleQuote) {
-  std::string Id = "\01bc\"fdf";
-
-  std::string out;
-  llvm::raw_string_ostream ostr(out);
-  Output xout(ostr, nullptr, 0);
-
-  llvm::yaml::EmptyContext Ctx;
-  yamlize(xout, Id, true, Ctx);
-
-  ostr.flush();
-  EXPECT_EQ("\"\\x01bc\\\"fdf\"", out);
-}
-
-TEST(YAMLIO, TestEscapedSingleQuoteInsideSingleQuote) {
-  std::string Id = "abc'fdf";
-
-  std::string out;
-  llvm::raw_string_ostream ostr(out);
-  Output xout(ostr, nullptr, 0);
-
-  llvm::yaml::EmptyContext Ctx;
-  yamlize(xout, Id, true, Ctx);
-
-  ostr.flush();
-  EXPECT_EQ("'abc''fdf'", out);
+TEST(YAMLIO, TestEscaped) {
+  // Single quote
+  TestEscaped("@abc@", "'@abc@'");
+  // No quote
+  TestEscaped("abc/", "abc/");
+  // Double quote non-printable
+  TestEscaped("\01@abc@", "\"\\x01@abc@\"");
+  // Double quote inside single quote
+  TestEscaped("abc\"fdf", "'abc\"fdf'");
+  // Double quote inside double quote
+  TestEscaped("\01bc\"fdf", "\"\\x01bc\\\"fdf\"");
+  // Single quote inside single quote
+  TestEscaped("abc'fdf", "'abc''fdf'");
+  // UTF8
+  TestEscaped("/*параметр*/", "\"/*параметр*/\"");
+  // UTF8 with single quote inside double quote
+  TestEscaped("parameter 'параметр' is unused",
+              "\"parameter 'параметр' is unused\"");
 }

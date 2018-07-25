@@ -64,7 +64,7 @@ Please make sure first your project compiles successfully with Clang. If your pr
 
 ### Are the sanitizers supported?
 
-Currently, no.
+No.
 
 ### Which operating systems are supported?
 
@@ -106,4 +106,4 @@ Additional zapcc-only code in
 
 ### When was the source last merged with LLVM trunk?
 
-This open-source release was last merged with LLVM 321000 on 2017-12-18.
+This open-source release was last merged with LLVM 325000 on 2018-02-13.

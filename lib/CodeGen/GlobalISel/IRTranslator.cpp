@@ -516,10 +516,6 @@ bool IRTranslator::translateGetElementPtr(const User &U,
         Offset = 0;
       }
 
-      // N = N + Idx * ElementSize;
-      unsigned ElementSizeReg =
-          getOrCreateVReg(*ConstantInt::get(OffsetIRTy, ElementSize));
-
       unsigned IdxReg = getOrCreateVReg(*Idx);
       if (MRI->getType(IdxReg) != OffsetTy) {
         unsigned NewIdxReg = MRI->createGenericVirtualRegister(OffsetTy);
@@ -527,11 +523,20 @@ bool IRTranslator::translateGetElementPtr(const User &U,
         IdxReg = NewIdxReg;
       }
 
-      unsigned OffsetReg = MRI->createGenericVirtualRegister(OffsetTy);
-      MIRBuilder.buildMul(OffsetReg, ElementSizeReg, IdxReg);
+      // N = N + Idx * ElementSize;
+      // Avoid doing it for ElementSize of 1.
+      unsigned GepOffsetReg;
+      if (ElementSize != 1) {
+        unsigned ElementSizeReg =
+            getOrCreateVReg(*ConstantInt::get(OffsetIRTy, ElementSize));
+
+        GepOffsetReg = MRI->createGenericVirtualRegister(OffsetTy);
+        MIRBuilder.buildMul(GepOffsetReg, ElementSizeReg, IdxReg);
+      } else
+        GepOffsetReg = IdxReg;
 
       unsigned NewBaseReg = MRI->createGenericVirtualRegister(PtrTy);
-      MIRBuilder.buildGEP(NewBaseReg, BaseReg, OffsetReg);
+      MIRBuilder.buildGEP(NewBaseReg, BaseReg, GepOffsetReg);
       BaseReg = NewBaseReg;
     }
   }
@@ -748,6 +753,25 @@ bool IRTranslator::translateKnownIntrinsic(const CallInst &CI, Intrinsic::ID ID,
         .addUse(getOrCreateVReg(*CI.getArgOperand(1)))
         .addUse(getOrCreateVReg(*CI.getArgOperand(2)));
     return true;
+  case Intrinsic::fmuladd: {
+    const TargetMachine &TM = MF->getTarget();
+    const TargetLowering &TLI = *MF->getSubtarget().getTargetLowering();
+    unsigned Dst = getOrCreateVReg(CI);
+    unsigned Op0 = getOrCreateVReg(*CI.getArgOperand(0));
+    unsigned Op1 = getOrCreateVReg(*CI.getArgOperand(1));
+    unsigned Op2 = getOrCreateVReg(*CI.getArgOperand(2));
+    if (TM.Options.AllowFPOpFusion != FPOpFusion::Strict &&
+        TLI.isFMAFasterThanFMulAndFAdd(TLI.getValueType(*DL, CI.getType()))) {
+      // TODO: Revisit this to see if we should move this part of the
+      // lowering to the combiner.
+      MIRBuilder.buildInstr(TargetOpcode::G_FMA, Dst, Op0, Op1, Op2);
+    } else {
+      LLT Ty = getLLTForType(*CI.getType(), *DL);
+      auto FMul = MIRBuilder.buildInstr(TargetOpcode::G_FMUL, Ty, Op0, Op1);
+      MIRBuilder.buildInstr(TargetOpcode::G_FADD, Dst, FMul, Op2);
+    }
+    return true;
+  }
   case Intrinsic::memcpy:
   case Intrinsic::memmove:
   case Intrinsic::memset:
@@ -812,10 +836,21 @@ bool IRTranslator::translateCall(const User &U, MachineIRBuilder &MIRBuilder) {
   auto TII = MF->getTarget().getIntrinsicInfo();
   const Function *F = CI.getCalledFunction();
 
+  // FIXME: support Windows dllimport function calls.
+  if (F && F->hasDLLImportStorageClass())
+    return false;
+
   if (CI.isInlineAsm())
     return translateInlineAsm(CI, MIRBuilder);
 
-  if (!F || !F->isIntrinsic()) {
+  Intrinsic::ID ID = Intrinsic::not_intrinsic;
+  if (F && F->isIntrinsic()) {
+    ID = F->getIntrinsicID();
+    if (TII && ID == Intrinsic::not_intrinsic)
+      ID = static_cast<Intrinsic::ID>(TII->getIntrinsicID(F));
+  }
+
+  if (!F || !F->isIntrinsic() || ID == Intrinsic::not_intrinsic) {
     unsigned Res = CI.getType()->isVoidTy() ? 0 : getOrCreateVReg(CI);
     SmallVector<unsigned, 8> Args;
     for (auto &Arg: CI.arg_operands())
@@ -826,10 +861,6 @@ bool IRTranslator::translateCall(const User &U, MachineIRBuilder &MIRBuilder) {
       return getOrCreateVReg(*CI.getCalledValue());
     });
   }
-
-  Intrinsic::ID ID = F->getIntrinsicID();
-  if (TII && ID == Intrinsic::not_intrinsic)
-    ID = static_cast<Intrinsic::ID>(TII->getIntrinsicID(F));
 
   assert(ID != Intrinsic::not_intrinsic && "unknown intrinsic");
 

@@ -3756,39 +3756,49 @@ void SIInstrInfo::moveToVALU(MachineInstr &TopInst) const {
       // FIXME: This isn't safe because the addressing mode doesn't work
       // correctly if vaddr is negative.
       //
-      // FIXME: Handle v_add_u32 and VOP3 form. Also don't rely on immediate
-      // being in src0.
-      //
       // FIXME: Should probably be done somewhere else, maybe SIFoldOperands.
       //
       // See if we can extract an immediate offset by recognizing one of these:
       //   V_ADD_I32_e32 dst, imm, src1
       //   V_ADD_I32_e32 dst, (S_MOV_B32 imm), src1
       // V_ADD will be removed by "Remove dead machine instructions".
-      if (Add && Add->getOpcode() == AMDGPU::V_ADD_I32_e32) {
-        const MachineOperand *Src =
-          getNamedOperand(*Add, AMDGPU::OpName::src0);
+      if (Add &&
+          (Add->getOpcode() == AMDGPU::V_ADD_I32_e32 ||
+           Add->getOpcode() == AMDGPU::V_ADD_U32_e64)) {
+        static const unsigned SrcNames[2] = {
+          AMDGPU::OpName::src0,
+          AMDGPU::OpName::src1,
+        };
 
-        if (Src->isReg()) {
-          auto Mov = MRI.getUniqueVRegDef(Src->getReg());
-          if (Mov && Mov->getOpcode() == AMDGPU::S_MOV_B32)
-            Src = &Mov->getOperand(1);
-        }
+        // Find a literal offset in one of source operands.
+        for (int i = 0; i < 2; i++) {
+          const MachineOperand *Src =
+            getNamedOperand(*Add, SrcNames[i]);
 
-        if (Src) {
-          if (Src->isImm())
-            Offset = Src->getImm();
-          else if (Src->isCImm())
-            Offset = Src->getCImm()->getZExtValue();
-        }
+          if (Src->isReg()) {
+            auto Mov = MRI.getUniqueVRegDef(Src->getReg());
+            if (Mov && Mov->getOpcode() == AMDGPU::S_MOV_B32)
+              Src = &Mov->getOperand(1);
+          }
 
-        if (Offset && isLegalMUBUFImmOffset(Offset))
-          VAddr = getNamedOperand(*Add, AMDGPU::OpName::src1);
-        else
+          if (Src) {
+            if (Src->isImm())
+              Offset = Src->getImm();
+            else if (Src->isCImm())
+              Offset = Src->getCImm()->getZExtValue();
+          }
+
+          if (Offset && isLegalMUBUFImmOffset(Offset)) {
+            VAddr = getNamedOperand(*Add, SrcNames[!i]);
+            break;
+          }
+
           Offset = 0;
+        }
       }
 
-      BuildMI(*MBB, Inst, Inst.getDebugLoc(),
+      MachineInstr *NewInstr =
+        BuildMI(*MBB, Inst, Inst.getDebugLoc(),
               get(AMDGPU::BUFFER_LOAD_DWORD_OFFEN), VDst)
         .add(*VAddr) // vaddr
         .add(*getNamedOperand(Inst, AMDGPU::OpName::sbase)) // srsrc
@@ -3797,12 +3807,17 @@ void SIInstrInfo::moveToVALU(MachineInstr &TopInst) const {
         .addImm(getNamedOperand(Inst, AMDGPU::OpName::glc)->getImm())
         .addImm(0) // slc
         .addImm(0) // tfe
-        .setMemRefs(Inst.memoperands_begin(), Inst.memoperands_end());
+        .setMemRefs(Inst.memoperands_begin(), Inst.memoperands_end())
+        .getInstr();
 
       MRI.replaceRegWith(getNamedOperand(Inst, AMDGPU::OpName::sdst)->getReg(),
                          VDst);
       addUsersToMoveToVALUWorklist(VDst, MRI, Worklist);
       Inst.eraseFromParent();
+
+      // Legalize all operands other than the offset. Notably, convert the srsrc
+      // into SGPRs using v_readfirstlane if needed.
+      legalizeOperands(*NewInstr);
       continue;
     }
     }

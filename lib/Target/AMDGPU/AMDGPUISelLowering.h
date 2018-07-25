@@ -202,6 +202,16 @@ public:
 
   const char* getTargetNodeName(unsigned Opcode) const override;
 
+  // FIXME: Turn off MergeConsecutiveStores() before Instruction Selection
+  // for AMDGPU.
+  // A commit ( git-svn-id: https://llvm.org/svn/llvm-project/llvm/trunk@319036
+  // 91177308-0d34-0410-b5e6-96231b3b80d8 ) turned on
+  // MergeConsecutiveStores() before Instruction Selection for all targets.
+  // Enough AMDGPU compiles go into an infinite loop ( MergeConsecutiveStores()
+  // merges two stores; LegalizeStoreOps() un-merges; MergeConsecutiveStores()
+  // re-merges, etc. ) to warrant turning it off for now.
+  bool mergeStoresAfterLegalization() const override { return false; }
+
   bool isFsqrtCheap(SDValue Operand, SelectionDAG &DAG) const override {
     return true;
   }
@@ -407,6 +417,10 @@ enum NodeType : unsigned {
   // Convert two float 32 numbers into a single register holding two packed f16
   // with round to zero.
   CVT_PKRTZ_F16_F32,
+  CVT_PKNORM_I16_F32,
+  CVT_PKNORM_U16_F32,
+  CVT_PK_I16_I32,
+  CVT_PK_U16_U32,
 
   // Same as the standard node, except the high bits of the resulting integer
   // are known 0.
@@ -441,14 +455,21 @@ enum NodeType : unsigned {
   LOAD_CONSTANT,
   TBUFFER_STORE_FORMAT,
   TBUFFER_STORE_FORMAT_X3,
+  TBUFFER_STORE_FORMAT_D16,
   TBUFFER_LOAD_FORMAT,
+  TBUFFER_LOAD_FORMAT_D16,
   ATOMIC_CMP_SWAP,
   ATOMIC_INC,
   ATOMIC_DEC,
+  ATOMIC_LOAD_FADD,
+  ATOMIC_LOAD_FMIN,
+  ATOMIC_LOAD_FMAX,
   BUFFER_LOAD,
   BUFFER_LOAD_FORMAT,
+  BUFFER_LOAD_FORMAT_D16,
   BUFFER_STORE,
   BUFFER_STORE_FORMAT,
+  BUFFER_STORE_FORMAT_D16,
   BUFFER_ATOMIC_SWAP,
   BUFFER_ATOMIC_ADD,
   BUFFER_ATOMIC_SUB,
@@ -460,6 +481,91 @@ enum NodeType : unsigned {
   BUFFER_ATOMIC_OR,
   BUFFER_ATOMIC_XOR,
   BUFFER_ATOMIC_CMPSWAP,
+  IMAGE_LOAD,
+  IMAGE_LOAD_MIP,
+  IMAGE_STORE,
+  IMAGE_STORE_MIP,
+
+  // Basic sample.
+  IMAGE_SAMPLE,
+  IMAGE_SAMPLE_CL,
+  IMAGE_SAMPLE_D,
+  IMAGE_SAMPLE_D_CL,
+  IMAGE_SAMPLE_L,
+  IMAGE_SAMPLE_B,
+  IMAGE_SAMPLE_B_CL,
+  IMAGE_SAMPLE_LZ,
+  IMAGE_SAMPLE_CD,
+  IMAGE_SAMPLE_CD_CL,
+
+  // Sample with comparison.
+  IMAGE_SAMPLE_C,
+  IMAGE_SAMPLE_C_CL,
+  IMAGE_SAMPLE_C_D,
+  IMAGE_SAMPLE_C_D_CL,
+  IMAGE_SAMPLE_C_L,
+  IMAGE_SAMPLE_C_B,
+  IMAGE_SAMPLE_C_B_CL,
+  IMAGE_SAMPLE_C_LZ,
+  IMAGE_SAMPLE_C_CD,
+  IMAGE_SAMPLE_C_CD_CL,
+
+  // Sample with offsets.
+  IMAGE_SAMPLE_O,
+  IMAGE_SAMPLE_CL_O,
+  IMAGE_SAMPLE_D_O,
+  IMAGE_SAMPLE_D_CL_O,
+  IMAGE_SAMPLE_L_O,
+  IMAGE_SAMPLE_B_O,
+  IMAGE_SAMPLE_B_CL_O,
+  IMAGE_SAMPLE_LZ_O,
+  IMAGE_SAMPLE_CD_O,
+  IMAGE_SAMPLE_CD_CL_O,
+
+  // Sample with comparison and offsets.
+  IMAGE_SAMPLE_C_O,
+  IMAGE_SAMPLE_C_CL_O,
+  IMAGE_SAMPLE_C_D_O,
+  IMAGE_SAMPLE_C_D_CL_O,
+  IMAGE_SAMPLE_C_L_O,
+  IMAGE_SAMPLE_C_B_O,
+  IMAGE_SAMPLE_C_B_CL_O,
+  IMAGE_SAMPLE_C_LZ_O,
+  IMAGE_SAMPLE_C_CD_O,
+  IMAGE_SAMPLE_C_CD_CL_O,
+
+  // Basic gather4.
+  IMAGE_GATHER4,
+  IMAGE_GATHER4_CL,
+  IMAGE_GATHER4_L,
+  IMAGE_GATHER4_B,
+  IMAGE_GATHER4_B_CL,
+  IMAGE_GATHER4_LZ,
+
+  // Gather4 with comparison.
+  IMAGE_GATHER4_C,
+  IMAGE_GATHER4_C_CL,
+  IMAGE_GATHER4_C_L,
+  IMAGE_GATHER4_C_B,
+  IMAGE_GATHER4_C_B_CL,
+  IMAGE_GATHER4_C_LZ,
+
+  // Gather4 with offsets.
+  IMAGE_GATHER4_O,
+  IMAGE_GATHER4_CL_O,
+  IMAGE_GATHER4_L_O,
+  IMAGE_GATHER4_B_O,
+  IMAGE_GATHER4_B_CL_O,
+  IMAGE_GATHER4_LZ_O,
+
+  // Gather4 with comparison and offsets.
+  IMAGE_GATHER4_C_O,
+  IMAGE_GATHER4_C_CL_O,
+  IMAGE_GATHER4_C_L_O,
+  IMAGE_GATHER4_C_B_O,
+  IMAGE_GATHER4_C_B_CL_O,
+  IMAGE_GATHER4_C_LZ_O,
+
   LAST_AMDGPU_ISD_NUMBER
 };
 

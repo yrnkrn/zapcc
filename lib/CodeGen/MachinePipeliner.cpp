@@ -138,7 +138,7 @@ static cl::opt<bool> EnableSWPOptSize("enable-pipeliner-opt-size",
 
 /// A command line argument to limit minimum initial interval for pipelining.
 static cl::opt<int> SwpMaxMii("pipeliner-max-mii",
-                              cl::desc("Size limit for the the MII."),
+                              cl::desc("Size limit for the MII."),
                               cl::Hidden, cl::init(27));
 
 /// A command line argument to limit the number of stages in the pipeline.
@@ -313,7 +313,7 @@ public:
   /// Return the latest time an instruction my be scheduled.
   int getALAP(SUnit *Node) { return ScheduleInfo[Node->NodeNum].ALAP; }
 
-  /// The mobility function, which the the number of slots in which
+  /// The mobility function, which the number of slots in which
   /// an instruction may be scheduled.
   int getMOV(SUnit *Node) { return getALAP(Node) - getASAP(Node); }
 
@@ -808,11 +808,9 @@ bool MachinePipeliner::canPipelineLoop(MachineLoop &L) {
   // because we don't know how to maintain subreg information in the
   // VMap structure.
   MachineBasicBlock *MBB = L.getHeader();
-  for (MachineBasicBlock::iterator BBI = MBB->instr_begin(),
-                                   BBE = MBB->getFirstNonPHI();
-       BBI != BBE; ++BBI)
-    for (unsigned i = 1; i != BBI->getNumOperands(); i += 2)
-      if (BBI->getOperand(i).getSubReg() != 0)
+  for (auto &PHI : MBB->phis())
+    for (unsigned i = 1; i != PHI.getNumOperands(); i += 2)
+      if (PHI.getOperand(i).getSubReg() != 0)
         return false;
 
   return true;
@@ -972,7 +970,7 @@ static unsigned getInitPhiReg(MachineInstr &Phi, MachineBasicBlock *LoopBB) {
   return 0;
 }
 
-/// Return the Phi register value that comes the the loop block.
+/// Return the Phi register value that comes the loop block.
 static unsigned getLoopPhiReg(MachineInstr &Phi, MachineBasicBlock *LoopBB) {
   for (unsigned i = 1, e = Phi.getNumOperands(); i != e; i += 2)
     if (Phi.getOperand(i + 1).getMBB() == LoopBB)
@@ -2924,10 +2922,8 @@ void SwingSchedulerDAG::splitLifetimes(MachineBasicBlock *KernelBB,
                                        MBBVectorTy &EpilogBBs,
                                        SMSchedule &Schedule) {
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
-  for (MachineBasicBlock::iterator BBI = KernelBB->instr_begin(),
-                                   BBF = KernelBB->getFirstNonPHI();
-       BBI != BBF; ++BBI) {
-    unsigned Def = BBI->getOperand(0).getReg();
+  for (auto &PHI : KernelBB->phis()) {
+    unsigned Def = PHI.getOperand(0).getReg();
     // Check for any Phi definition that used as an operand of another Phi
     // in the same block.
     for (MachineRegisterInfo::use_instr_iterator I = MRI.use_instr_begin(Def),
@@ -2935,7 +2931,7 @@ void SwingSchedulerDAG::splitLifetimes(MachineBasicBlock *KernelBB,
          I != E; ++I) {
       if (I->isPHI() && I->getParent() == KernelBB) {
         // Get the loop carried definition.
-        unsigned LCDef = getLoopPhiReg(*BBI, KernelBB);
+        unsigned LCDef = getLoopPhiReg(PHI, KernelBB);
         if (!LCDef)
           continue;
         MachineInstr *MI = MRI.getVRegDef(LCDef);
@@ -3249,13 +3245,11 @@ void SwingSchedulerDAG::rewritePhiValues(MachineBasicBlock *NewBB,
                                          SMSchedule &Schedule,
                                          ValueMapTy *VRMap,
                                          InstrMapTy &InstrMap) {
-  for (MachineBasicBlock::iterator BBI = BB->instr_begin(),
-                                   BBE = BB->getFirstNonPHI();
-       BBI != BBE; ++BBI) {
+  for (auto &PHI : BB->phis()) {
     unsigned InitVal = 0;
     unsigned LoopVal = 0;
-    getPhiRegs(*BBI, BB, InitVal, LoopVal);
-    unsigned PhiDef = BBI->getOperand(0).getReg();
+    getPhiRegs(PHI, BB, InitVal, LoopVal);
+    unsigned PhiDef = PHI.getOperand(0).getReg();
 
     unsigned PhiStage =
         (unsigned)Schedule.stageScheduled(getSUnit(MRI.getVRegDef(PhiDef)));
@@ -3269,7 +3263,7 @@ void SwingSchedulerDAG::rewritePhiValues(MachineBasicBlock *NewBB,
           getPrevMapVal(StageNum - np, PhiStage, LoopVal, LoopStage, VRMap, BB);
       if (!NewVal)
         NewVal = InitVal;
-      rewriteScheduledInstr(NewBB, Schedule, InstrMap, StageNum - np, np, &*BBI,
+      rewriteScheduledInstr(NewBB, Schedule, InstrMap, StageNum - np, np, &PHI,
                             PhiDef, NewVal);
     }
   }

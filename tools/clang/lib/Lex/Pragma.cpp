@@ -1053,6 +1053,20 @@ struct PragmaDebugHandler : public PragmaHandler {
         PP.Diag(Identifier, diag::warn_pragma_debug_missing_argument)
             << II->getName();
       }
+    } else if (II->isStr("diag_mapping")) {
+      Token DiagName;
+      PP.LexUnexpandedToken(DiagName);
+      if (DiagName.is(tok::eod))
+        PP.getDiagnostics().dump();
+      else if (DiagName.is(tok::string_literal) && !DiagName.hasUDSuffix()) {
+        StringLiteralParser Literal(DiagName, PP);
+        if (Literal.hadError)
+          return;
+        PP.getDiagnostics().dump(Literal.GetString());
+      } else {
+        PP.Diag(DiagName, diag::warn_pragma_debug_missing_argument)
+            << II->getName();
+      }
     } else if (II->isStr("llvm_fatal_error")) {
       llvm::report_fatal_error("#pragma clang __debug llvm_fatal_error");
     } else if (II->isStr("llvm_unreachable")) {
@@ -1601,44 +1615,6 @@ struct PragmaPopMacroHandler : public PragmaHandler {
   }
 };
 
-// Pragma STDC implementations.
-
-/// PragmaSTDC_FENV_ACCESSHandler - "\#pragma STDC FENV_ACCESS ...".
-struct PragmaSTDC_FENV_ACCESSHandler : public PragmaHandler {
-  PragmaSTDC_FENV_ACCESSHandler() : PragmaHandler("FENV_ACCESS") {}
-
-  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
-                    Token &Tok) override {
-    tok::OnOffSwitch OOS;
-    if (PP.LexOnOffSwitch(OOS))
-     return;
-    if (OOS == tok::OOS_ON)
-      PP.Diag(Tok, diag::warn_stdc_fenv_access_not_supported);
-  }
-};
-
-/// PragmaSTDC_CX_LIMITED_RANGEHandler - "\#pragma STDC CX_LIMITED_RANGE ...".
-struct PragmaSTDC_CX_LIMITED_RANGEHandler : public PragmaHandler {
-  PragmaSTDC_CX_LIMITED_RANGEHandler() : PragmaHandler("CX_LIMITED_RANGE") {}
-
-  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
-                    Token &Tok) override {
-    tok::OnOffSwitch OOS;
-    PP.LexOnOffSwitch(OOS);
-  }
-};
-
-/// PragmaSTDC_UnknownHandler - "\#pragma STDC ...".
-struct PragmaSTDC_UnknownHandler : public PragmaHandler {
-  PragmaSTDC_UnknownHandler() = default;
-
-  void HandlePragma(Preprocessor &PP, PragmaIntroducerKind Introducer,
-                    Token &UnknownTok) override {
-    // C99 6.10.6p2, unknown forms are not allowed.
-    PP.Diag(UnknownTok, diag::ext_stdc_pragma_ignored);
-  }
-};
-
 /// PragmaARCCFCodeAuditedHandler - 
 ///   \#pragma clang arc_cf_code_audited begin/end
 struct PragmaARCCFCodeAuditedHandler : public PragmaHandler {
@@ -1814,17 +1790,15 @@ void Preprocessor::RegisterBuiltinPragmas() {
   ModuleHandler->AddPragma(new PragmaModuleEndHandler());
   ModuleHandler->AddPragma(new PragmaModuleBuildHandler());
   ModuleHandler->AddPragma(new PragmaModuleLoadHandler());
-
-  AddPragmaHandler("STDC", new PragmaSTDC_FENV_ACCESSHandler());
-  AddPragmaHandler("STDC", new PragmaSTDC_CX_LIMITED_RANGEHandler());
-  AddPragmaHandler("STDC", new PragmaSTDC_UnknownHandler());
+    
+  // Add region pragmas.
+  AddPragmaHandler(new PragmaRegionHandler("region"));
+  AddPragmaHandler(new PragmaRegionHandler("endregion"));
 
   // MS extensions.
   if (LangOpts.MicrosoftExt) {
     AddPragmaHandler(new PragmaWarningHandler());
     AddPragmaHandler(new PragmaIncludeAliasHandler());
-    AddPragmaHandler(new PragmaRegionHandler("region"));
-    AddPragmaHandler(new PragmaRegionHandler("endregion"));
   }
 
   // Pragmas added by plugins
@@ -1846,17 +1820,4 @@ void Preprocessor::IgnorePragmas() {
   // in Preprocessor::RegisterBuiltinPragmas().
   AddPragmaHandler("GCC", new EmptyPragmaHandler());
   AddPragmaHandler("clang", new EmptyPragmaHandler());
-  if (PragmaHandler *NS = PragmaHandlers->FindHandler("STDC")) {
-    // Preprocessor::RegisterBuiltinPragmas() already registers
-    // PragmaSTDC_UnknownHandler as the empty handler, so remove it first,
-    // otherwise there will be an assert about a duplicate handler.
-    PragmaNamespace *STDCNamespace = NS->getIfNamespace();
-    assert(STDCNamespace &&
-           "Invalid namespace, registered as a regular pragma handler!");
-    if (PragmaHandler *Existing = STDCNamespace->FindHandler("", false)) {
-      RemovePragmaHandler("STDC", Existing);
-      delete Existing;
-    }
-  }
-  AddPragmaHandler("STDC", new EmptyPragmaHandler());
 }

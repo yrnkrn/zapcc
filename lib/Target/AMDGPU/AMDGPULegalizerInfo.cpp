@@ -20,6 +20,7 @@
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
+using namespace LegalizeActions;
 
 AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
   using namespace TargetOpcode;
@@ -52,6 +53,9 @@ AMDGPULegalizerInfo::AMDGPULegalizerInfo() {
   setAction({G_FADD, S32}, Legal);
 
   setAction({G_FMUL, S32}, Legal);
+
+  setAction({G_FPTOUI, S32}, Legal);
+  setAction({G_FPTOUI, 1, S32}, Legal);
 
   setAction({G_GEP, P1}, Legal);
   setAction({G_GEP, P2}, Legal);

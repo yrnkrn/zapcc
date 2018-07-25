@@ -48,6 +48,7 @@ public:
     CortexA75,
     Cyclone,
     ExynosM1,
+    ExynosM3,
     Falkor,
     Kryo,
     Saphira,
@@ -80,6 +81,7 @@ protected:
   bool HasLSLFast = false;
   bool HasSVE = false;
   bool HasRCPC = false;
+  bool HasAggressiveFMA = false;
 
   // HasZeroCycleRegMove - Has zero-cycle register mov instructions.
   bool HasZeroCycleRegMove = false;
@@ -101,6 +103,7 @@ protected:
   bool PredictableSelectIsExpensive = false;
   bool BalanceFPOps = false;
   bool CustomAsCheapAsMove = false;
+  bool ExynosAsCheapAsMove = false;
   bool UsePostRAScheduler = false;
   bool Misaligned128StoreIsSlow = false;
   bool Paired128IsSlow = false;
@@ -108,6 +111,7 @@ protected:
   bool UseAlternateSExtLoadCVTF32Pattern = false;
   bool HasArithmeticBccFusion = false;
   bool HasArithmeticCbzFusion = false;
+  bool HasFuseAddress = false;
   bool HasFuseAES = false;
   bool HasFuseLiterals = false;
   bool DisableLatencySchedHeuristic = false;
@@ -224,6 +228,7 @@ public:
     return PredictableSelectIsExpensive;
   }
   bool hasCustomCheapAsMoveHandling() const { return CustomAsCheapAsMove; }
+  bool hasExynosCheapAsMoveHandling() const { return ExynosAsCheapAsMove; }
   bool isMisaligned128StoreSlow() const { return Misaligned128StoreIsSlow; }
   bool isPaired128Slow() const { return Paired128IsSlow; }
   bool isSTRQroSlow() const { return STRQroIsSlow; }
@@ -232,6 +237,7 @@ public:
   }
   bool hasArithmeticBccFusion() const { return HasArithmeticBccFusion; }
   bool hasArithmeticCbzFusion() const { return HasArithmeticCbzFusion; }
+  bool hasFuseAddress() const { return HasFuseAddress; }
   bool hasFuseAES() const { return HasFuseAES; }
   bool hasFuseLiterals() const { return HasFuseLiterals; }
 
@@ -269,6 +275,7 @@ public:
   bool hasLSLFast() const { return HasLSLFast; }
   bool hasSVE() const { return HasSVE; }
   bool hasRCPC() const { return HasRCPC; }
+  bool hasAggressiveFMA() const { return HasAggressiveFMA; }
 
   bool isLittleEndian() const { return IsLittle; }
 
@@ -309,13 +316,6 @@ public:
   unsigned char classifyGlobalFunctionReference(const GlobalValue *GV,
                                                 const TargetMachine &TM) const;
 
-  /// This function returns the name of a function which has an interface
-  /// like the non-standard bzero function, if such a function exists on
-  /// the current subtarget and it is considered prefereable over
-  /// memset with zero passed as the second argument. Otherwise it
-  /// returns null.
-  const char *getBZeroEntry() const;
-
   void overrideSchedPolicy(MachineSchedPolicy &Policy,
                            unsigned NumRegionInstrs) const override;
 
@@ -333,6 +333,8 @@ public:
       return false;
     }
   }
+
+  void mirFileLoaded(MachineFunction &MF) const override;
 };
 } // End llvm namespace
 

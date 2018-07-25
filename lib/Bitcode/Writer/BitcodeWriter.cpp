@@ -86,6 +86,9 @@ static cl::opt<unsigned>
                    cl::desc("Number of metadatas above which we emit an index "
                             "to enable lazy-loading"));
 
+cl::opt<bool> WriteRelBFToSummary(
+    "write-relbf-to-summary", cl::Hidden, cl::init(false),
+    cl::desc("Write relative block frequency to function summary "));
 namespace {
 
 /// These are manifest constants used by the bitcode writer. They do not need to
@@ -1302,7 +1305,7 @@ void ModuleBitcodeWriter::writeModuleInfo() {
   // Emit the ifunc information.
   for (const GlobalIFunc &I : M.ifuncs()) {
     // IFUNC: [strtab offset, strtab size, ifunc type, address space, resolver
-    //         val#, linkage, visibility]
+    //         val#, linkage, visibility, DSO_Local]
     Vals.push_back(addToStrtab(I.getName()));
     Vals.push_back(I.getName().size());
     Vals.push_back(VE.getTypeID(I.getValueType()));
@@ -1310,6 +1313,7 @@ void ModuleBitcodeWriter::writeModuleInfo() {
     Vals.push_back(VE.getValueID(I.getResolver()));
     Vals.push_back(getEncodedLinkage(I));
     Vals.push_back(getEncodedVisibility(I));
+    Vals.push_back(I.isDSOLocal());
     Stream.EmitRecord(bitc::MODULE_CODE_IFUNC, Vals);
     Vals.clear();
   }
@@ -1441,8 +1445,9 @@ static uint64_t rotateSign(int64_t I) {
 void ModuleBitcodeWriter::writeDISubrange(const DISubrange *N,
                                           SmallVectorImpl<uint64_t> &Record,
                                           unsigned Abbrev) {
-  Record.push_back(N->isDistinct());
-  Record.push_back(N->getCount());
+  const uint64_t Version = 1 << 1;
+  Record.push_back((uint64_t)N->isDistinct() | Version);
+  Record.push_back(VE.getMetadataOrNullID(N->getRawCountNode()));
   Record.push_back(rotateSign(N->getLowerBound()));
 
   Stream.EmitRecord(bitc::METADATA_SUBRANGE, Record, Abbrev);
@@ -1452,7 +1457,7 @@ void ModuleBitcodeWriter::writeDISubrange(const DISubrange *N,
 void ModuleBitcodeWriter::writeDIEnumerator(const DIEnumerator *N,
                                             SmallVectorImpl<uint64_t> &Record,
                                             unsigned Abbrev) {
-  Record.push_back(N->isDistinct());
+  Record.push_back((N->isUnsigned() << 1) | N->isDistinct());
   Record.push_back(rotateSign(N->getValue()));
   Record.push_back(VE.getMetadataOrNullID(N->getRawName()));
 
@@ -1521,6 +1526,7 @@ void ModuleBitcodeWriter::writeDICompositeType(
   Record.push_back(VE.getMetadataOrNullID(N->getVTableHolder()));
   Record.push_back(VE.getMetadataOrNullID(N->getTemplateParams().get()));
   Record.push_back(VE.getMetadataOrNullID(N->getRawIdentifier()));
+  Record.push_back(VE.getMetadataOrNullID(N->getDiscriminator()));
 
   Stream.EmitRecord(bitc::METADATA_COMPOSITE_TYPE, Record, Abbrev);
   Record.clear();
@@ -1545,8 +1551,15 @@ void ModuleBitcodeWriter::writeDIFile(const DIFile *N,
   Record.push_back(N->isDistinct());
   Record.push_back(VE.getMetadataOrNullID(N->getRawFilename()));
   Record.push_back(VE.getMetadataOrNullID(N->getRawDirectory()));
-  Record.push_back(N->getChecksumKind());
-  Record.push_back(VE.getMetadataOrNullID(N->getRawChecksum()));
+  if (N->getRawChecksum()) {
+    Record.push_back(N->getRawChecksum()->Kind);
+    Record.push_back(VE.getMetadataOrNullID(N->getRawChecksum()->Value));
+  } else {
+    // Maintain backwards compatibility with the old internal representation of
+    // CSK_None in ChecksumKind by writing nulls here when Checksum is None.
+    Record.push_back(0);
+    Record.push_back(VE.getMetadataOrNullID(nullptr));
+  }
 
   Stream.EmitRecord(bitc::METADATA_FILE, Record, Abbrev);
   Record.clear();
@@ -3375,16 +3388,20 @@ void ModuleBitcodeWriterBase::writePerModuleFunctionSummaryRecord(
   for (auto &RI : FS->refs())
     NameVals.push_back(VE.getValueID(RI.getValue()));
 
-  bool HasProfileData = F.getEntryCount().hasValue();
+  bool HasProfileData = F.hasProfileData();
   for (auto &ECI : FS->calls()) {
     NameVals.push_back(getValueId(ECI.first));
     if (HasProfileData)
       NameVals.push_back(static_cast<uint8_t>(ECI.second.Hotness));
+    else if (WriteRelBFToSummary)
+      NameVals.push_back(ECI.second.RelBlockFreq);
   }
 
   unsigned FSAbbrev = (HasProfileData ? FSCallsProfileAbbrev : FSCallsAbbrev);
   unsigned Code =
-      (HasProfileData ? bitc::FS_PERMODULE_PROFILE : bitc::FS_PERMODULE);
+      (HasProfileData ? bitc::FS_PERMODULE_PROFILE
+                      : (WriteRelBFToSummary ? bitc::FS_PERMODULE_RELBF
+                                             : bitc::FS_PERMODULE));
 
   // Emit the finished record.
   Stream.EmitRecord(Code, NameVals, FSAbbrev);
@@ -3450,21 +3467,8 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
                       ArrayRef<uint64_t>{GVI.second, GVI.first});
   }
 
-  // Abbrev for FS_PERMODULE.
-  auto Abbv = std::make_shared<BitCodeAbbrev>();
-  Abbv->Add(BitCodeAbbrevOp(bitc::FS_PERMODULE));
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));   // valueid
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6));   // flags
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));   // instcount
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // fflags
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // numrefs
-  // numrefs x valueid, n x (valueid)
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
-  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
-  unsigned FSCallsAbbrev = Stream.EmitAbbrev(std::move(Abbv));
-
   // Abbrev for FS_PERMODULE_PROFILE.
-  Abbv = std::make_shared<BitCodeAbbrev>();
+  auto Abbv = std::make_shared<BitCodeAbbrev>();
   Abbv->Add(BitCodeAbbrevOp(bitc::FS_PERMODULE_PROFILE));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));   // valueid
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6));   // flags
@@ -3475,6 +3479,22 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
   Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
   unsigned FSCallsProfileAbbrev = Stream.EmitAbbrev(std::move(Abbv));
+
+  // Abbrev for FS_PERMODULE or FS_PERMODULE_RELBF.
+  Abbv = std::make_shared<BitCodeAbbrev>();
+  if (WriteRelBFToSummary)
+    Abbv->Add(BitCodeAbbrevOp(bitc::FS_PERMODULE_RELBF));
+  else
+    Abbv->Add(BitCodeAbbrevOp(bitc::FS_PERMODULE));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));   // valueid
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 6));   // flags
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));   // instcount
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // fflags
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 4));   // numrefs
+  // numrefs x valueid, n x (valueid [, rel_block_freq])
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Array));
+  Abbv->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 8));
+  unsigned FSCallsAbbrev = Stream.EmitAbbrev(std::move(Abbv));
 
   // Abbrev for FS_PERMODULE_GLOBALVAR_INIT_REFS.
   Abbv = std::make_shared<BitCodeAbbrev>();
@@ -3542,6 +3562,11 @@ void ModuleBitcodeWriterBase::writePerModuleGlobalValueSummary() {
 void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
   Stream.EnterSubblock(bitc::GLOBALVAL_SUMMARY_BLOCK_ID, 3);
   Stream.EmitRecord(bitc::FS_VERSION, ArrayRef<uint64_t>{INDEX_VERSION});
+
+  // Write the index flags. Currently we only write a single flag, the value of
+  // withGlobalValueDeadStripping, which only applies to the combined index.
+  Stream.EmitRecord(bitc::FS_FLAGS,
+                    ArrayRef<uint64_t>{Index.withGlobalValueDeadStripping()});
 
   for (const auto &GVI : valueIds()) {
     Stream.EmitRecord(bitc::FS_VALUE_GUID,
@@ -3677,7 +3702,8 @@ void IndexBitcodeWriter::writeCombinedGlobalValueSummary() {
 
     bool HasProfileData = false;
     for (auto &EI : FS->calls()) {
-      HasProfileData |= EI.second.Hotness != CalleeInfo::HotnessType::Unknown;
+      HasProfileData |=
+          EI.second.getHotness() != CalleeInfo::HotnessType::Unknown;
       if (HasProfileData)
         break;
     }

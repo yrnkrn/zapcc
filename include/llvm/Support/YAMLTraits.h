@@ -511,13 +511,18 @@ inline QuotingType needsQuotes(StringRef S) {
     return QuotingType::Single;
   if (isspace(S.front()) || isspace(S.back()))
     return QuotingType::Single;
-  if (S.front() == ',')
-    return QuotingType::Single;
   if (isNull(S))
     return QuotingType::Single;
   if (isBool(S))
     return QuotingType::Single;
   if (isNumeric(S))
+    return QuotingType::Single;
+
+  // 7.3.3 Plain Style
+  // Plain scalars must not begin with most indicators, as this would cause
+  // ambiguity with other YAML constructs.
+  static constexpr char Indicators[] = R"(-?:\,[]{}#&*!|>'"%@`)";
+  if (S.find_first_of(Indicators) == 0)
     return QuotingType::Single;
 
   QuotingType MaxQuotingNeeded = QuotingType::None;
@@ -549,9 +554,9 @@ inline QuotingType needsQuotes(StringRef S) {
       // range.
       if (C <= 0x1F)
         return QuotingType::Double;
-      // C1 control block (0x80 - 0x9F) is excluded from the allowed character
-      // range.
-      if (C >= 0x80 && C <= 0x9F)
+
+      // Always double quote UTF-8.
+      if ((C & 0x80) != 0)
         return QuotingType::Double;
 
       // The character is not safe, at least simple quoting needed.
@@ -1725,7 +1730,7 @@ template <typename T> struct StdMapStringCustomMappingTraitsImpl {
   template <> struct ScalarTraits<Type> {                                      \
     static void output(const Type &Value, void *ctx, raw_ostream &Out);        \
     static StringRef input(StringRef Scalar, void *ctxt, Type &Value);         \
-    static QuotingType mustQuote(StringRef) { return MustQuote; }         \
+    static QuotingType mustQuote(StringRef) { return MustQuote; }              \
   };                                                                           \
   }                                                                            \
   }

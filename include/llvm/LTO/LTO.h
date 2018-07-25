@@ -210,10 +210,14 @@ ThinBackend createInProcessThinBackend(unsigned ParallelismLevel);
 /// appends ".thinlto.bc" and writes the index to that path. If
 /// ShouldEmitImportsFiles is true it also writes a list of imported files to a
 /// similar path with ".imports" appended instead.
+/// OnWrite is callback which receives module identifier and notifies LTO user
+/// that index file for the module (and optionally imports file) was created.
+using IndexWriteCallback = std::function<void(const std::string &)>;
 ThinBackend createWriteIndexesThinBackend(std::string OldPrefix,
                                           std::string NewPrefix,
                                           bool ShouldEmitImportsFiles,
-                                          std::string LinkedObjectsFile);
+                                          std::string LinkedObjectsFile,
+                                          IndexWriteCallback OnWrite);
 
 /// This class implements a resolution-based interface to LLVM's LTO
 /// functionality. It supports regular LTO, parallel LTO code generation and
@@ -319,6 +323,14 @@ private:
     bool VisibleOutsideSummary = false;
 
     bool UnnamedAddr = true;
+
+    /// True if module contains the prevailing definition.
+    bool Prevailing = false;
+
+    /// Returns true if module contains the prevailing definition and symbol is
+    /// an IR symbol. For example when module-level inline asm block is used,
+    /// symbol can be prevailing in module but have no IR name.
+    bool isPrevailingIRSymbol() const { return Prevailing && !IRName.empty(); }
 
     /// This field keeps track of the partition number of this global. The
     /// regular LTO object is partition 0, while each ThinLTO object has its own

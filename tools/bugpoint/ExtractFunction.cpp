@@ -85,7 +85,7 @@ std::unique_ptr<Module>
 BugDriver::deleteInstructionFromProgram(const Instruction *I,
                                         unsigned Simplification) {
   // FIXME, use vmap?
-  Module *Clone = CloneModule(Program).release();
+  std::unique_ptr<Module> Clone = CloneModule(Program);
 
   const BasicBlock *PBB = I->getParent();
   const Function *PF = PBB->getParent();
@@ -118,8 +118,7 @@ BugDriver::deleteInstructionFromProgram(const Instruction *I,
     Passes.push_back("simplifycfg"); // Delete dead control flow
 
   Passes.push_back("verify");
-  std::unique_ptr<Module> New = runPassesOn(Clone, Passes);
-  delete Clone;
+  std::unique_ptr<Module> New = runPassesOn(Clone.get(), Passes);
   if (!New) {
     errs() << "Instruction removal failed.  Sorry. :(  Please report a bug!\n";
     exit(1);
@@ -383,10 +382,16 @@ BugDriver::extractMappedBlocksFromModule(const std::vector<BasicBlock *> &BBs,
   }
   DiscardTemp Discard{*Temp};
 
+  // Extract all of the blocks except the ones in BBs.
+  SmallVector<BasicBlock *, 32> BlocksToExtract;
+  for (Function &F : *M)
+    for (BasicBlock &BB : F)
+      // Check if this block is going to be extracted.
+      if (std::find(BBs.begin(), BBs.end(), &BB) == BBs.end())
+        BlocksToExtract.push_back(&BB);
+
   raw_fd_ostream OS(Temp->FD, /*shouldClose*/ false);
-  for (std::vector<BasicBlock *>::const_iterator I = BBs.begin(), E = BBs.end();
-       I != E; ++I) {
-    BasicBlock *BB = *I;
+  for (BasicBlock *BB : BBs) {
     // If the BB doesn't have a name, give it one so we have something to key
     // off of.
     if (!BB->hasName())

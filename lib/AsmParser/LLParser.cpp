@@ -327,7 +327,8 @@ bool LLParser::ParseTargetDefinition() {
     if (ParseToken(lltok::equal, "expected '=' after target datalayout") ||
         ParseStringConstant(Str))
       return true;
-    M->setDataLayout(Str);
+    if (DataLayoutStr.empty())
+      M->setDataLayout(Str);
     return false;
   }
 }
@@ -715,6 +716,13 @@ static bool isValidVisibilityForLinkage(unsigned V, unsigned L) {
          (GlobalValue::VisibilityTypes)V == GlobalValue::DefaultVisibility;
 }
 
+// If there was an explicit dso_local, update GV. In the absence of an explicit
+// dso_local we keep the default value.
+static void maybeSetDSOLocal(bool DSOLocal, GlobalValue &GV) {
+  if (DSOLocal)
+    GV.setDSOLocal(true);
+}
+
 /// parseIndirectSymbol:
 ///   ::= GlobalVar '=' OptionalLinkage OptionalPreemptionSpecifier 
 ///                     OptionalVisibility OptionalDLLStorageClass
@@ -748,11 +756,6 @@ bool LLParser::parseIndirectSymbol(const std::string &Name, LocTy NameLoc,
   if (!isValidVisibilityForLinkage(Visibility, L))
     return Error(NameLoc,
                  "symbol with local linkage must have default visibility");
-
-  if (DSOLocal && !IsAlias) {
-    return Error(NameLoc,
-                 "dso_local is invalid on ifunc");
-  }
 
   Type *Ty;
   LocTy ExplicitTypeLoc = Lex.getLoc();
@@ -826,7 +829,7 @@ bool LLParser::parseIndirectSymbol(const std::string &Name, LocTy NameLoc,
   GA->setVisibility((GlobalValue::VisibilityTypes)Visibility);
   GA->setDLLStorageClass((GlobalValue::DLLStorageClassTypes)DLLStorageClass);
   GA->setUnnamedAddr(UnnamedAddr);
-  GA->setDSOLocal(DSOLocal);
+  maybeSetDSOLocal(DSOLocal, *GA);
 
   if (Name.empty())
     NumberedVals.push_back(GA.get());
@@ -947,7 +950,7 @@ bool LLParser::ParseGlobal(const std::string &Name, LocTy NameLoc,
     GV->setInitializer(Init);
   GV->setConstant(IsConstant);
   GV->setLinkage((GlobalValue::LinkageTypes)Linkage);
-  GV->setDSOLocal(DSOLocal);
+  maybeSetDSOLocal(DSOLocal, *GV);
   GV->setVisibility((GlobalValue::VisibilityTypes)Visibility);
   GV->setDLLStorageClass((GlobalValue::DLLStorageClassTypes)DLLStorageClass);
   GV->setExternallyInitialized(IsExternallyInitialized);
@@ -3490,6 +3493,39 @@ template <class FieldTy> struct MDFieldImpl {
       : Val(std::move(Default)), Seen(false) {}
 };
 
+/// Structure to represent an optional metadata field that
+/// can be of either type (A or B) and encapsulates the
+/// MD<typeofA>Field and MD<typeofB>Field structs, so not
+/// to reimplement the specifics for representing each Field.
+template <class FieldTypeA, class FieldTypeB> struct MDEitherFieldImpl {
+  typedef MDEitherFieldImpl<FieldTypeA, FieldTypeB> ImplTy;
+  FieldTypeA A;
+  FieldTypeB B;
+  bool Seen;
+
+  enum {
+    IsInvalid = 0,
+    IsTypeA = 1,
+    IsTypeB = 2
+  } WhatIs;
+
+  void assign(FieldTypeA A) {
+    Seen = true;
+    this->A = std::move(A);
+    WhatIs = IsTypeA;
+  }
+
+  void assign(FieldTypeB B) {
+    Seen = true;
+    this->B = std::move(B);
+    WhatIs = IsTypeB;
+  }
+
+  explicit MDEitherFieldImpl(FieldTypeA DefaultA, FieldTypeB DefaultB)
+      : A(std::move(DefaultA)), B(std::move(DefaultB)), Seen(false),
+        WhatIs(IsInvalid) {}
+};
+
 struct MDUnsignedField : public MDFieldImpl<uint64_t> {
   uint64_t Max;
 
@@ -3576,8 +3612,43 @@ struct MDFieldList : public MDFieldImpl<SmallVector<Metadata *, 4>> {
 };
 
 struct ChecksumKindField : public MDFieldImpl<DIFile::ChecksumKind> {
-  ChecksumKindField() : ImplTy(DIFile::CSK_None) {}
   ChecksumKindField(DIFile::ChecksumKind CSKind) : ImplTy(CSKind) {}
+};
+
+struct MDSignedOrMDField : MDEitherFieldImpl<MDSignedField, MDField> {
+  MDSignedOrMDField(int64_t Default = 0, bool AllowNull = true)
+      : ImplTy(MDSignedField(Default), MDField(AllowNull)) {}
+
+  MDSignedOrMDField(int64_t Default, int64_t Min, int64_t Max,
+                    bool AllowNull = true)
+      : ImplTy(MDSignedField(Default, Min, Max), MDField(AllowNull)) {}
+
+  bool isMDSignedField() const { return WhatIs == IsTypeA; }
+  bool isMDField() const { return WhatIs == IsTypeB; }
+  int64_t getMDSignedValue() const {
+    assert(isMDSignedField() && "Wrong field type");
+    return A.Val;
+  }
+  Metadata *getMDFieldValue() const {
+    assert(isMDField() && "Wrong field type");
+    return B.Val;
+  }
+};
+
+struct MDSignedOrUnsignedField
+    : MDEitherFieldImpl<MDSignedField, MDUnsignedField> {
+  MDSignedOrUnsignedField() : ImplTy(MDSignedField(0), MDUnsignedField(0)) {}
+
+  bool isMDSignedField() const { return WhatIs == IsTypeA; }
+  bool isMDUnsignedField() const { return WhatIs == IsTypeB; }
+  int64_t getMDSignedValue() const {
+    assert(isMDSignedField() && "Wrong field type");
+    return A.Val;
+  }
+  uint64_t getMDUnsignedValue() const {
+    assert(isMDUnsignedField() && "Wrong field type");
+    return B.Val;
+  }
 };
 
 } // end anonymous namespace
@@ -3834,6 +3905,50 @@ bool LLParser::ParseMDField(LocTy Loc, StringRef Name, MDField &Result) {
 }
 
 template <>
+bool LLParser::ParseMDField(LocTy Loc, StringRef Name,
+                            MDSignedOrMDField &Result) {
+  // Try to parse a signed int.
+  if (Lex.getKind() == lltok::APSInt) {
+    MDSignedField Res = Result.A;
+    if (!ParseMDField(Loc, Name, Res)) {
+      Result.assign(Res);
+      return false;
+    }
+    return true;
+  }
+
+  // Otherwise, try to parse as an MDField.
+  MDField Res = Result.B;
+  if (!ParseMDField(Loc, Name, Res)) {
+    Result.assign(Res);
+    return false;
+  }
+
+  return true;
+}
+
+template <>
+bool LLParser::ParseMDField(LocTy Loc, StringRef Name,
+                            MDSignedOrUnsignedField &Result) {
+  if (Lex.getKind() != lltok::APSInt)
+    return false;
+
+  if (Lex.getAPSIntVal().isSigned()) {
+    MDSignedField Res = Result.A;
+    if (ParseMDField(Loc, Name, Res))
+      return true;
+    Result.assign(Res);
+    return false;
+  }
+
+  MDUnsignedField Res = Result.B;
+  if (ParseMDField(Loc, Name, Res))
+    return true;
+  Result.assign(Res);
+  return false;
+}
+
+template <>
 bool LLParser::ParseMDField(LocTy Loc, StringRef Name, MDStringField &Result) {
   LocTy ValueLoc = Lex.getLoc();
   std::string S;
@@ -3860,13 +3975,14 @@ bool LLParser::ParseMDField(LocTy Loc, StringRef Name, MDFieldList &Result) {
 template <>
 bool LLParser::ParseMDField(LocTy Loc, StringRef Name,
                             ChecksumKindField &Result) {
-  if (Lex.getKind() != lltok::ChecksumKind)
+  Optional<DIFile::ChecksumKind> CSKind =
+      DIFile::getChecksumKind(Lex.getStrVal());
+
+  if (Lex.getKind() != lltok::ChecksumKind || !CSKind)
     return TokError(
         "invalid checksum kind" + Twine(" '") + Lex.getStrVal() + "'");
 
-  DIFile::ChecksumKind CSKind = DIFile::getChecksumKind(Lex.getStrVal());
-
-  Result.assign(CSKind);
+  Result.assign(*CSKind);
   Lex.Lex();
   return false;
 }
@@ -3977,27 +4093,45 @@ bool LLParser::ParseGenericDINode(MDNode *&Result, bool IsDistinct) {
 
 /// ParseDISubrange:
 ///   ::= !DISubrange(count: 30, lowerBound: 2)
+///   ::= !DISubrange(count: !node, lowerBound: 2)
 bool LLParser::ParseDISubrange(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
-  REQUIRED(count, MDSignedField, (-1, -1, INT64_MAX));                         \
+  REQUIRED(count, MDSignedOrMDField, (-1, -1, INT64_MAX, false));              \
   OPTIONAL(lowerBound, MDSignedField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
-  Result = GET_OR_DISTINCT(DISubrange, (Context, count.Val, lowerBound.Val));
+  if (count.isMDSignedField())
+    Result = GET_OR_DISTINCT(
+        DISubrange, (Context, count.getMDSignedValue(), lowerBound.Val));
+  else if (count.isMDField())
+    Result = GET_OR_DISTINCT(
+        DISubrange, (Context, count.getMDFieldValue(), lowerBound.Val));
+  else
+    return true;
+
   return false;
 }
 
 /// ParseDIEnumerator:
-///   ::= !DIEnumerator(value: 30, name: "SomeKind")
+///   ::= !DIEnumerator(value: 30, isUnsigned: true, name: "SomeKind")
 bool LLParser::ParseDIEnumerator(MDNode *&Result, bool IsDistinct) {
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
   REQUIRED(name, MDStringField, );                                             \
-  REQUIRED(value, MDSignedField, );
+  REQUIRED(value, MDSignedOrUnsignedField, );                                  \
+  OPTIONAL(isUnsigned, MDBoolField, (false));
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
-  Result = GET_OR_DISTINCT(DIEnumerator, (Context, value.Val, name.Val));
+  if (isUnsigned.Val && value.isMDSignedField())
+    return TokError("unsigned enumerator with negative value");
+
+  int64_t Value = value.isMDSignedField()
+                      ? value.getMDSignedValue()
+                      : static_cast<int64_t>(value.getMDUnsignedValue());
+  Result =
+      GET_OR_DISTINCT(DIEnumerator, (Context, Value, isUnsigned.Val, name.Val));
+
   return false;
 }
 
@@ -4068,7 +4202,8 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
   OPTIONAL(runtimeLang, DwarfLangField, );                                     \
   OPTIONAL(vtableHolder, MDField, );                                           \
   OPTIONAL(templateParams, MDField, );                                         \
-  OPTIONAL(identifier, MDStringField, );
+  OPTIONAL(identifier, MDStringField, );                                       \
+  OPTIONAL(discriminator, MDField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
@@ -4078,7 +4213,7 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
             Context, *identifier.Val, tag.Val, name.Val, file.Val, line.Val,
             scope.Val, baseType.Val, size.Val, align.Val, offset.Val, flags.Val,
             elements.Val, runtimeLang.Val, vtableHolder.Val,
-            templateParams.Val)) {
+            templateParams.Val, discriminator.Val)) {
       Result = CT;
       return false;
     }
@@ -4089,7 +4224,8 @@ bool LLParser::ParseDICompositeType(MDNode *&Result, bool IsDistinct) {
       DICompositeType,
       (Context, tag.Val, name.Val, file.Val, line.Val, scope.Val, baseType.Val,
        size.Val, align.Val, offset.Val, flags.Val, elements.Val,
-       runtimeLang.Val, vtableHolder.Val, templateParams.Val, identifier.Val));
+       runtimeLang.Val, vtableHolder.Val, templateParams.Val, identifier.Val,
+       discriminator.Val));
   return false;
 }
 
@@ -4111,16 +4247,25 @@ bool LLParser::ParseDISubroutineType(MDNode *&Result, bool IsDistinct) {
 ///                   checksumkind: CSK_MD5,
 ///                   checksum: "000102030405060708090a0b0c0d0e0f")
 bool LLParser::ParseDIFile(MDNode *&Result, bool IsDistinct) {
+  // The default constructed value for checksumkind is required, but will never
+  // be used, as the parser checks if the field was actually Seen before using
+  // the Val.
 #define VISIT_MD_FIELDS(OPTIONAL, REQUIRED)                                    \
   REQUIRED(filename, MDStringField, );                                         \
   REQUIRED(directory, MDStringField, );                                        \
-  OPTIONAL(checksumkind, ChecksumKindField, );                                 \
+  OPTIONAL(checksumkind, ChecksumKindField, (DIFile::CSK_MD5));                \
   OPTIONAL(checksum, MDStringField, );
   PARSE_MD_FIELDS();
 #undef VISIT_MD_FIELDS
 
+  Optional<DIFile::ChecksumInfo<MDString *>> OptChecksum;
+  if (checksumkind.Seen && checksum.Seen)
+    OptChecksum.emplace(checksumkind.Val, checksum.Val);
+  else if (checksumkind.Seen || checksum.Seen)
+    return Lex.Error("'checksumkind' and 'checksum' must be provided together");
+
   Result = GET_OR_DISTINCT(DIFile, (Context, filename.Val, directory.Val,
-                                    checksumkind.Val, checksum.Val));
+                                    OptChecksum));
   return false;
 }
 
@@ -4923,7 +5068,7 @@ bool LLParser::ParseFunctionHeader(Function *&Fn, bool isDefine) {
     NumberedVals.push_back(Fn);
 
   Fn->setLinkage((GlobalValue::LinkageTypes)Linkage);
-  Fn->setDSOLocal(DSOLocal);
+  maybeSetDSOLocal(DSOLocal, *Fn);
   Fn->setVisibility((GlobalValue::VisibilityTypes)Visibility);
   Fn->setDLLStorageClass((GlobalValue::DLLStorageClassTypes)DLLStorageClass);
   Fn->setCallingConv(CC);
@@ -6174,14 +6319,7 @@ int LLParser::ParseAlloc(Instruction *&Inst, PerFunctionState &PFS) {
   if (Size && !Size->getType()->isIntegerTy())
     return Error(SizeLoc, "element count must have integer type");
 
-  const DataLayout &DL = M->getDataLayout();
-  unsigned AS = DL.getAllocaAddrSpace();
-  if (AS != AddrSpace) {
-    // TODO: In the future it should be possible to specify addrspace per-alloca.
-    return Error(ASLoc, "address space must match datalayout");
-  }
-
-  AllocaInst *AI = new AllocaInst(Ty, AS, Size, Alignment);
+  AllocaInst *AI = new AllocaInst(Ty, AddrSpace, Size, Alignment);
   AI->setUsedWithInAlloca(IsInAlloca);
   AI->setSwiftError(IsSwiftError);
   Inst = AI;

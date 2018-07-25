@@ -15,10 +15,10 @@
 namespace llvm {
 
 class MCSymbolWasm : public MCSymbol {
-private:
   bool IsFunction = false;
   bool IsWeak = false;
   bool IsHidden = false;
+  bool IsComdat = false;
   std::string ModuleName;
   SmallVector<wasm::ValType, 1> Returns;
   SmallVector<wasm::ValType, 4> Params;
@@ -49,7 +49,11 @@ public:
   bool isHidden() const { return IsHidden; }
   void setHidden(bool isHidden) { IsHidden = isHidden; }
 
+  bool isComdat() const { return IsComdat; }
+  void setComdat(bool isComdat) { IsComdat = isComdat; }
+
   const StringRef getModuleName() const { return ModuleName; }
+  void setModuleName(StringRef Name) { ModuleName = Name; }
 
   const SmallVector<wasm::ValType, 1> &getReturns() const {
     assert(ReturnsSet);

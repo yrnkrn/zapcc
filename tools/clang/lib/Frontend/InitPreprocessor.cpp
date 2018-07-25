@@ -823,10 +823,6 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
   DefineFloatMacros(Builder, "FLT", &TI.getFloatFormat(), "F");
   DefineFloatMacros(Builder, "DBL", &TI.getDoubleFormat(), "");
   DefineFloatMacros(Builder, "LDBL", &TI.getLongDoubleFormat(), "L");
-  if (TI.hasFloat128Type())
-    // FIXME: Switch away from the non-standard "Q" when we can
-    DefineFloatMacros(Builder, "FLT128", &TI.getFloat128Format(), "Q");
-
 
   // Define a __POINTER_WIDTH__ macro for stdint.h.
   Builder.defineMacro("__POINTER_WIDTH__",
@@ -1027,8 +1023,8 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("_OPENMP", "201511");
     break;
   default:
-    // Default version is OpenMP 3.1
-    Builder.defineMacro("_OPENMP", "201107");
+    // Default version is OpenMP 3.1, in Simd only mode - 4.5
+    Builder.defineMacro("_OPENMP", LangOpts.OpenMPSimd ? "201511" : "201107");
     break;
   }
 

@@ -262,6 +262,10 @@ private:
       CurDiagStateLoc = SourceLocation();
     }
 
+    /// Produce a debugging dump of the diagnostic state.
+    LLVM_DUMP_METHOD void dump(SourceManager &SrcMgr,
+                               StringRef DiagName = StringRef()) const;
+
     /// Grab the most-recently-added state point.
     DiagState *getCurDiagState() const { return CurDiagState; }
     /// Get the location at which a diagnostic state was last added.
@@ -402,12 +406,17 @@ private:
 
 public:
   explicit DiagnosticsEngine(IntrusiveRefCntPtr<DiagnosticIDs> Diags,
-                             DiagnosticOptions *DiagOpts,
+                             IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
                              DiagnosticConsumer *client = nullptr,
                              bool ShouldOwnClient = true);
   DiagnosticsEngine(const DiagnosticsEngine &) = delete;
   DiagnosticsEngine &operator=(const DiagnosticsEngine &) = delete;
   ~DiagnosticsEngine();
+
+  LLVM_DUMP_METHOD void dump() const { DiagStatesByLoc.dump(*SourceMgr); }
+  LLVM_DUMP_METHOD void dump(StringRef DiagName) const {
+    DiagStatesByLoc.dump(*SourceMgr, DiagName);
+  }
 
   const IntrusiveRefCntPtr<DiagnosticIDs> &getDiagnosticIDs() const {
     return Diags;

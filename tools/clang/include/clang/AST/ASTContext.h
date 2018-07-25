@@ -1188,6 +1188,13 @@ public:
   /// \brief Change the result type of a function type once it is deduced.
   void adjustDeducedFunctionResultType(FunctionDecl *FD, QualType ResultType);
 
+  /// Get a function type and produce the equivalent function type with the
+  /// specified exception specification. Type sugar that can be present on a
+  /// declaration of a function with an exception specification is permitted
+  /// and preserved. Other type sugar (for instance, typedefs) is not.
+  QualType getFunctionTypeWithExceptionSpec(
+      QualType Orig, const FunctionProtoType::ExceptionSpecInfo &ESI);
+
   /// \brief Determine whether two function types are the same, ignoring
   /// exception specifications in cases where they're part of the type.
   bool hasSameFunctionTypeIgnoringExceptionSpec(QualType T, QualType U);
@@ -1197,6 +1204,10 @@ public:
   void adjustExceptionSpec(FunctionDecl *FD,
                            const FunctionProtoType::ExceptionSpecInfo &ESI,
                            bool AsWritten = false);
+
+  /// Determine whether a type is a class that should be detructed in the
+  /// callee function.
+  bool isParamDestroyedInCallee(QualType T) const;
 
   /// \brief Return the uniqued reference to the type for a complex
   /// number with the specified element type.
@@ -2658,6 +2669,12 @@ public:
   /// \returns true if the function/var must be CodeGen'ed/deserialized even if
   /// it is not used.
   bool DeclMustBeEmitted(const Decl *D);
+
+  /// \brief Visits all versions of a multiversioned function with the passed
+  /// predicate.
+  void forEachMultiversionedFunctionVersion(
+      const FunctionDecl *FD,
+      llvm::function_ref<void(const FunctionDecl *)> Pred) const;
 
   const CXXConstructorDecl *
   getCopyConstructorForExceptionObject(CXXRecordDecl *RD);

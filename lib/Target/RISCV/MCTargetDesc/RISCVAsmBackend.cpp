@@ -27,12 +27,13 @@ using namespace llvm;
 
 namespace {
 class RISCVAsmBackend : public MCAsmBackend {
+  const MCSubtargetInfo &STI;
   uint8_t OSABI;
   bool Is64Bit;
 
 public:
-  RISCVAsmBackend(uint8_t OSABI, bool Is64Bit)
-      : MCAsmBackend(), OSABI(OSABI), Is64Bit(Is64Bit) {}
+  RISCVAsmBackend(const MCSubtargetInfo &STI, uint8_t OSABI, bool Is64Bit)
+      : MCAsmBackend(), STI(STI), OSABI(OSABI), Is64Bit(Is64Bit) {}
   ~RISCVAsmBackend() override {}
 
   void applyFixup(const MCAssembler &Asm, const MCFixup &Fixup,
@@ -57,15 +58,17 @@ public:
       // This table *must* be in the order that the fixup_* kinds are defined in
       // RISCVFixupKinds.h.
       //
-      // name                    offset bits  flags
-      { "fixup_riscv_hi20",       12,     20,  0 },
-      { "fixup_riscv_lo12_i",     20,     12,  0 },
-      { "fixup_riscv_lo12_s",      0,     32,  0 },
-      { "fixup_riscv_pcrel_hi20", 12,     20,  MCFixupKindInfo::FKF_IsPCRel },
-      { "fixup_riscv_jal",        12,     20,  MCFixupKindInfo::FKF_IsPCRel },
-      { "fixup_riscv_branch",      0,     32,  MCFixupKindInfo::FKF_IsPCRel },
-      { "fixup_riscv_rvc_jump",    2,     11,  MCFixupKindInfo::FKF_IsPCRel },
-      { "fixup_riscv_rvc_branch",  0,     16,  MCFixupKindInfo::FKF_IsPCRel }
+      // name                      offset bits  flags
+      { "fixup_riscv_hi20",         12,     20,  0 },
+      { "fixup_riscv_lo12_i",       20,     12,  0 },
+      { "fixup_riscv_lo12_s",        0,     32,  0 },
+      { "fixup_riscv_pcrel_hi20",   12,     20,  MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_riscv_pcrel_lo12_i", 20,     12,  MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_riscv_pcrel_lo12_s",  0,     32,  MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_riscv_jal",          12,     20,  MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_riscv_branch",        0,     32,  MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_riscv_rvc_jump",      2,     11,  MCFixupKindInfo::FKF_IsPCRel },
+      { "fixup_riscv_rvc_branch",    0,     16,  MCFixupKindInfo::FKF_IsPCRel }
     };
 
     if (Kind < FirstTargetFixupKind)
@@ -88,14 +91,23 @@ public:
 };
 
 bool RISCVAsmBackend::writeNopData(uint64_t Count, MCObjectWriter *OW) const {
-  // Once support for the compressed instruction set is added, we will be able
-  // to conditionally support 16-bit NOPs
-  if ((Count % 4) != 0)
+  bool HasStdExtC = STI.getFeatureBits()[RISCV::FeatureStdExtC];
+  unsigned MinNopLen = HasStdExtC ? 2 : 4;
+
+  if ((Count % MinNopLen) != 0)
     return false;
 
-  // The canonical nop on RISC-V is addi x0, x0, 0
-  for (uint64_t i = 0; i < Count; i += 4)
+  // The canonical nop on RISC-V is addi x0, x0, 0.
+  uint64_t Nop32Count = Count / 4;
+  for (uint64_t i = Nop32Count; i != 0; --i)
     OW->write32(0x13);
+
+  // The canonical nop on RVC is c.nop.
+  if (HasStdExtC) {
+    uint64_t Nop16Count = (Count - Nop32Count * 4) / 2;
+    for (uint64_t i = Nop16Count; i != 0; --i)
+      OW->write16(0x01);
+  }
 
   return true;
 }
@@ -112,8 +124,10 @@ static uint64_t adjustFixupValue(const MCFixup &Fixup, uint64_t Value,
   case FK_Data_8:
     return Value;
   case RISCV::fixup_riscv_lo12_i:
+  case RISCV::fixup_riscv_pcrel_lo12_i:
     return Value & 0xfff;
   case RISCV::fixup_riscv_lo12_s:
+  case RISCV::fixup_riscv_pcrel_lo12_s:
     return (((Value >> 5) & 0x7f) << 25) | ((Value & 0x1f) << 7);
   case RISCV::fixup_riscv_hi20:
   case RISCV::fixup_riscv_pcrel_hi20:
@@ -230,9 +244,10 @@ RISCVAsmBackend::createObjectWriter(raw_pwrite_stream &OS) const {
 } // end anonymous namespace
 
 MCAsmBackend *llvm::createRISCVAsmBackend(const Target &T,
+                                          const MCSubtargetInfo &STI,
                                           const MCRegisterInfo &MRI,
-                                          const Triple &TT, StringRef CPU,
                                           const MCTargetOptions &Options) {
+  const Triple &TT = STI.getTargetTriple();
   uint8_t OSABI = MCELFObjectTargetWriter::getOSABI(TT.getOS());
-  return new RISCVAsmBackend(OSABI, TT.isArch64Bit());
+  return new RISCVAsmBackend(STI, OSABI, TT.isArch64Bit());
 }

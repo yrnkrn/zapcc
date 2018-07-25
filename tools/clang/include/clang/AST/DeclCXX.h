@@ -437,6 +437,11 @@ class CXXRecordDecl : public RecordDecl {
     /// which have been declared but not yet defined.
     unsigned HasTrivialSpecialMembers : 6;
 
+    /// These bits keep track of the triviality of special functions for the
+    /// purpose of calls. Only the bits corresponding to SMF_CopyConstructor,
+    /// SMF_MoveConstructor, and SMF_Destructor are meaningful here.
+    unsigned HasTrivialSpecialMembersForCall : 6;
+
     /// \brief The declared special members of this class which are known to be
     /// non-trivial.
     ///
@@ -444,6 +449,12 @@ class CXXRecordDecl : public RecordDecl {
     /// which have been declared but not yet defined, and any implicit special
     /// members which have not yet been declared.
     unsigned DeclaredNonTrivialSpecialMembers : 6;
+
+    /// These bits keep track of the declared special members that are
+    /// non-trivial for the purpose of calls.
+    /// Only the bits corresponding to SMF_CopyConstructor,
+    /// SMF_MoveConstructor, and SMF_Destructor are meaningful here.
+    unsigned DeclaredNonTrivialSpecialMembersForCall : 6;
 
     /// \brief True when this class has a destructor with no semantic effect.
     unsigned HasIrrelevantDestructor : 1;
@@ -1357,11 +1368,21 @@ public:
     return data().HasTrivialSpecialMembers & SMF_CopyConstructor;
   }
 
+  bool hasTrivialCopyConstructorForCall() const {
+    return data().HasTrivialSpecialMembersForCall & SMF_CopyConstructor;
+  }
+
   /// \brief Determine whether this class has a non-trivial copy constructor
   /// (C++ [class.copy]p6, C++11 [class.copy]p12)
   bool hasNonTrivialCopyConstructor() const {
     return data().DeclaredNonTrivialSpecialMembers & SMF_CopyConstructor ||
            !hasTrivialCopyConstructor();
+  }
+
+  bool hasNonTrivialCopyConstructorForCall() const {
+    return (data().DeclaredNonTrivialSpecialMembersForCall &
+            SMF_CopyConstructor) ||
+           !hasTrivialCopyConstructorForCall();
   }
 
   /// \brief Determine whether this class has a trivial move constructor
@@ -1371,12 +1392,24 @@ public:
            (data().HasTrivialSpecialMembers & SMF_MoveConstructor);
   }
 
+  bool hasTrivialMoveConstructorForCall() const {
+    return hasMoveConstructor() &&
+           (data().HasTrivialSpecialMembersForCall & SMF_MoveConstructor);
+  }
+
   /// \brief Determine whether this class has a non-trivial move constructor
   /// (C++11 [class.copy]p12)
   bool hasNonTrivialMoveConstructor() const {
     return (data().DeclaredNonTrivialSpecialMembers & SMF_MoveConstructor) ||
            (needsImplicitMoveConstructor() &&
             !(data().HasTrivialSpecialMembers & SMF_MoveConstructor));
+  }
+
+  bool hasNonTrivialMoveConstructorForCall() const {
+    return (data().DeclaredNonTrivialSpecialMembersForCall &
+            SMF_MoveConstructor) ||
+           (needsImplicitMoveConstructor() &&
+            !(data().HasTrivialSpecialMembersForCall & SMF_MoveConstructor));
   }
 
   /// \brief Determine whether this class has a trivial copy assignment operator
@@ -1413,10 +1446,23 @@ public:
     return data().HasTrivialSpecialMembers & SMF_Destructor;
   }
 
+  bool hasTrivialDestructorForCall() const {
+    return data().HasTrivialSpecialMembersForCall & SMF_Destructor;
+  }
+
   /// \brief Determine whether this class has a non-trivial destructor
   /// (C++ [class.dtor]p3)
   bool hasNonTrivialDestructor() const {
     return !(data().HasTrivialSpecialMembers & SMF_Destructor);
+  }
+
+  bool hasNonTrivialDestructorForCall() const {
+    return !(data().HasTrivialSpecialMembersForCall & SMF_Destructor);
+  }
+
+  void setHasTrivialSpecialMemberForCall() {
+    data().HasTrivialSpecialMembersForCall =
+        (SMF_CopyConstructor | SMF_MoveConstructor | SMF_Destructor);
   }
 
   /// \brief Determine whether declaring a const variable with this type is ok
@@ -1446,6 +1492,13 @@ public:
   // FIXME: This should be set as part of completeDefinition.
   void setCanPassInRegisters(bool CanPass) {
     data().CanPassInRegisters = CanPass;
+  }
+
+  /// Determine whether the triviality for the purpose of calls for this class
+  /// is overridden to be trivial because this class or the type of one of its
+  /// subobjects has attribute "trivial_abi".
+  bool hasTrivialABIOverride() const {
+    return canPassInRegisters() && hasNonTrivialDestructor();
   }
 
   /// \brief Determine whether this class has a non-literal or/ volatile type
@@ -1804,6 +1857,8 @@ public:
   /// \brief Indicates that the declaration of a defaulted or deleted special
   /// member function is now complete.
   void finishedDefaultedOrDeletedMember(CXXMethodDecl *MD);
+
+  void setTrivialForCallFlags(CXXMethodDecl *MD);
 
   /// \brief Indicates that the definition of this class is now complete.
   void completeDefinition() override;
@@ -3143,10 +3198,14 @@ public:
 
   /// \brief Sets the underlying declaration which has been brought into the
   /// local scope.
-  void setTargetDecl(NamedDecl* ND) {
+  void setTargetDecl(NamedDecl *ND) {
     assert(ND && "Target decl is null!");
     Underlying = ND;
-    IdentifierNamespace = ND->getIdentifierNamespace();
+    // A UsingShadowDecl is never a friend or local extern declaration, even
+    // if it is a shadow declaration for one.
+    IdentifierNamespace =
+        ND->getIdentifierNamespace() &
+        ~(IDNS_OrdinaryFriend | IDNS_TagFriend | IDNS_LocalExtern);
   }
 
   /// \brief Gets the using declaration to which this declaration is tied.

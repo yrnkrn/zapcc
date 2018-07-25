@@ -1150,10 +1150,30 @@ public:
   bool isToken() const override { return Kind == k_Token; }
   bool isMemBarrierOpt() const { return Kind == k_MemBarrierOpt; }
   bool isInstSyncBarrierOpt() const { return Kind == k_InstSyncBarrierOpt; }
-  bool isMem() const override { return Kind == k_Memory; }
+  bool isMem() const override {
+    if (Kind != k_Memory)
+      return false;
+    if (Memory.BaseRegNum &&
+        !ARMMCRegisterClasses[ARM::GPRRegClassID].contains(Memory.BaseRegNum))
+      return false;
+    if (Memory.OffsetRegNum &&
+        !ARMMCRegisterClasses[ARM::GPRRegClassID].contains(Memory.OffsetRegNum))
+      return false;
+    return true;
+  }
   bool isShifterImm() const { return Kind == k_ShifterImmediate; }
-  bool isRegShiftedReg() const { return Kind == k_ShiftedRegister; }
-  bool isRegShiftedImm() const { return Kind == k_ShiftedImmediate; }
+  bool isRegShiftedReg() const {
+    return Kind == k_ShiftedRegister &&
+           ARMMCRegisterClasses[ARM::GPRRegClassID].contains(
+               RegShiftedReg.SrcReg) &&
+           ARMMCRegisterClasses[ARM::GPRRegClassID].contains(
+               RegShiftedReg.ShiftReg);
+  }
+  bool isRegShiftedImm() const {
+    return Kind == k_ShiftedImmediate &&
+           ARMMCRegisterClasses[ARM::GPRRegClassID].contains(
+               RegShiftedImm.SrcReg);
+  }
   bool isRotImm() const { return Kind == k_RotateImmediate; }
   bool isModImm() const { return Kind == k_ModifiedImmediate; }
 
@@ -1192,9 +1212,12 @@ public:
 
   bool isConstantPoolImm() const { return Kind == k_ConstantPoolImmediate; }
   bool isBitfield() const { return Kind == k_BitfieldDescriptor; }
-  bool isPostIdxRegShifted() const { return Kind == k_PostIndexRegister; }
+  bool isPostIdxRegShifted() const {
+    return Kind == k_PostIndexRegister &&
+           ARMMCRegisterClasses[ARM::GPRRegClassID].contains(PostIdxReg.RegNum);
+  }
   bool isPostIdxReg() const {
-    return Kind == k_PostIndexRegister && PostIdxReg.ShiftTy ==ARM_AM::no_shift;
+    return isPostIdxRegShifted() && PostIdxReg.ShiftTy == ARM_AM::no_shift;
   }
   bool isMemNoOffset(bool alignOK = false, unsigned Alignment = 0) const {
     if (!isMem())
@@ -1331,10 +1354,10 @@ public:
   }
 
   bool isAM3Offset() const {
-    if (Kind != k_Immediate && Kind != k_PostIndexRegister)
+    if (isPostIdxReg())
+      return true;
+    if (!isImm())
       return false;
-    if (Kind == k_PostIndexRegister)
-      return PostIdxReg.ShiftTy == ARM_AM::no_shift;
     // Immediate offset in range [-255, 255].
     const MCConstantExpr *CE = dyn_cast<MCConstantExpr>(getImm());
     if (!CE) return false;
@@ -5581,11 +5604,11 @@ void ARMAsmParser::getMnemonicAcceptInfo(StringRef Mnemonic, StringRef FullInst,
     CanAcceptPredicationCode =
         Mnemonic != "cdp2" && Mnemonic != "clrex" && Mnemonic != "mcr2" &&
         Mnemonic != "mcrr2" && Mnemonic != "mrc2" && Mnemonic != "mrrc2" &&
-        Mnemonic != "dmb" && Mnemonic != "dsb" && Mnemonic != "isb" &&
-        Mnemonic != "pld" && Mnemonic != "pli" && Mnemonic != "pldw" &&
-        Mnemonic != "ldc2" && Mnemonic != "ldc2l" && Mnemonic != "stc2" &&
-        Mnemonic != "stc2l" && !Mnemonic.startswith("rfe") &&
-        !Mnemonic.startswith("srs");
+        Mnemonic != "dmb" && Mnemonic != "dfb" && Mnemonic != "dsb" &&
+        Mnemonic != "isb" && Mnemonic != "pld" && Mnemonic != "pli" &&
+        Mnemonic != "pldw" && Mnemonic != "ldc2" && Mnemonic != "ldc2l" &&
+        Mnemonic != "stc2" && Mnemonic != "stc2l" &&
+        !Mnemonic.startswith("rfe") && !Mnemonic.startswith("srs");
   } else if (isThumbOne()) {
     if (hasV6MOps())
       CanAcceptPredicationCode = Mnemonic != "movs";
@@ -6227,7 +6250,8 @@ bool ARMAsmParser::validateInstruction(MCInst &Inst,
     // The instruction must be predicable.
     if (!MCID.isPredicable())
       return Error(Loc, "instructions in IT block must be predicable");
-    unsigned Cond = Inst.getOperand(MCID.findFirstPredOperandIdx()).getImm();
+    ARMCC::CondCodes Cond = ARMCC::CondCodes(
+        Inst.getOperand(MCID.findFirstPredOperandIdx()).getImm());
     if (Cond != currentITCond()) {
       // Find the condition code Operand to get its SMLoc information.
       SMLoc CondLoc;
@@ -6235,9 +6259,9 @@ bool ARMAsmParser::validateInstruction(MCInst &Inst,
         if (static_cast<ARMOperand &>(*Operands[I]).isCondCode())
           CondLoc = Operands[I]->getStartLoc();
       return Error(CondLoc, "incorrect condition in IT block; got '" +
-                   StringRef(ARMCondCodeToString(ARMCC::CondCodes(Cond))) +
-                   "', but expected '" +
-                   ARMCondCodeToString(ARMCC::CondCodes(currentITCond())) + "'");
+                                StringRef(ARMCondCodeToString(Cond)) +
+                                "', but expected '" +
+                                ARMCondCodeToString(currentITCond()) + "'");
     }
   // Check for non-'al' condition codes outside of the IT block.
   } else if (isThumbTwo() && MCID.isPredicable() &&
@@ -6592,18 +6616,21 @@ bool ARMAsmParser::validateInstruction(MCInst &Inst,
     break;
   }
   case ARM::HINT:
-  case ARM::t2HINT:
-    if (hasRAS()) {
-      // ESB is not predicable (pred must be AL)
-      unsigned Imm8 = Inst.getOperand(0).getImm();
-      unsigned Pred = Inst.getOperand(1).getImm();
-      if (Imm8 == 0x10 && Pred != ARMCC::AL)
-        return Error(Operands[1]->getStartLoc(), "instruction 'esb' is not "
-                                                 "predicable, but condition "
-                                                 "code specified");
-    }
-    // Without the RAS extension, this behaves as any other unallocated hint.
+  case ARM::t2HINT: {
+    unsigned Imm8 = Inst.getOperand(0).getImm();
+    unsigned Pred = Inst.getOperand(1).getImm();
+    // ESB is not predicable (pred must be AL). Without the RAS extension, this
+    // behaves as any other unallocated hint.
+    if (Imm8 == 0x10 && Pred != ARMCC::AL && hasRAS())
+      return Error(Operands[1]->getStartLoc(), "instruction 'esb' is not "
+                                               "predicable, but condition "
+                                               "code specified");
+    if (Imm8 == 0x14 && Pred != ARMCC::AL)
+      return Error(Operands[1]->getStartLoc(), "instruction 'csdb' is not "
+                                               "predicable, but condition "
+                                               "code specified");
     break;
+  }
   }
 
   return false;
@@ -10202,6 +10229,8 @@ ARMAsmParser::FilterNearMisses(SmallVectorImpl<NearMissInfo> &NearMissesIn,
         break;
       if (!isThumb() && (MissingFeatures & Feature_IsThumb2) &&
           (MissingFeatures & ~(Feature_IsThumb2 | Feature_IsThumb)))
+        break;
+      if (isMClass() && (MissingFeatures & Feature_HasNEON))
         break;
 
       NearMissMessage Message;

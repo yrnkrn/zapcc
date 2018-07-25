@@ -193,16 +193,20 @@ public:
   bool hasAssociatedStmt() const { return NumChildren > 0; }
 
   /// \brief Returns statement associated with the directive.
-  Stmt *getAssociatedStmt() const {
+  const Stmt *getAssociatedStmt() const {
     assert(hasAssociatedStmt() && "no associated statement.");
-    return const_cast<Stmt *>(*child_begin());
+    return *child_begin();
+  }
+  Stmt *getAssociatedStmt() {
+    assert(hasAssociatedStmt() && "no associated statement.");
+    return *child_begin();
   }
 
   /// \brief Returns the captured statement associated with the
   /// component region within the (combined) directive.
   //
   // \param RegionKind Component region kind.
-  CapturedStmt *getCapturedStmt(OpenMPDirectiveKind RegionKind) const {
+  const CapturedStmt *getCapturedStmt(OpenMPDirectiveKind RegionKind) const {
     SmallVector<OpenMPDirectiveKind, 4> CaptureRegions;
     getOpenMPCaptureRegions(CaptureRegions, getDirectiveKind());
     assert(std::any_of(
@@ -216,6 +220,25 @@ public:
       CS = cast<CapturedStmt>(CS->getCapturedStmt());
     }
     llvm_unreachable("Incorrect RegionKind specified for directive.");
+  }
+
+  /// Get innermost captured statement for the construct.
+  CapturedStmt *getInnermostCapturedStmt() {
+    assert(hasAssociatedStmt() && getAssociatedStmt() &&
+           "Must have associated statement.");
+    SmallVector<OpenMPDirectiveKind, 4> CaptureRegions;
+    getOpenMPCaptureRegions(CaptureRegions, getDirectiveKind());
+    assert(!CaptureRegions.empty() &&
+           "At least one captured statement must be provided.");
+    auto *CS = cast<CapturedStmt>(getAssociatedStmt());
+    for (unsigned Level = CaptureRegions.size(); Level > 1; --Level)
+      CS = cast<CapturedStmt>(CS->getCapturedStmt());
+    return CS;
+  }
+
+  const CapturedStmt *getInnermostCapturedStmt() const {
+    return const_cast<OMPExecutableDirective *>(this)
+        ->getInnermostCapturedStmt();
   }
 
   OpenMPDirectiveKind getDirectiveKind() const { return Kind; }
@@ -899,9 +922,8 @@ public:
   }
   const Stmt *getBody() const {
     // This relies on the loop form is already checked by Sema.
-    const Stmt *Body = getAssociatedStmt()->IgnoreContainers(true);
-    while(const auto *CS = dyn_cast<CapturedStmt>(Body))
-      Body = CS->getCapturedStmt();
+    const Stmt *Body =
+        getInnermostCapturedStmt()->getCapturedStmt()->IgnoreContainers();
     Body = cast<ForStmt>(Body)->getBody();
     for (unsigned Cnt = 1; Cnt < CollapsedNum; ++Cnt) {
       Body = Body->IgnoreContainers();

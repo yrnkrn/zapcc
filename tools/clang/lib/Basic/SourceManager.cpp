@@ -125,11 +125,12 @@ llvm::MemoryBuffer *ContentCache::getBuffer(DiagnosticsEngine &Diag,
   // possible.
   if (!BufferOrError) {
     StringRef FillStr("<<<MISSING SOURCE FILE>>>\n");
-    Buffer.setPointer(MemoryBuffer::getNewUninitMemBuffer(
-                          ContentsEntry->getSize(), "<invalid>").release());
-    char *Ptr = const_cast<char*>(Buffer.getPointer()->getBufferStart());
+    auto BackupBuffer = llvm::WritableMemoryBuffer::getNewUninitMemBuffer(
+        ContentsEntry->getSize(), "<invalid>");
+    char *Ptr = BackupBuffer->getBufferStart();
     for (unsigned i = 0, e = ContentsEntry->getSize(); i != e; ++i)
       Ptr[i] = FillStr[i % FillStr.size()];
+    Buffer.setPointer(BackupBuffer.release());
 
     if (Diag.isDiagnosticInFlight())
       Diag.SetDelayedDiagnostic(diag::err_cannot_open_file,
@@ -955,6 +956,12 @@ SourceManager::getImmediateExpansionRange(SourceLocation Loc) const {
   assert(Loc.isMacroID() && "Not a macro expansion loc!");
   const ExpansionInfo &Expansion = getSLocEntry(getFileID(Loc)).getExpansion();
   return Expansion.getExpansionLocRange();
+}
+
+SourceLocation SourceManager::getTopMacroCallerLoc(SourceLocation Loc) const {
+  while (isMacroArgExpansion(Loc))
+    Loc = getImmediateSpellingLoc(Loc);
+  return Loc;
 }
 
 /// getExpansionRange - Given a SourceLocation object, return the range of

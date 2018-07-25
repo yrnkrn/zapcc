@@ -32,6 +32,7 @@
 #include "clang/Basic/VirtualFileSystem.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Path.h"
@@ -101,6 +102,14 @@ template <> struct ScalarEnumerationTraits<FormatStyle::ShortFunctionStyle> {
     IO.enumCase(Value, "Inline", FormatStyle::SFS_Inline);
     IO.enumCase(Value, "InlineOnly", FormatStyle::SFS_InlineOnly);
     IO.enumCase(Value, "Empty", FormatStyle::SFS_Empty);
+  }
+};
+
+template <> struct ScalarEnumerationTraits<FormatStyle::BinPackStyle> {
+  static void enumeration(IO &IO, FormatStyle::BinPackStyle &Value) {
+    IO.enumCase(Value, "Auto", FormatStyle::BPS_Auto);
+    IO.enumCase(Value, "Always", FormatStyle::BPS_Always);
+    IO.enumCase(Value, "Never", FormatStyle::BPS_Never);
   }
 };
 
@@ -377,6 +386,7 @@ template <> struct MappingTraits<FormatStyle> {
     IO.mapOptional("MacroBlockEnd", Style.MacroBlockEnd);
     IO.mapOptional("MaxEmptyLinesToKeep", Style.MaxEmptyLinesToKeep);
     IO.mapOptional("NamespaceIndentation", Style.NamespaceIndentation);
+    IO.mapOptional("ObjCBinPackProtocolList", Style.ObjCBinPackProtocolList);
     IO.mapOptional("ObjCBlockIndentWidth", Style.ObjCBlockIndentWidth);
     IO.mapOptional("ObjCSpaceAfterProperty", Style.ObjCSpaceAfterProperty);
     IO.mapOptional("ObjCSpaceBeforeProtocolList",
@@ -455,8 +465,10 @@ template <> struct ScalarEnumerationTraits<FormatStyle::IncludeBlocksStyle> {
 
 template <> struct MappingTraits<FormatStyle::RawStringFormat> {
   static void mapping(IO &IO, FormatStyle::RawStringFormat &Format) {
-    IO.mapOptional("Delimiter", Format.Delimiter);
     IO.mapOptional("Language", Format.Language);
+    IO.mapOptional("Delimiters", Format.Delimiters);
+    IO.mapOptional("EnclosingFunctions", Format.EnclosingFunctions);
+    IO.mapOptional("CanonicalDelimiter", Format.CanonicalDelimiter);
     IO.mapOptional("BasedOnStyle", Format.BasedOnStyle);
   }
 };
@@ -634,6 +646,7 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.MaxEmptyLinesToKeep = 1;
   LLVMStyle.KeepEmptyLinesAtTheStartOfBlocks = true;
   LLVMStyle.NamespaceIndentation = FormatStyle::NI_None;
+  LLVMStyle.ObjCBinPackProtocolList = FormatStyle::BPS_Auto;
   LLVMStyle.ObjCBlockIndentWidth = 2;
   LLVMStyle.ObjCSpaceAfterProperty = false;
   LLVMStyle.ObjCSpaceBeforeProtocolList = true;
@@ -641,7 +654,6 @@ FormatStyle getLLVMStyle() {
   LLVMStyle.SpacesBeforeTrailingComments = 1;
   LLVMStyle.Standard = FormatStyle::LS_Cpp11;
   LLVMStyle.UseTab = FormatStyle::UT_Never;
-  LLVMStyle.RawStringFormats = {{"pb", FormatStyle::LK_TextProto, "google"}};
   LLVMStyle.ReflowComments = true;
   LLVMStyle.SpacesInParentheses = false;
   LLVMStyle.SpacesInSquareBrackets = false;
@@ -673,6 +685,7 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
   if (Language == FormatStyle::LK_TextProto) {
     FormatStyle GoogleStyle = getGoogleStyle(FormatStyle::LK_Proto);
     GoogleStyle.Language = FormatStyle::LK_TextProto;
+
     return GoogleStyle;
   }
 
@@ -692,9 +705,22 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
   GoogleStyle.IncludeIsMainRegex = "([-_](test|unittest))?$";
   GoogleStyle.IndentCaseLabels = true;
   GoogleStyle.KeepEmptyLinesAtTheStartOfBlocks = false;
+  GoogleStyle.ObjCBinPackProtocolList = FormatStyle::BPS_Never;
   GoogleStyle.ObjCSpaceAfterProperty = false;
-  GoogleStyle.ObjCSpaceBeforeProtocolList = false;
+  GoogleStyle.ObjCSpaceBeforeProtocolList = true;
   GoogleStyle.PointerAlignment = FormatStyle::PAS_Left;
+  GoogleStyle.RawStringFormats = {{
+      FormatStyle::LK_TextProto,
+      /*Delimiters=*/
+      {
+          "pb",
+          "PB",
+      },
+      /*EnclosingFunctionNames=*/
+      {},
+      /*CanonicalDelimiter=*/"",
+      /*BasedOnStyle=*/"google",
+  }};
   GoogleStyle.SpacesBeforeTrailingComments = 2;
   GoogleStyle.Standard = FormatStyle::LS_Auto;
 
@@ -730,6 +756,13 @@ FormatStyle getGoogleStyle(FormatStyle::LanguageKind Language) {
   } else if (Language == FormatStyle::LK_Proto) {
     GoogleStyle.AllowShortFunctionsOnASingleLine = FormatStyle::SFS_None;
     GoogleStyle.SpacesInContainerLiterals = false;
+    GoogleStyle.Cpp11BracedListStyle = false;
+    // This affects protocol buffer options specifications and text protos.
+    // Text protos are currently mostly formatted inside C++ raw string literals
+    // and often the current breaking behavior of string literals is not
+    // beneficial there. Investigate turning this on once proper string reflow
+    // has been implemented.
+    GoogleStyle.BreakStringLiterals = false;
   } else if (Language == FormatStyle::LK_ObjC) {
     GoogleStyle.ColumnLimit = 100;
   }
@@ -859,7 +892,7 @@ std::error_code parseConfiguration(StringRef Text, FormatStyle *Style) {
   assert(Language != FormatStyle::LK_None);
   if (Text.trim().empty())
     return make_error_code(ParseError::Error);
-
+  Style->StyleSet.Clear();
   std::vector<FormatStyle> Styles;
   llvm::yaml::Input Input(Text);
   // DocumentListTraits<vector<FormatStyle>> uses the context to get default
@@ -888,15 +921,23 @@ std::error_code parseConfiguration(StringRef Text, FormatStyle *Style) {
   // Look for a suitable configuration starting from the end, so we can
   // find the configuration for the specific language first, and the default
   // configuration (which can only be at slot 0) after it.
+  FormatStyle::FormatStyleSet StyleSet;
+  bool LanguageFound = false;
   for (int i = Styles.size() - 1; i >= 0; --i) {
-    if (Styles[i].Language == Language ||
-        Styles[i].Language == FormatStyle::LK_None) {
-      *Style = Styles[i];
-      Style->Language = Language;
-      return make_error_code(ParseError::Success);
-    }
+    if (Styles[i].Language != FormatStyle::LK_None)
+      StyleSet.Add(Styles[i]);
+    if (Styles[i].Language == Language)
+      LanguageFound = true;
   }
-  return make_error_code(ParseError::Unsuitable);
+  if (!LanguageFound) {
+    if (Styles.empty() || Styles[0].Language != FormatStyle::LK_None)
+      return make_error_code(ParseError::Unsuitable);
+    FormatStyle DefaultStyle = Styles[0];
+    DefaultStyle.Language = Language;
+    StyleSet.Add(std::move(DefaultStyle));
+  }
+  *Style = *StyleSet.Get(Language);
+  return make_error_code(ParseError::Success);
 }
 
 std::string configurationAsText(const FormatStyle &Style) {
@@ -908,6 +949,38 @@ std::string configurationAsText(const FormatStyle &Style) {
   FormatStyle NonConstStyle = expandPresets(Style);
   Output << NonConstStyle;
   return Stream.str();
+}
+
+llvm::Optional<FormatStyle>
+FormatStyle::FormatStyleSet::Get(FormatStyle::LanguageKind Language) const {
+  if (!Styles)
+    return None;
+  auto It = Styles->find(Language);
+  if (It == Styles->end())
+    return None;
+  FormatStyle Style = It->second;
+  Style.StyleSet = *this;
+  return Style;
+}
+
+void FormatStyle::FormatStyleSet::Add(FormatStyle Style) {
+  assert(Style.Language != LK_None &&
+         "Cannot add a style for LK_None to a StyleSet");
+  assert(
+      !Style.StyleSet.Styles &&
+      "Cannot add a style associated with an existing StyleSet to a StyleSet");
+  if (!Styles)
+    Styles = std::make_shared<MapType>();
+  (*Styles)[Style.Language] = std::move(Style);
+}
+
+void FormatStyle::FormatStyleSet::Clear() {
+  Styles.reset();
+}
+
+llvm::Optional<FormatStyle>
+FormatStyle::GetLanguageStyle(FormatStyle::LanguageKind Language) const {
+  return StyleSet.Get(Language);
 }
 
 namespace {
@@ -1339,6 +1412,103 @@ private:
 
   // Tokens to be deleted.
   std::set<FormatToken *, FormatTokenLess> DeletedTokens;
+};
+
+class ObjCHeaderStyleGuesser : public TokenAnalyzer {
+public:
+  ObjCHeaderStyleGuesser(const Environment &Env, const FormatStyle &Style)
+      : TokenAnalyzer(Env, Style), IsObjC(false) {}
+
+  std::pair<tooling::Replacements, unsigned>
+  analyze(TokenAnnotator &Annotator,
+          SmallVectorImpl<AnnotatedLine *> &AnnotatedLines,
+          FormatTokenLexer &Tokens) override {
+    assert(Style.Language == FormatStyle::LK_Cpp);
+    IsObjC = guessIsObjC(AnnotatedLines, Tokens.getKeywords());
+    tooling::Replacements Result;
+    return {Result, 0};
+  }
+
+  bool isObjC() { return IsObjC; }
+
+private:
+  static bool guessIsObjC(const SmallVectorImpl<AnnotatedLine *> &AnnotatedLines,
+                          const AdditionalKeywords &Keywords) {
+    // Keep this array sorted, since we are binary searching over it.
+    static constexpr llvm::StringLiteral FoundationIdentifiers[] = {
+        "CGFloat",
+        "NSAffineTransform",
+        "NSArray",
+        "NSAttributedString",
+        "NSCache",
+        "NSCharacterSet",
+        "NSCountedSet",
+        "NSData",
+        "NSDataDetector",
+        "NSDecimal",
+        "NSDecimalNumber",
+        "NSDictionary",
+        "NSEdgeInsets",
+        "NSHashTable",
+        "NSIndexPath",
+        "NSIndexSet",
+        "NSInteger",
+        "NSLocale",
+        "NSMapTable",
+        "NSMutableArray",
+        "NSMutableAttributedString",
+        "NSMutableCharacterSet",
+        "NSMutableData",
+        "NSMutableDictionary",
+        "NSMutableIndexSet",
+        "NSMutableOrderedSet",
+        "NSMutableSet",
+        "NSMutableString",
+        "NSNumber",
+        "NSNumberFormatter",
+        "NSOrderedSet",
+        "NSPoint",
+        "NSPointerArray",
+        "NSRange",
+        "NSRect",
+        "NSRegularExpression",
+        "NSSet",
+        "NSSize",
+        "NSString",
+        "NSUInteger",
+        "NSURL",
+        "NSURLComponents",
+        "NSURLQueryItem",
+        "NSUUID",
+    };
+
+    for (auto &Line : AnnotatedLines) {
+      for (FormatToken *FormatTok = Line->First->Next; FormatTok;
+           FormatTok = FormatTok->Next) {
+        if ((FormatTok->Previous->is(tok::at) &&
+             (FormatTok->isObjCAtKeyword(tok::objc_interface) ||
+              FormatTok->isObjCAtKeyword(tok::objc_implementation) ||
+              FormatTok->isObjCAtKeyword(tok::objc_protocol) ||
+              FormatTok->isObjCAtKeyword(tok::objc_end) ||
+              FormatTok->isOneOf(tok::numeric_constant, tok::l_square,
+                                 tok::l_brace))) ||
+            (FormatTok->Tok.isAnyIdentifier() &&
+             std::binary_search(std::begin(FoundationIdentifiers),
+                                std::end(FoundationIdentifiers),
+                                FormatTok->TokenText)) ||
+            FormatTok->is(TT_ObjCStringLiteral) ||
+            FormatTok->isOneOf(Keywords.kw_NS_ENUM, Keywords.kw_NS_OPTIONS,
+                               TT_ObjCBlockLBrace, TT_ObjCBlockLParen,
+                               TT_ObjCDecl, TT_ObjCForIn, TT_ObjCMethodExpr,
+                               TT_ObjCMethodSpecifier, TT_ObjCProperty)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  bool IsObjC;
 };
 
 struct IncludeDirective {
@@ -2126,14 +2296,15 @@ llvm::Expected<FormatStyle> getStyle(StringRef StyleName, StringRef FileName,
   FormatStyle Style = getLLVMStyle();
   Style.Language = getLanguageByFileName(FileName);
 
-  // This is a very crude detection of whether a header contains ObjC code that
-  // should be improved over time and probably be done on tokens, not one the
-  // bare content of the file.
-  if (Style.Language == FormatStyle::LK_Cpp && FileName.endswith(".h") &&
-      (Code.contains("\n- (") || Code.contains("\n+ (") ||
-       Code.contains("\n@end\n") || Code.contains("\n@end ") ||
-       Code.endswith("@end")))
-    Style.Language = FormatStyle::LK_ObjC;
+  if (Style.Language == FormatStyle::LK_Cpp && FileName.endswith(".h")) {
+    std::unique_ptr<Environment> Env =
+        Environment::CreateVirtualEnvironment(Code, FileName, /*Ranges=*/{});
+    ObjCHeaderStyleGuesser Guesser(*Env, Style);
+    Guesser.process();
+    if (Guesser.isObjC()) {
+      Style.Language = FormatStyle::LK_ObjC;
+    }
+  }
 
   FormatStyle FallbackStyle = getNoStyle();
   if (!getPredefinedStyle(FallbackStyleName, Style.Language, &FallbackStyle))

@@ -221,6 +221,45 @@ which is equivalent to just
         .section .foo,"a",@progbits
         .section .bar,"ao",@progbits,.foo
 
+``.linker-options`` Section (linker options)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In order to support passing linker options from the frontend to the linker, a
+special section of type ``SHT_LLVM_LINKER_OPTIONS`` (usually named
+``.linker-options`` though the name is not significant as it is identified by
+the type).  The contents of this section is a simple pair-wise encoding of
+directives for consideration by the linker.  The strings are encoded as standard
+null-terminated UTF-8 strings.  They are emitted inline to avoid having the
+linker traverse the object file for retrieving the value.  The linker is
+permitted to not honour the option and instead provide a warning/error to the
+user that the requested option was not honoured.
+
+The section has type ``SHT_LLVM_LINKER_OPTIONS`` and has the ``SHF_EXCLUDE``
+flag to ensure that the section is treated as opaque by linkers which do not
+support the feature and will not be emitted into the final linked binary.
+
+This would be equivalent to the follow raw assembly:
+
+.. code-block:: gas
+
+  .section ".linker-options","e",@llvm_linker_options
+  .asciz "option 1"
+  .asciz "value 1"
+  .asciz "option 2"
+  .asciz "value 2"
+
+The following directives are specified:
+
+  - lib
+
+    The parameter identifies a library to be linked against.  The library will
+    be looked up in the default and any specified library search paths
+    (specified to this point).
+
+  - libpath
+
+    The paramter identifies an additional library search path to be considered
+    when looking up libraries after the inclusion of this option.
 
 Target Specific Behaviour
 =========================
@@ -287,4 +326,32 @@ properly.  The emission of this stack probe emission is handled similar to the
 standard stack probe emission.
 
 The MSVC environment does not emit code for VLAs currently.
+
+Windows on ARM64
+----------------
+
+Stack Probe Emission
+^^^^^^^^^^^^^^^^^^^^
+
+The reference implementation (Microsoft Visual Studio 2017) emits stack probes
+in the following fashion:
+
+.. code-block:: gas
+
+  mov x15, #constant
+  bl __chkstk
+  sub sp, sp, x15, lsl #4
+
+However, this has the limitation of 256 MiB (±128MiB).  In order to accommodate
+larger binaries, LLVM supports the use of ``-mcode-model=large`` to allow a 8GiB
+(±4GiB) range via a slight deviation.  It will generate an indirect jump as
+follows:
+
+.. code-block:: gas
+
+  mov x15, #constant
+  adrp x16, __chkstk
+  add x16, x16, :lo12:__chkstk
+  blr x16
+  sub sp, sp, x15, lsl #4
 

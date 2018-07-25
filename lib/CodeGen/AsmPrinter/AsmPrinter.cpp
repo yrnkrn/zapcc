@@ -16,6 +16,7 @@
 #include "CodeViewDebug.h"
 #include "DwarfDebug.h"
 #include "DwarfException.h"
+#include "WinCFGuard.h"
 #include "WinException.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
@@ -130,6 +131,8 @@ static const char *const DbgTimerName = "emit";
 static const char *const DbgTimerDescription = "Debug Info Emission";
 static const char *const EHTimerName = "write_exception";
 static const char *const EHTimerDescription = "DWARF Exception Writer";
+static const char *const CFGuardName = "Control Flow Guard";
+static const char *const CFGuardDescription = "Control Flow Guard Tables";
 static const char *const CodeViewLineTablesGroupName = "linetables";
 static const char *const CodeViewLineTablesGroupDescription =
   "CodeView Line Tables";
@@ -356,6 +359,13 @@ bool AsmPrinter::doInitialization(Module &M) {
   if (ES)
     Handlers.push_back(HandlerInfo(ES, EHTimerName, EHTimerDescription,
                                    DWARFGroupName, DWARFGroupDescription));
+
+  if (mdconst::extract_or_null<ConstantInt>(
+          MMI->getModule()->getModuleFlag("cfguard")))
+    Handlers.push_back(HandlerInfo(new WinCFGuard(this), CFGuardName,
+                                   CFGuardDescription, DWARFGroupName,
+                                   DWARFGroupDescription));
+
   return false;
 }
 
@@ -970,8 +980,7 @@ void AsmPrinter::emitStackSizeSection(const MachineFunction &MF) {
 
   const MCSymbol *FunctionSymbol = getSymbol(&MF.getFunction());
   uint64_t StackSize = FrameInfo.getStackSize();
-  OutStreamer->EmitValue(MCSymbolRefExpr::create(FunctionSymbol, OutContext),
-                         /* size = */ 8);
+  OutStreamer->EmitSymbolValue(FunctionSymbol, TM.getPointerSize());
   OutStreamer->EmitULEB128IntValue(StackSize);
 
   OutStreamer->PopSection();
@@ -1428,6 +1437,52 @@ bool AsmPrinter::doFinalization(Module &M) {
   if (!InitTrampolineIntrinsic || InitTrampolineIntrinsic->use_empty())
     if (MCSection *S = MAI->getNonexecutableStackSection(OutContext))
       OutStreamer->SwitchSection(S);
+
+  if (TM.getTargetTriple().isOSBinFormatCOFF()) {
+    // Emit /EXPORT: flags for each exported global as necessary.
+    const auto &TLOF = getObjFileLowering();
+    std::string Flags;
+
+    for (const GlobalValue &GV : M.global_values()) {
+      raw_string_ostream OS(Flags);
+      TLOF.emitLinkerFlagsForGlobal(OS, &GV);
+      OS.flush();
+      if (!Flags.empty()) {
+        OutStreamer->SwitchSection(TLOF.getDrectveSection());
+        OutStreamer->EmitBytes(Flags);
+      }
+      Flags.clear();
+    }
+
+    // Emit /INCLUDE: flags for each used global as necessary.
+    if (const auto *LU = M.getNamedGlobal("llvm.used")) {
+      assert(LU->hasInitializer() &&
+             "expected llvm.used to have an initializer");
+      assert(isa<ArrayType>(LU->getValueType()) &&
+             "expected llvm.used to be an array type");
+      if (const auto *A = cast<ConstantArray>(LU->getInitializer())) {
+        for (const Value *Op : A->operands()) {
+          const auto *GV =
+              cast<GlobalValue>(Op->stripPointerCastsNoFollowAliases());
+          // Global symbols with internal or private linkage are not visible to
+          // the linker, and thus would cause an error when the linker tried to
+          // preserve the symbol due to the `/include:` directive.
+          if (GV->hasLocalLinkage())
+            continue;
+
+          raw_string_ostream OS(Flags);
+          TLOF.emitLinkerFlagsForUsed(OS, GV);
+          OS.flush();
+
+          if (!Flags.empty()) {
+            OutStreamer->SwitchSection(TLOF.getDrectveSection());
+            OutStreamer->EmitBytes(Flags);
+          }
+          Flags.clear();
+        }
+      }
+    }
+  }
 
   // Allow the target to emit any magic that it wants at the end of the file,
   // after everything else has gone out.
@@ -2041,6 +2096,7 @@ const MCExpr *AsmPrinter::lowerConstant(const Constant *CV) {
     }
   }
   // else fallthrough
+  LLVM_FALLTHROUGH;
 
   // The MC library also has a right-shift operator, but it isn't consistently
   // signed or unsigned between different targets.

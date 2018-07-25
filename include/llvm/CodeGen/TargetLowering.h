@@ -800,7 +800,7 @@ public:
   }
 
   /// Return true if lowering to a jump table is allowed.
-  bool areJTsAllowed(const Function *Fn) const {
+  virtual bool areJTsAllowed(const Function *Fn) const {
     if (Fn->getFnAttribute("no-jump-tables").getValueAsString() == "true")
       return false;
 
@@ -820,12 +820,12 @@ public:
   /// Return true if lowering to a jump table is suitable for a set of case
   /// clusters which may contain \p NumCases cases, \p Range range of values.
   /// FIXME: This function check the maximum table size and density, but the
-  /// minimum size is not checked. It would be nice if the the minimum size is
+  /// minimum size is not checked. It would be nice if the minimum size is
   /// also combined within this function. Currently, the minimum size check is
   /// performed in findJumpTable() in SelectionDAGBuiler and
   /// getEstimatedNumberOfCaseClusters() in BasicTTIImpl.
-  bool isSuitableForJumpTable(const SwitchInst *SI, uint64_t NumCases,
-                              uint64_t Range) const {
+  virtual bool isSuitableForJumpTable(const SwitchInst *SI, uint64_t NumCases,
+                                      uint64_t Range) const {
     const bool OptForSize = SI->getParent()->getParent()->optForSize();
     const unsigned MinDensity = getMinimumJumpTableDensity(OptForSize);
     const unsigned MaxJumpTableSize =
@@ -1202,6 +1202,18 @@ public:
     return OptSize ? MaxLoadsPerMemcmpOptSize : MaxLoadsPerMemcmp;
   }
 
+  /// For memcmp expansion when the memcmp result is only compared equal or
+  /// not-equal to 0, allow up to this number of load pairs per block. As an
+  /// example, this may allow 'memcmp(a, b, 3) == 0' in a single block:
+  ///   a0 = load2bytes &a[0]
+  ///   b0 = load2bytes &b[0]
+  ///   a2 = load1byte  &a[2]
+  ///   b2 = load1byte  &b[2]
+  ///   r  = cmp eq (a0 ^ b0 | a2 ^ b2), 0
+  virtual unsigned getMemcmpEqZeroLoadsPerBlock() const {
+    return 1;
+  }
+
   /// \brief Get maximum # of store operations permitted for llvm.memmove
   ///
   /// This function returns the maximum number of store operations permitted
@@ -1276,7 +1288,7 @@ public:
   }
 
   /// Return lower limit for number of blocks in a jump table.
-  unsigned getMinimumJumpTableEntries() const;
+  virtual unsigned getMinimumJumpTableEntries() const;
 
   /// Return lower limit of the density in a jump table.
   unsigned getMinimumJumpTableDensity(bool OptForSize) const;
@@ -2429,7 +2441,7 @@ private:
     PromoteToType;
 
   /// Stores the name each libcall.
-  const char *LibcallRoutineNames[RTLIB::UNKNOWN_LIBCALL];
+  const char *LibcallRoutineNames[RTLIB::UNKNOWN_LIBCALL + 1];
 
   /// The ISD::CondCode that should be used to test the result of each of the
   /// comparison libcall against zero.
@@ -2437,6 +2449,9 @@ private:
 
   /// Stores the CallingConv that should be used for each libcall.
   CallingConv::ID LibcallCallingConvs[RTLIB::UNKNOWN_LIBCALL];
+
+  /// Set default libcall names and calling conventions.
+  void InitLibcalls(const Triple &TT);
 
 protected:
   /// Return true if the extension represented by \p I is free.
@@ -2517,6 +2532,11 @@ protected:
   /// sequence of memory operands that is recognized by PrologEpilogInserter.
   MachineBasicBlock *emitPatchPoint(MachineInstr &MI,
                                     MachineBasicBlock *MBB) const;
+
+  /// Replace/modify the XRay custom event operands with target-dependent
+  /// details.
+  MachineBasicBlock *emitXRayCustomEvent(MachineInstr &MI,
+                                         MachineBasicBlock *MBB) const;
 };
 
 /// This class defines information used to lower LLVM code to legal SelectionDAG
@@ -2749,10 +2769,6 @@ public:
   /// Return if the N is a constant or constant vector equal to the false value
   /// from getBooleanContents().
   bool isConstFalseVal(const SDNode *N) const;
-
-  /// Return a constant of type VT that contains a true value that respects
-  /// getBooleanContents()
-  SDValue getConstTrueVal(SelectionDAG &DAG, EVT VT, const SDLoc &DL) const;
 
   /// Return if \p N is a True value when extended to \p VT.
   bool isExtendedTrueVal(const ConstantSDNode *N, EVT VT, bool Signed) const;

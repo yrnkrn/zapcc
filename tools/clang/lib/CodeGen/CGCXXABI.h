@@ -418,8 +418,7 @@ public:
 
   /// Build a virtual function pointer in the ABI-specific way.
   virtual CGCallee getVirtualFunctionPointer(CodeGenFunction &CGF,
-                                             GlobalDecl GD,
-                                             Address This,
+                                             GlobalDecl GD, Address This,
                                              llvm::Type *Ty,
                                              SourceLocation Loc) = 0;
 

@@ -91,6 +91,9 @@ static DecodeStatus DecodeZPRRegisterClass(MCInst &Inst, unsigned RegNo,
 static DecodeStatus DecodePPRRegisterClass(MCInst &Inst, unsigned RegNo,
                                            uint64_t Address,
                                            const void *Decode);
+static DecodeStatus DecodePPR_3bRegisterClass(MCInst &Inst, unsigned RegNo,
+                                              uint64_t Address,
+                                              const void *Decode);
 
 static DecodeStatus DecodeFixedPointScaleImm32(MCInst &Inst, unsigned Imm,
                                                uint64_t Address,
@@ -185,6 +188,10 @@ static DecodeStatus DecodeXSeqPairsClassRegisterClass(MCInst &Inst,
                                                       unsigned RegNo,
                                                       uint64_t Addr,
                                                       const void *Decoder);
+static DecodeStatus DecodeSVELogicalImmInstruction(llvm::MCInst &Inst,
+                                                   uint32_t insn,
+                                                   uint64_t Address,
+                                                   const void *Decoder);
 template<int Bits>
 static DecodeStatus DecodeSImm(llvm::MCInst &Inst, uint64_t Imm,
                                uint64_t Address, const void *Decoder);
@@ -479,6 +486,16 @@ static DecodeStatus DecodePPRRegisterClass(MCInst &Inst, unsigned RegNo,
   unsigned Register = PPRDecoderTable[RegNo];
   Inst.addOperand(MCOperand::createReg(Register));
   return Success;
+}
+
+static DecodeStatus DecodePPR_3bRegisterClass(MCInst &Inst, unsigned RegNo,
+                                              uint64_t Addr,
+                                              const void* Decoder) {
+  if (RegNo > 7)
+    return Fail;
+
+  // Just reuse the PPR decode table
+  return DecodePPRRegisterClass(Inst, RegNo, Addr, Decoder);
 }
 
 static const unsigned VectorDecoderTable[] = {
@@ -1634,6 +1651,22 @@ static DecodeStatus DecodeXSeqPairsClassRegisterClass(MCInst &Inst,
   return DecodeGPRSeqPairsClassRegisterClass(Inst,
                                              AArch64::XSeqPairsClassRegClassID,
                                              RegNo, Addr, Decoder);
+}
+
+static DecodeStatus DecodeSVELogicalImmInstruction(llvm::MCInst &Inst,
+                                                   uint32_t insn,
+                                                   uint64_t Addr,
+                                                   const void *Decoder) {
+  unsigned Zdn = fieldFromInstruction(insn, 0, 5);
+  unsigned imm = fieldFromInstruction(insn, 5, 13);
+  if (!AArch64_AM::isValidDecodeLogicalImmediate(imm, 64))
+    return Fail;
+
+  // The same (tied) operand is added twice to the instruction.
+  DecodeZPRRegisterClass(Inst, Zdn, Addr, Decoder);
+  DecodeZPRRegisterClass(Inst, Zdn, Addr, Decoder);
+  Inst.addOperand(MCOperand::createImm(imm));
+  return Success;
 }
 
 template<int Bits>

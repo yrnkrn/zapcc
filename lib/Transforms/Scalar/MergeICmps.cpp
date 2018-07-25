@@ -127,7 +127,7 @@ class BCECmpBlock {
     return Lhs_.Base() != nullptr && Rhs_.Base() != nullptr;
   }
 
-  // Assert the the block is consistent: If valid, it should also have
+  // Assert the block is consistent: If valid, it should also have
   // non-null members besides Lhs_ and Rhs_.
   void AssertConsistent() const {
     if (IsValid()) {
@@ -275,9 +275,12 @@ class BCECmpChain {
 
 BCECmpChain::BCECmpChain(const std::vector<BasicBlock *> &Blocks, PHINode &Phi)
     : Phi_(Phi) {
+  assert(!Blocks.empty() && "a chain should have at least one block");
   // Now look inside blocks to check for BCE comparisons.
   std::vector<BCECmpBlock> Comparisons;
-  for (BasicBlock *Block : Blocks) {
+  for (size_t BlockIdx = 0; BlockIdx < Blocks.size(); ++BlockIdx) {
+    BasicBlock *const Block = Blocks[BlockIdx];
+    assert(Block && "invalid block");
     BCECmpBlock Comparison = visitCmpBlock(Phi.getIncomingValueForBlock(Block),
                                            Block, Phi.getParent());
     Comparison.BB = Block;
@@ -287,7 +290,7 @@ BCECmpChain::BCECmpChain(const std::vector<BasicBlock *> &Blocks, PHINode &Phi)
     }
     if (Comparison.doesOtherWork()) {
       DEBUG(dbgs() << "block does extra work besides compare\n");
-      if (Comparisons.empty()) {  // First block.
+      if (BlockIdx == 0) {  // First block.
         // TODO(courbet): The first block can do other things, and we should
         // split them apart in a separate block before the comparison chain.
         // Right now we just discard it and make the chain shorter.
@@ -328,6 +331,7 @@ BCECmpChain::BCECmpChain(const std::vector<BasicBlock *> &Blocks, PHINode &Phi)
     DEBUG(dbgs() << "\n");
     Comparisons.push_back(Comparison);
   }
+  assert(!Comparisons.empty() && "chain with no BCE basic blocks");
   EntryBlock_ = Comparisons[0].BB;
   Comparisons_ = std::move(Comparisons);
 #ifdef MERGEICMPS_DOT_ON
@@ -507,6 +511,7 @@ std::vector<BasicBlock *> getOrderedBlocks(PHINode &Phi,
                                            int NumBlocks) {
   // Walk up from the last block to find other blocks.
   std::vector<BasicBlock *> Blocks(NumBlocks);
+  assert(LastBlock && "invalid last block");
   BasicBlock *CurBlock = LastBlock;
   for (int BlockIndex = NumBlocks - 1; BlockIndex > 0; --BlockIndex) {
     if (CurBlock->hasAddressTaken()) {
@@ -552,7 +557,7 @@ bool processPhi(PHINode &Phi, const TargetLibraryInfo *const TLI) {
   //  - The last basic block (bb4 here) must branch unconditionally to bb_phi.
   //    It's the only block that contributes a non-constant value to the Phi.
   //  - All other blocks (b1, b2, b3) must have exactly two successors, one of
-  //    them being the the phi block.
+  //    them being the phi block.
   //  - All intermediate blocks (bb2, bb3) must have only one predecessor.
   //  - Blocks cannot do other work besides the comparison, see doesOtherWork()
 

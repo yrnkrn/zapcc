@@ -137,7 +137,7 @@ public:
 
   bool runOnMachineFunction(MachineFunction &MF) override;
 
-  StringRef getPassName() const override { return "SI Load / Store Optimizer"; }
+  StringRef getPassName() const override { return "SI Load Store Optimizer"; }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.setPreservesCFG();
@@ -150,10 +150,10 @@ public:
 } // end anonymous namespace.
 
 INITIALIZE_PASS_BEGIN(SILoadStoreOptimizer, DEBUG_TYPE,
-                      "SI Load / Store Optimizer", false, false)
+                      "SI Load Store Optimizer", false, false)
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_END(SILoadStoreOptimizer, DEBUG_TYPE,
-                    "SI Load / Store Optimizer", false, false)
+                    "SI Load Store Optimizer", false, false)
 
 char SILoadStoreOptimizer::ID = 0;
 
@@ -174,9 +174,10 @@ static void moveInstsAfter(MachineBasicBlock::iterator I,
 }
 
 static void addDefsToList(const MachineInstr &MI, DenseSet<unsigned> &Defs) {
-  // XXX: Should this be looking for implicit defs?
-  for (const MachineOperand &Def : MI.defs())
-    Defs.insert(Def.getReg());
+  for (const MachineOperand &Def : MI.operands()) {
+    if (Def.isReg() && Def.isDef())
+      Defs.insert(Def.getReg());
+  }
 }
 
 static bool memAccessesCanBeReordered(MachineBasicBlock::iterator A,
@@ -496,13 +497,15 @@ MachineBasicBlock::iterator  SILoadStoreOptimizer::mergeRead2Pair(
   unsigned BaseReg = AddrReg->getReg();
   unsigned BaseRegFlags = 0;
   if (CI.BaseOff) {
+    unsigned ImmReg = MRI->createVirtualRegister(&AMDGPU::SGPR_32RegClass);
+    BuildMI(*MBB, CI.Paired, DL, TII->get(AMDGPU::S_MOV_B32), ImmReg)
+      .addImm(CI.BaseOff);
+
     BaseReg = MRI->createVirtualRegister(&AMDGPU::VGPR_32RegClass);
     BaseRegFlags = RegState::Kill;
 
-    unsigned AddOpc = STM->hasAddNoCarry() ?
-      AMDGPU::V_ADD_U32_e32 : AMDGPU::V_ADD_I32_e32;
-    BuildMI(*MBB, CI.Paired, DL, TII->get(AddOpc), BaseReg)
-      .addImm(CI.BaseOff)
+    TII->getAddNoCarry(*MBB, CI.Paired, DL, BaseReg)
+      .addReg(ImmReg)
       .addReg(AddrReg->getReg());
   }
 
@@ -556,7 +559,7 @@ MachineBasicBlock::iterator SILoadStoreOptimizer::mergeWrite2Pair(
 
   // Be sure to use .addOperand(), and not .addReg() with these. We want to be
   // sure we preserve the subregister index and any register flags set on them.
-  const MachineOperand *Addr = TII->getNamedOperand(*CI.I, AMDGPU::OpName::addr);
+  const MachineOperand *AddrReg = TII->getNamedOperand(*CI.I, AMDGPU::OpName::addr);
   const MachineOperand *Data0 = TII->getNamedOperand(*CI.I, AMDGPU::OpName::data0);
   const MachineOperand *Data1
     = TII->getNamedOperand(*CI.Paired, AMDGPU::OpName::data0);
@@ -579,17 +582,19 @@ MachineBasicBlock::iterator SILoadStoreOptimizer::mergeWrite2Pair(
   const MCInstrDesc &Write2Desc = TII->get(Opc);
   DebugLoc DL = CI.I->getDebugLoc();
 
-  unsigned BaseReg = Addr->getReg();
+  unsigned BaseReg = AddrReg->getReg();
   unsigned BaseRegFlags = 0;
   if (CI.BaseOff) {
+    unsigned ImmReg = MRI->createVirtualRegister(&AMDGPU::SGPR_32RegClass);
+    BuildMI(*MBB, CI.Paired, DL, TII->get(AMDGPU::S_MOV_B32), ImmReg)
+      .addImm(CI.BaseOff);
+
     BaseReg = MRI->createVirtualRegister(&AMDGPU::VGPR_32RegClass);
     BaseRegFlags = RegState::Kill;
 
-    unsigned AddOpc = STM->hasAddNoCarry() ?
-      AMDGPU::V_ADD_U32_e32 : AMDGPU::V_ADD_I32_e32;
-    BuildMI(*MBB, CI.Paired, DL, TII->get(AddOpc), BaseReg)
-      .addImm(CI.BaseOff)
-      .addReg(Addr->getReg());
+    TII->getAddNoCarry(*MBB, CI.Paired, DL, BaseReg)
+      .addReg(ImmReg)
+      .addReg(AddrReg->getReg());
   }
 
   MachineInstrBuilder Write2 =
@@ -849,9 +854,8 @@ bool SILoadStoreOptimizer::optimizeBlock(MachineBasicBlock &MBB) {
 
       continue;
     }
-    if (STM->hasSBufferLoadStoreAtomicDwordxN() &&
-        (Opc == AMDGPU::S_BUFFER_LOAD_DWORD_IMM ||
-         Opc == AMDGPU::S_BUFFER_LOAD_DWORDX2_IMM)) {
+    if (Opc == AMDGPU::S_BUFFER_LOAD_DWORD_IMM ||
+        Opc == AMDGPU::S_BUFFER_LOAD_DWORDX2_IMM) {
       // EltSize is in units of the offset encoding.
       CI.InstClass = S_BUFFER_LOAD_IMM;
       CI.EltSize = AMDGPU::getSMRDEncodedOffset(*STM, 4);

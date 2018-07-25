@@ -11,308 +11,8 @@
 //  file will be generated.  See ARM document DUI0348B.
 //
 //===----------------------------------------------------------------------===//
-//
-// Each intrinsic is a subclass of the Inst class. An intrinsic can either
-// generate a __builtin_* call or it can expand to a set of generic operations.
-//
-// The operations are subclasses of Operation providing a list of DAGs, the
-// last of which is the return value. The available DAG nodes are documented
-// below.
-//
-//===----------------------------------------------------------------------===//
 
-// The base Operation class. All operations must subclass this.
-class Operation<list<dag> ops=[]> {
-  list<dag> Ops = ops;
-  bit Unavailable = 0;
-}
-// An operation that only contains a single DAG.
-class Op<dag op> : Operation<[op]>;
-// A shorter version of Operation - takes a list of DAGs. The last of these will
-// be the return value.
-class LOp<list<dag> ops> : Operation<ops>;
-
-// These defs and classes are used internally to implement the SetTheory
-// expansion and should be ignored.
-foreach Index = 0-63 in
-  def sv##Index;
-class MaskExpand;
-
-//===----------------------------------------------------------------------===//
-// Available operations
-//===----------------------------------------------------------------------===//
-
-// DAG arguments can either be operations (documented below) or variables.
-// Variables are prefixed with '$'. There are variables for each input argument,
-// with the name $pN, where N starts at zero. So the zero'th argument will be
-// $p0, the first $p1 etc.
-
-// op - Binary or unary operator, depending on the number of arguments. The
-//      operator itself is just treated as a raw string and is not checked.
-// example: (op "+", $p0, $p1) -> "__p0 + __p1".
-//          (op "-", $p0)      -> "-__p0"
-def op;
-// call - Invoke another intrinsic. The input types are type checked and
-//        disambiguated. If there is no intrinsic defined that takes
-//        the given types (or if there is a type ambiguity) an error is
-//        generated at tblgen time. The name of the intrinsic is the raw
-//        name as given to the Inst class (not mangled).
-// example: (call "vget_high", $p0) -> "vgetq_high_s16(__p0)"
-//            (assuming $p0 has type int16x8_t).
-def call;
-// cast - Perform a cast to a different type. This gets emitted as a static
-//        C-style cast. For a pure reinterpret cast (T x = *(T*)&y), use
-//        "bitcast".
-//
-//        The syntax is (cast MOD* VAL). The last argument is the value to
-//        cast, preceded by a sequence of type modifiers. The target type
-//        starts off as the type of VAL, and is modified by MOD in sequence.
-//        The available modifiers are:
-//          - $X  - Take the type of parameter/variable X. For example:
-//                  (cast $p0, $p1) would cast $p1 to the type of $p0.
-//          - "R" - The type of the return type.
-//          - A typedef string - A NEON or stdint.h type that is then parsed.
-//                               for example: (cast "uint32x4_t", $p0).
-//          - "U" - Make the type unsigned.
-//          - "S" - Make the type signed.
-//          - "H" - Halve the number of lanes in the type.
-//          - "D" - Double the number of lanes in the type.
-//          - "8" - Convert type to an equivalent vector of 8-bit signed
-//                  integers.
-// example: (cast "R", "U", $p0) -> "(uint32x4_t)__p0" (assuming the return
-//           value is of type "int32x4_t".
-//          (cast $p0, "D", "8", $p1) -> "(int8x16_t)__p1" (assuming __p0
-//           has type float64x1_t or any other vector type of 64 bits).
-//          (cast "int32_t", $p2) -> "(int32_t)__p2"
-def cast;
-// bitcast - Same as "cast", except a reinterpret-cast is produced:
-//             (bitcast "T", $p0) -> "*(T*)&__p0".
-//           The VAL argument is saved to a temporary so it can be used
-//           as an l-value.
-def bitcast;
-// dup - Take a scalar argument and create a vector by duplicating it into
-//       all lanes. The type of the vector is the base type of the intrinsic.
-// example: (dup $p1) -> "(uint32x2_t) {__p1, __p1}" (assuming the base type
-//          is uint32x2_t).
-def dup;
-// splat - Take a vector and a lane index, and return a vector of the same type
-//         containing repeated instances of the source vector at the lane index.
-// example: (splat $p0, $p1) ->
-//            "__builtin_shufflevector(__p0, __p0, __p1, __p1, __p1, __p1)"
-//          (assuming __p0 has four elements).
-def splat;
-// save_temp - Create a temporary (local) variable. The variable takes a name
-//             based on the zero'th parameter and can be referenced using
-//             using that name in subsequent DAGs in the same
-//             operation. The scope of a temp is the operation. If a variable
-//             with the given name already exists, an error will be given at
-//             tblgen time.
-// example: [(save_temp $var, (call "foo", $p0)),
-//           (op "+", $var, $p1)] ->
-//              "int32x2_t __var = foo(__p0); return __var + __p1;"
-def save_temp;
-// name_replace - Return the name of the current intrinsic with the first
-//                argument replaced by the second argument. Raises an error if
-//                the first argument does not exist in the intrinsic name.
-// example: (call (name_replace "_high_", "_"), $p0) (to call the non-high
-//            version of this intrinsic).
-def name_replace;
-// literal - Create a literal piece of code. The code is treated as a raw
-//           string, and must be given a type. The type is a stdint.h or
-//           NEON intrinsic type as given to (cast).
-// example: (literal "int32_t", "0")
-def literal;
-// shuffle - Create a vector shuffle. The syntax is (shuffle ARG0, ARG1, MASK).
-//           The MASK argument is a set of elements. The elements are generated
-//           from the two special defs "mask0" and "mask1". "mask0" expands to
-//           the lane indices in sequence for ARG0, and "mask1" expands to
-//           the lane indices in sequence for ARG1. They can be used as-is, e.g.
-//
-//             (shuffle $p0, $p1, mask0) -> $p0
-//             (shuffle $p0, $p1, mask1) -> $p1
-//
-//           or, more usefully, they can be manipulated using the SetTheory
-//           operators plus some extra operators defined in the NEON emitter.
-//           The operators are described below.
-// example: (shuffle $p0, $p1, (add (highhalf mask0), (highhalf mask1))) ->
-//            A concatenation of the high halves of the input vectors.
-def shuffle;
-
-// add, interleave, decimate: These set operators are vanilla SetTheory
-// operators and take their normal definition.
-def add;
-def interleave;
-def decimate;
-// rotl - Rotate set left by a number of elements.
-// example: (rotl mask0, 3) -> [3, 4, 5, 6, 0, 1, 2]
-def rotl;
-// rotl - Rotate set right by a number of elements.
-// example: (rotr mask0, 3) -> [4, 5, 6, 0, 1, 2, 3]
-def rotr;
-// highhalf - Take only the high half of the input.
-// example: (highhalf mask0) -> [4, 5, 6, 7] (assuming mask0 had 8 elements)
-def highhalf;
-// highhalf - Take only the low half of the input.
-// example: (lowhalf mask0) -> [0, 1, 2, 3] (assuming mask0 had 8 elements)
-def lowhalf;
-// rev - Perform a variable-width reversal of the elements. The zero'th argument
-//       is a width in bits to reverse. The lanes this maps to is determined
-//       based on the element width of the underlying type.
-// example: (rev 32, mask0) -> [3, 2, 1, 0, 7, 6, 5, 4] (if 8-bit elements)
-// example: (rev 32, mask0) -> [1, 0, 3, 2]             (if 16-bit elements)
-def rev;
-// mask0 - The initial sequence of lanes for shuffle ARG0
-def mask0 : MaskExpand;
-// mask0 - The initial sequence of lanes for shuffle ARG1
-def mask1 : MaskExpand;
-
-def OP_NONE  : Operation;
-def OP_UNAVAILABLE : Operation {
-  let Unavailable = 1;
-}
-
-//===----------------------------------------------------------------------===//
-// Instruction definitions
-//===----------------------------------------------------------------------===//
-
-// Every intrinsic subclasses "Inst". An intrinsic has a name, a prototype and
-// a sequence of typespecs.
-//
-// The name is the base name of the intrinsic, for example "vget_lane". This is
-// then mangled by the tblgen backend to add type information ("vget_lane_s16").
-//
-// A typespec is a sequence of uppercase characters (modifiers) followed by one
-// lowercase character. A typespec encodes a particular "base type" of the
-// intrinsic.
-//
-// An example typespec is "Qs" - quad-size short - uint16x8_t. The available
-// typespec codes are given below.
-//
-// The string given to an Inst class is a sequence of typespecs. The intrinsic
-// is instantiated for every typespec in the sequence. For example "sdQsQd".
-//
-// The prototype is a string that defines the return type of the intrinsic
-// and the type of each argument. The return type and every argument gets a
-// "modifier" that can change in some way the "base type" of the intrinsic.
-//
-// The modifier 'd' means "default" and does not modify the base type in any
-// way. The available modifiers are given below.
-//
-// Typespecs
-// ---------
-// c: char
-// s: short
-// i: int
-// l: long
-// k: 128-bit long
-// f: float
-// h: half-float
-// d: double
-//
-// Typespec modifiers
-// ------------------
-// S: scalar, only used for function mangling.
-// U: unsigned
-// Q: 128b
-// H: 128b without mangling 'q'
-// P: polynomial
-//
-// Prototype modifiers
-// -------------------
-// prototype: return (arg, arg, ...)
-//
-// v: void
-// t: best-fit integer (int/poly args)
-// x: signed integer   (int/float args)
-// u: unsigned integer (int/float args)
-// f: float (int args)
-// F: double (int args)
-// d: default
-// g: default, ignore 'Q' size modifier.
-// j: default, force 'Q' size modifier.
-// w: double width elements, same num elts
-// n: double width elements, half num elts
-// h: half width elements, double num elts
-// q: half width elements, quad num elts
-// e: half width elements, double num elts, unsigned
-// m: half width elements, same num elts
-// i: constant int
-// l: constant uint64
-// s: scalar of element type
-// z: scalar of half width element type, signed
-// r: scalar of double width element type, signed
-// a: scalar of element type (splat to vector type)
-// b: scalar of unsigned integer/long type (int/float args)
-// $: scalar of signed integer/long type (int/float args)
-// y: scalar of float
-// o: scalar of double
-// k: default elt width, double num elts
-// 2,3,4: array of default vectors
-// B,C,D: array of default elts, force 'Q' size modifier.
-// p: pointer type
-// c: const pointer type
-
-// Every intrinsic subclasses Inst.
-class Inst <string n, string p, string t, Operation o> {
-  string Name = n;
-  string Prototype = p;
-  string Types = t;
-  string ArchGuard = "";
-
-  Operation Operation = o;
-  bit CartesianProductOfTypes = 0;
-  bit BigEndianSafe = 0;
-  bit isShift = 0;
-  bit isScalarShift = 0;
-  bit isScalarNarrowShift = 0;
-  bit isVCVT_N = 0;
-  // For immediate checks: the immediate will be assumed to specify the lane of
-  // a Q register. Only used for intrinsics which end up calling polymorphic
-  // builtins.
-  bit isLaneQ = 0;
-
-  // Certain intrinsics have different names than their representative
-  // instructions. This field allows us to handle this correctly when we
-  // are generating tests.
-  string InstName = "";
-
-  // Certain intrinsics even though they are not a WOpInst or LOpInst,
-  // generate a WOpInst/LOpInst instruction (see below for definition
-  // of a WOpInst/LOpInst). For testing purposes we need to know
-  // this. Ex: vset_lane which outputs vmov instructions.
-  bit isHiddenWInst = 0;
-  bit isHiddenLInst = 0;
-}
-
-// The following instruction classes are implemented via builtins.
-// These declarations are used to generate Builtins.def:
-//
-// SInst: Instruction with signed/unsigned suffix (e.g., "s8", "u8", "p8")
-// IInst: Instruction with generic integer suffix (e.g., "i8")
-// WInst: Instruction with only bit size suffix (e.g., "8")
-class SInst<string n, string p, string t> : Inst<n, p, t, OP_NONE> {}
-class IInst<string n, string p, string t> : Inst<n, p, t, OP_NONE> {}
-class WInst<string n, string p, string t> : Inst<n, p, t, OP_NONE> {}
-
-// The following instruction classes are implemented via operators
-// instead of builtins. As such these declarations are only used for
-// the purpose of generating tests.
-//
-// SOpInst:       Instruction with signed/unsigned suffix (e.g., "s8",
-//                "u8", "p8").
-// IOpInst:       Instruction with generic integer suffix (e.g., "i8").
-// WOpInst:       Instruction with bit size only suffix (e.g., "8").
-// LOpInst:       Logical instruction with no bit size suffix.
-// NoTestOpInst:  Intrinsic that has no corresponding instruction.
-class SOpInst<string n, string p, string t, Operation o> : Inst<n, p, t, o> {}
-class IOpInst<string n, string p, string t, Operation o> : Inst<n, p, t, o> {}
-class WOpInst<string n, string p, string t, Operation o> : Inst<n, p, t, o> {}
-class LOpInst<string n, string p, string t, Operation o> : Inst<n, p, t, o> {}
-class NoTestOpInst<string n, string p, string t, Operation o> : Inst<n, p, t, o> {}
-
-//===----------------------------------------------------------------------===//
-// Operations
-//===----------------------------------------------------------------------===//
+include "arm_neon_incl.td"
 
 def OP_ADD      : Op<(op "+", $p0, $p1)>;
 def OP_ADDL     : Op<(op "+", (call "vmovl", $p0), (call "vmovl", $p1))>;
@@ -345,6 +45,7 @@ def OP_MLSLHi   : Op<(call "vmlsl", $p0, (call "vget_high", $p1),
                                          (call "vget_high", $p2))>;
 def OP_MLSLHi_N : Op<(call "vmlsl_n", $p0, (call "vget_high", $p1), $p2)>;
 def OP_MUL_N    : Op<(op "*", $p0, (dup $p1))>;
+def OP_MULX_N   : Op<(call "vmulx", $p0, (dup $p1))>;
 def OP_MLA_N    : Op<(op "+", $p0, (op "*", $p1, (dup $p2)))>;
 def OP_MLS_N    : Op<(op "-", $p0, (op "*", $p1, (dup $p2)))>;
 def OP_FMLA_N   : Op<(call "vfma", $p0, $p1, (dup $p2))>;
@@ -1660,4 +1361,187 @@ def SCALAR_SQRDMLSH_LANEQ : SOpInst<"vqrdmlsh_laneq", "sssji", "SsSi", OP_SCALAR
 
 def SCALAR_VDUP_LANE : IInst<"vdup_lane", "sdi", "ScSsSiSlSfSdSUcSUsSUiSUlSPcSPs">;
 def SCALAR_VDUP_LANEQ : IInst<"vdup_laneq", "sji", "ScSsSiSlSfSdSUcSUsSUiSUlSPcSPs">;
+}
+
+// ARMv8.2-A FP16 intrinsics.
+let ArchGuard = "defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC) && defined(__aarch64__)" in {
+
+  // ARMv8.2-A FP16 one-operand vector intrinsics.
+
+  // Comparison
+  def CMEQH    : SInst<"vceqz", "ud", "hQh">;
+  def CMGEH    : SInst<"vcgez", "ud", "hQh">;
+  def CMGTH    : SInst<"vcgtz", "ud", "hQh">;
+  def CMLEH    : SInst<"vclez", "ud", "hQh">;
+  def CMLTH    : SInst<"vcltz", "ud", "hQh">;
+
+  // Vector conversion
+  def VCVT_F16     : SInst<"vcvt_f16", "Hd",  "sUsQsQUs">;
+  def VCVT_S16     : SInst<"vcvt_s16", "xd",  "hQh">;
+  def VCVT_U16     : SInst<"vcvt_u16", "ud",  "hQh">;
+  def VCVTA_S16    : SInst<"vcvta_s16", "xd", "hQh">;
+  def VCVTA_U16    : SInst<"vcvta_u16", "ud", "hQh">;
+  def VCVTM_S16    : SInst<"vcvtm_s16", "xd", "hQh">;
+  def VCVTM_U16    : SInst<"vcvtm_u16", "ud", "hQh">;
+  def VCVTN_S16    : SInst<"vcvtn_s16", "xd", "hQh">;
+  def VCVTN_U16    : SInst<"vcvtn_u16", "ud", "hQh">;
+  def VCVTP_S16    : SInst<"vcvtp_s16", "xd", "hQh">;
+  def VCVTP_U16    : SInst<"vcvtp_u16", "ud", "hQh">;
+
+  // Vector rounding
+  def FRINTZH      : SInst<"vrnd",  "dd", "hQh">;
+  def FRINTNH      : SInst<"vrndn", "dd", "hQh">;
+  def FRINTAH      : SInst<"vrnda", "dd", "hQh">;
+  def FRINTPH      : SInst<"vrndp", "dd", "hQh">;
+  def FRINTMH      : SInst<"vrndm", "dd", "hQh">;
+  def FRINTXH      : SInst<"vrndx", "dd", "hQh">;
+  def FRINTIH      : SInst<"vrndi", "dd", "hQh">;
+
+  // Misc.
+  def VABSH        : SInst<"vabs", "dd", "hQh">;
+  def VNEGH        : SOpInst<"vneg", "dd", "hQh", OP_NEG>;
+  def VRECPEH      : SInst<"vrecpe", "dd", "hQh">;
+  def FRSQRTEH     : SInst<"vrsqrte", "dd", "hQh">;
+  def FSQRTH       : SInst<"vsqrt", "dd", "hQh">;
+
+  // ARMv8.2-A FP16 two-operands vector intrinsics.
+
+  // Misc.
+  def VADDH        : SOpInst<"vadd", "ddd", "hQh", OP_ADD>;
+  def VABDH        : SInst<"vabd", "ddd",  "hQh">;
+  def VSUBH         : SOpInst<"vsub", "ddd", "hQh", OP_SUB>;
+
+  // Comparison
+  let InstName = "vacge" in {
+	  def VCAGEH     : SInst<"vcage", "udd", "hQh">;
+	  def VCALEH     : SInst<"vcale", "udd", "hQh">;
+  }
+  let InstName = "vacgt" in {
+    def VCAGTH     : SInst<"vcagt", "udd", "hQh">;
+	  def VCALTH     : SInst<"vcalt", "udd", "hQh">;
+  }
+  def VCEQH        : SOpInst<"vceq", "udd", "hQh", OP_EQ>;
+  def VCGEH        : SOpInst<"vcge", "udd", "hQh", OP_GE>;
+  def VCGTH        : SOpInst<"vcgt", "udd", "hQh", OP_GT>;
+  let InstName = "vcge" in
+    def VCLEH      : SOpInst<"vcle", "udd", "hQh", OP_LE>;
+  let InstName = "vcgt" in
+    def VCLTH      : SOpInst<"vclt", "udd", "hQh", OP_LT>;
+
+  // Vector conversion
+  let isVCVT_N = 1 in {
+    def VCVT_N_F16 : SInst<"vcvt_n_f16", "Hdi", "sUsQsQUs">;
+    def VCVT_N_S16 : SInst<"vcvt_n_s16", "xdi", "hQh">;
+    def VCVT_N_U16 : SInst<"vcvt_n_u16", "udi", "hQh">;
+  }
+
+  // Max/Min
+  def VMAXH         : SInst<"vmax", "ddd", "hQh">;
+  def VMINH         : SInst<"vmin", "ddd", "hQh">;
+  def FMAXNMH       : SInst<"vmaxnm", "ddd", "hQh">;
+  def FMINNMH       : SInst<"vminnm", "ddd", "hQh">;
+
+  // Multiplication/Division
+  def VMULH         : SOpInst<"vmul", "ddd", "hQh", OP_MUL>;
+  def MULXH         : SInst<"vmulx", "ddd", "hQh">;
+  def FDIVH         : IOpInst<"vdiv", "ddd",  "hQh", OP_DIV>;
+
+  // Pairwise addition
+  def VPADDH        : SInst<"vpadd", "ddd", "hQh">;
+
+  // Pairwise Max/Min
+  def VPMAXH        : SInst<"vpmax", "ddd", "hQh">;
+  def VPMINH        : SInst<"vpmin", "ddd", "hQh">;
+  // Pairwise MaxNum/MinNum
+  def FMAXNMPH      : SInst<"vpmaxnm", "ddd", "hQh">;
+  def FMINNMPH      : SInst<"vpminnm", "ddd", "hQh">;
+
+  // Reciprocal/Sqrt
+  def VRECPSH       : SInst<"vrecps", "ddd", "hQh">;
+  def VRSQRTSH      : SInst<"vrsqrts", "ddd", "hQh">;
+
+  // ARMv8.2-A FP16 three-operands vector intrinsics.
+
+  // Vector fused multiply-add operations
+  def VFMAH        : SInst<"vfma", "dddd", "hQh">;
+  def VFMSH        : SOpInst<"vfms", "dddd", "hQh", OP_FMLS>;
+
+  // ARMv8.2-A FP16 lane vector intrinsics.
+
+  // FMA lane
+  def VFMA_LANEH   : IInst<"vfma_lane", "dddgi", "hQh">;
+  def VFMA_LANEQH  : IInst<"vfma_laneq", "dddji", "hQh">;
+
+  // FMA lane with scalar argument
+  def FMLA_NH      : SOpInst<"vfma_n", "ddds", "hQh", OP_FMLA_N>;
+  // Scalar floating point fused multiply-add (scalar, by element)
+  def SCALAR_FMLA_LANEH  : IInst<"vfma_lane", "sssdi", "Sh">;
+  def SCALAR_FMLA_LANEQH : IInst<"vfma_laneq", "sssji", "Sh">;
+
+  // FMS lane
+  def VFMS_LANEH   : IOpInst<"vfms_lane", "dddgi", "hQh", OP_FMS_LN>;
+  def VFMS_LANEQH  : IOpInst<"vfms_laneq", "dddji", "hQh", OP_FMS_LNQ>;
+  // FMS lane with scalar argument
+  def FMLS_NH      : SOpInst<"vfms_n", "ddds", "hQh", OP_FMLS_N>;
+  // Scalar floating foint fused multiply-subtract (scalar, by element)
+  def SCALAR_FMLS_LANEH  : IOpInst<"vfms_lane", "sssdi", "Sh", OP_FMS_LN>;
+  def SCALAR_FMLS_LANEQH : IOpInst<"vfms_laneq", "sssji", "Sh", OP_FMS_LNQ>;
+
+  // Mul lane
+  def VMUL_LANEH    : IOpInst<"vmul_lane", "ddgi", "hQh", OP_MUL_LN>;
+  def VMUL_LANEQH   : IOpInst<"vmul_laneq", "ddji", "hQh", OP_MUL_LN>;
+  def VMUL_NH       : IOpInst<"vmul_n", "dds", "hQh", OP_MUL_N>;
+  // Scalar floating point  multiply (scalar, by element)
+  def SCALAR_FMUL_LANEH  : IOpInst<"vmul_lane", "ssdi", "Sh", OP_SCALAR_MUL_LN>;
+  def SCALAR_FMUL_LANEQH : IOpInst<"vmul_laneq", "ssji", "Sh", OP_SCALAR_MUL_LN>;
+
+  // Mulx lane
+  def VMULX_LANEH   : IOpInst<"vmulx_lane", "ddgi", "hQh", OP_MULX_LN>;
+  def VMULX_LANEQH  : IOpInst<"vmulx_laneq", "ddji", "hQh", OP_MULX_LN>;
+  def VMULX_NH      : IOpInst<"vmulx_n", "dds", "hQh", OP_MULX_N>;
+  // TODO: Scalar floating point multiply extended (scalar, by element)
+  // Below ones are commented out because they need vmulx_f16(float16_t, float16_t)
+  // which will be implemented later with fp16 scalar intrinsic (arm_fp16.h)
+  //def SCALAR_FMULX_LANEH : IOpInst<"vmulx_lane", "ssdi", "Sh", OP_SCALAR_MUL_LN>;
+  //def SCALAR_FMULX_LANEQH : IOpInst<"vmulx_laneq", "ssji", "Sh", OP_SCALAR_MUL_LN>;
+
+  // ARMv8.2-A FP16 reduction vector intrinsics.
+  def VMAXVH   : SInst<"vmaxv", "sd", "hQh">;
+  def VMINVH   : SInst<"vminv", "sd", "hQh">;
+  def FMAXNMVH : SInst<"vmaxnmv", "sd", "hQh">;
+  def FMINNMVH : SInst<"vminnmv", "sd", "hQh">;
+
+  // Data processing intrinsics - section 5
+
+  // Logical operations
+  let isHiddenLInst = 1 in
+  def VBSLH    : SInst<"vbsl", "dudd", "hQh">;
+
+  // Transposition operations
+  def VZIPH    : WInst<"vzip", "2dd", "hQh">;
+  def VUZPH    : WInst<"vuzp", "2dd", "hQh">;
+  def VTRNH    : WInst<"vtrn", "2dd", "hQh">;
+
+  // Set all lanes to same value.
+  /* Already implemented prior to ARMv8.2-A.
+  def VMOV_NH  : WOpInst<"vmov_n", "ds", "hQh", OP_DUP>;
+  def VDUP_NH  : WOpInst<"vdup_n", "ds", "hQh", OP_DUP>;
+  def VDUP_LANE1H : WOpInst<"vdup_lane", "dgi", "hQh", OP_DUP_LN>;*/
+
+  // Vector Extract
+  def VEXTH      : WInst<"vext", "dddi", "hQh">;
+
+  // Reverse vector elements
+  def VREV64H    : WOpInst<"vrev64", "dd", "hQh", OP_REV64>;
+
+  // Permutation
+  def VTRN1H     : SOpInst<"vtrn1", "ddd", "hQh", OP_TRN1>;
+  def VZIP1H     : SOpInst<"vzip1", "ddd", "hQh", OP_ZIP1>;
+  def VUZP1H     : SOpInst<"vuzp1", "ddd", "hQh", OP_UZP1>;
+  def VTRN2H     : SOpInst<"vtrn2", "ddd", "hQh", OP_TRN2>;
+  def VZIP2H     : SOpInst<"vzip2", "ddd", "hQh", OP_ZIP2>;
+  def VUZP2H     : SOpInst<"vuzp2", "ddd", "hQh", OP_UZP2>;
+
+  def SCALAR_VDUP_LANEH  : IInst<"vdup_lane", "sdi", "Sh">;
+  def SCALAR_VDUP_LANEQH : IInst<"vdup_laneq", "sji", "Sh">;
 }

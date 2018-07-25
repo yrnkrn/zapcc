@@ -112,7 +112,7 @@ static bool getDefaultBlacklist(const Driver &D, SanitizerMask Kinds,
 
   if (BlacklistFile) {
     clang::SmallString<64> Path(D.ResourceDir);
-    llvm::sys::path::append(Path, BlacklistFile);
+    llvm::sys::path::append(Path, "share", BlacklistFile);
     BLPath = Path.str();
     return true;
   }
@@ -440,6 +440,7 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   RecoverableKinds &= ~Unrecoverable;
 
   TrappingKinds &= Kinds;
+  RecoverableKinds &= ~TrappingKinds;
 
   // Setup blacklist files.
   // Add default blacklist from resource directory.
@@ -683,6 +684,8 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   Sanitizers.Mask |= Kinds;
   RecoverableSanitizers.Mask |= RecoverableKinds;
   TrapSanitizers.Mask |= TrappingKinds;
+  assert(!(RecoverableKinds & TrappingKinds) &&
+         "Overlap between recoverable and trapping sanitizers");
 }
 
 static std::string toString(const clang::SanitizerSet &Sanitizers) {
@@ -791,7 +794,7 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
 
   if (MsanTrackOrigins)
     CmdArgs.push_back(Args.MakeArgString("-fsanitize-memory-track-origins=" +
-                                         llvm::utostr(MsanTrackOrigins)));
+                                         Twine(MsanTrackOrigins)));
 
   if (MsanUseAfterDtor)
     CmdArgs.push_back("-fsanitize-memory-use-after-dtor");
@@ -826,7 +829,7 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
 
   if (AsanFieldPadding)
     CmdArgs.push_back(Args.MakeArgString("-fsanitize-address-field-padding=" +
-                                         llvm::utostr(AsanFieldPadding)));
+                                         Twine(AsanFieldPadding)));
 
   if (AsanUseAfterScope)
     CmdArgs.push_back("-fsanitize-address-use-after-scope");

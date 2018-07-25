@@ -797,16 +797,11 @@ entry:
 define <4 x i64> @test_mm256_mask_set1_epi64(<4 x i64> %__O, i8 zeroext %__M, i64 %__A) {
 ; X32-LABEL: test_mm256_mask_set1_epi64:
 ; X32:       # %bb.0: # %entry
-; X32-NEXT:    movl {{[0-9]+}}(%esp), %eax
-; X32-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-NEXT:    movb {{[0-9]+}}(%esp), %dl
-; X32-NEXT:    vmovd %ecx, %xmm1
-; X32-NEXT:    vpinsrd $1, %eax, %xmm1, %xmm1
-; X32-NEXT:    vpinsrd $2, %ecx, %xmm1, %xmm1
-; X32-NEXT:    vpinsrd $3, %eax, %xmm1, %xmm1
-; X32-NEXT:    vinserti128 $1, %xmm1, %ymm1, %ymm1
-; X32-NEXT:    kmovw %edx, %k1
-; X32-NEXT:    vmovdqa64 %ymm1, %ymm0 {%k1}
+; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
+; X32-NEXT:    vmovd {{.*#+}} xmm1 = mem[0],zero,zero,zero
+; X32-NEXT:    vpinsrd $1, {{[0-9]+}}(%esp), %xmm1, %xmm1
+; X32-NEXT:    kmovw %eax, %k1
+; X32-NEXT:    vpbroadcastq %xmm1, %ymm0 {%k1}
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_set1_epi64:
@@ -826,16 +821,11 @@ entry:
 define <4 x i64> @test_mm256_maskz_set1_epi64(i8 zeroext %__M, i64 %__A)  {
 ; X32-LABEL: test_mm256_maskz_set1_epi64:
 ; X32:       # %bb.0: # %entry
-; X32-NEXT:    movl {{[0-9]+}}(%esp), %eax
-; X32-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X32-NEXT:    movb {{[0-9]+}}(%esp), %dl
-; X32-NEXT:    vmovd %ecx, %xmm0
-; X32-NEXT:    vpinsrd $1, %eax, %xmm0, %xmm0
-; X32-NEXT:    vpinsrd $2, %ecx, %xmm0, %xmm0
-; X32-NEXT:    vpinsrd $3, %eax, %xmm0, %xmm0
-; X32-NEXT:    vinserti128 $1, %xmm0, %ymm0, %ymm0
-; X32-NEXT:    kmovw %edx, %k1
-; X32-NEXT:    vmovdqa64 %ymm0, %ymm0 {%k1} {z}
+; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
+; X32-NEXT:    vmovd {{.*#+}} xmm0 = mem[0],zero,zero,zero
+; X32-NEXT:    vpinsrd $1, {{[0-9]+}}(%esp), %xmm0, %xmm0
+; X32-NEXT:    kmovw %eax, %k1
+; X32-NEXT:    vpbroadcastq %xmm0, %ymm0 {%k1} {z}
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_set1_epi64:
@@ -871,23 +861,14 @@ define <2 x i64> @test_mm_broadcastd_epi32(<2 x i64> %a0) {
 define <2 x i64> @test_mm_mask_broadcastd_epi32(<2 x i64> %a0, i8 %a1, <2 x i64> %a2) {
 ; X32-LABEL: test_mm_mask_broadcastd_epi32:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpbroadcastd %xmm1, %xmm0 {%k1}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_broadcastd_epi32:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpbroadcastd %xmm1, %xmm0 {%k1}
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -903,23 +884,14 @@ define <2 x i64> @test_mm_mask_broadcastd_epi32(<2 x i64> %a0, i8 %a1, <2 x i64>
 define <2 x i64> @test_mm_maskz_broadcastd_epi32(i8 %a0, <2 x i64> %a1) {
 ; X32-LABEL: test_mm_maskz_broadcastd_epi32:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpbroadcastd %xmm0, %xmm0 {%k1} {z}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_broadcastd_epi32:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpbroadcastd %xmm0, %xmm0 {%k1} {z}
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4
@@ -1007,23 +979,14 @@ define <2 x i64> @test_mm_broadcastq_epi64(<2 x i64> %a0) {
 define <2 x i64> @test_mm_mask_broadcastq_epi64(<2 x i64> %a0, i8 %a1, <2 x i64> %a2) {
 ; X32-LABEL: test_mm_mask_broadcastq_epi64:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpbroadcastq %xmm1, %xmm0 {%k1}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_broadcastq_epi64:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpbroadcastq %xmm1, %xmm0 {%k1}
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i2
@@ -1036,23 +999,14 @@ define <2 x i64> @test_mm_mask_broadcastq_epi64(<2 x i64> %a0, i8 %a1, <2 x i64>
 define <2 x i64> @test_mm_maskz_broadcastq_epi64(i8 %a0, <2 x i64> %a1) {
 ; X32-LABEL: test_mm_maskz_broadcastq_epi64:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpbroadcastq %xmm0, %xmm0 {%k1} {z}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_broadcastq_epi64:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpbroadcastq %xmm0, %xmm0 {%k1} {z}
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i2
@@ -1079,23 +1033,14 @@ define <4 x i64> @test_mm256_broadcastq_epi64(<2 x i64> %a0) {
 define <4 x i64> @test_mm256_mask_broadcastq_epi64(<4 x i64> %a0, i8 %a1, <2 x i64> %a2) {
 ; X32-LABEL: test_mm256_mask_broadcastq_epi64:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpbroadcastq %xmm1, %ymm0 {%k1}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_broadcastq_epi64:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpbroadcastq %xmm1, %ymm0 {%k1}
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1108,23 +1053,14 @@ define <4 x i64> @test_mm256_mask_broadcastq_epi64(<4 x i64> %a0, i8 %a1, <2 x i
 define <4 x i64> @test_mm256_maskz_broadcastq_epi64(i8 %a0, <2 x i64> %a1) {
 ; X32-LABEL: test_mm256_maskz_broadcastq_epi64:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpbroadcastq %xmm0, %ymm0 {%k1} {z}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_broadcastq_epi64:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpbroadcastq %xmm0, %ymm0 {%k1} {z}
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4
@@ -1151,23 +1087,14 @@ define <2 x double> @test_mm_broadcastsd_pd(<2 x double> %a0) {
 define <2 x double> @test_mm_mask_broadcastsd_pd(<2 x double> %a0, i8 %a1, <2 x double> %a2) {
 ; X32-LABEL: test_mm_mask_broadcastsd_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} = xmm1[0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_broadcastsd_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} = xmm1[0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i2
@@ -1180,23 +1107,14 @@ define <2 x double> @test_mm_mask_broadcastsd_pd(<2 x double> %a0, i8 %a1, <2 x 
 define <2 x double> @test_mm_maskz_broadcastsd_pd(i8 %a0, <2 x double> %a1) {
 ; X32-LABEL: test_mm_maskz_broadcastsd_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} {z} = xmm0[0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_broadcastsd_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} {z} = xmm0[0,0]
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i2
@@ -1223,23 +1141,14 @@ define <4 x double> @test_mm256_broadcastsd_pd(<2 x double> %a0) {
 define <4 x double> @test_mm256_mask_broadcastsd_pd(<4 x double> %a0, i8 %a1, <2 x double> %a2) {
 ; X32-LABEL: test_mm256_mask_broadcastsd_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vbroadcastsd %xmm1, %ymm0 {%k1}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_broadcastsd_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vbroadcastsd %xmm1, %ymm0 {%k1}
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1252,23 +1161,14 @@ define <4 x double> @test_mm256_mask_broadcastsd_pd(<4 x double> %a0, i8 %a1, <2
 define <4 x double> @test_mm256_maskz_broadcastsd_pd(i8 %a0, <2 x double> %a1) {
 ; X32-LABEL: test_mm256_maskz_broadcastsd_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vbroadcastsd %xmm0, %ymm0 {%k1} {z}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_broadcastsd_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vbroadcastsd %xmm0, %ymm0 {%k1} {z}
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4
@@ -1295,23 +1195,14 @@ define <4 x float> @test_mm_broadcastss_ps(<4 x float> %a0) {
 define <4 x float> @test_mm_mask_broadcastss_ps(<4 x float> %a0, i8 %a1, <4 x float> %a2) {
 ; X32-LABEL: test_mm_mask_broadcastss_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vbroadcastss %xmm1, %xmm0 {%k1}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_broadcastss_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vbroadcastss %xmm1, %xmm0 {%k1}
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1324,23 +1215,14 @@ define <4 x float> @test_mm_mask_broadcastss_ps(<4 x float> %a0, i8 %a1, <4 x fl
 define <4 x float> @test_mm_maskz_broadcastss_ps(i8 %a0, <4 x float> %a1) {
 ; X32-LABEL: test_mm_maskz_broadcastss_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vbroadcastss %xmm0, %xmm0 {%k1} {z}
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_broadcastss_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vbroadcastss %xmm0, %xmm0 {%k1} {z}
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4
@@ -1419,23 +1301,14 @@ define <2 x double> @test_mm_movddup_pd(<2 x double> %a0) {
 define <2 x double> @test_mm_mask_movddup_pd(<2 x double> %a0, i8 %a1, <2 x double> %a2) {
 ; X32-LABEL: test_mm_mask_movddup_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} = xmm1[0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_movddup_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} = xmm1[0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i2
@@ -1448,23 +1321,14 @@ define <2 x double> @test_mm_mask_movddup_pd(<2 x double> %a0, i8 %a1, <2 x doub
 define <2 x double> @test_mm_maskz_movddup_pd(i8 %a0, <2 x double> %a1) {
 ; X32-LABEL: test_mm_maskz_movddup_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} {z} = xmm0[0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_movddup_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovddup {{.*#+}} xmm0 {%k1} {z} = xmm0[0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a0 to i2
@@ -1491,23 +1355,14 @@ define <4 x double> @test_mm256_movddup_pd(<4 x double> %a0) {
 define <4 x double> @test_mm256_mask_movddup_pd(<4 x double> %a0, i8 %a1, <4 x double> %a2) {
 ; X32-LABEL: test_mm256_mask_movddup_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovddup {{.*#+}} ymm0 {%k1} = ymm1[0,0,2,2]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_movddup_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovddup {{.*#+}} ymm0 {%k1} = ymm1[0,0,2,2]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1520,23 +1375,14 @@ define <4 x double> @test_mm256_mask_movddup_pd(<4 x double> %a0, i8 %a1, <4 x d
 define <4 x double> @test_mm256_maskz_movddup_pd(i8 %a0, <4 x double> %a1) {
 ; X32-LABEL: test_mm256_maskz_movddup_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovddup {{.*#+}} ymm0 {%k1} {z} = ymm0[0,0,2,2]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_movddup_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovddup {{.*#+}} ymm0 {%k1} {z} = ymm0[0,0,2,2]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a0 to i4
@@ -1563,23 +1409,14 @@ define <4 x float> @test_mm_movehdup_ps(<4 x float> %a0) {
 define <4 x float> @test_mm_mask_movehdup_ps(<4 x float> %a0, i8 %a1, <4 x float> %a2) {
 ; X32-LABEL: test_mm_mask_movehdup_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovshdup {{.*#+}} xmm0 {%k1} = xmm1[1,1,3,3]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_movehdup_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovshdup {{.*#+}} xmm0 {%k1} = xmm1[1,1,3,3]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1592,23 +1429,14 @@ define <4 x float> @test_mm_mask_movehdup_ps(<4 x float> %a0, i8 %a1, <4 x float
 define <4 x float> @test_mm_maskz_movehdup_ps(i8 %a0, <4 x float> %a1) {
 ; X32-LABEL: test_mm_maskz_movehdup_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovshdup {{.*#+}} xmm0 {%k1} {z} = xmm0[1,1,3,3]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_movehdup_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovshdup {{.*#+}} xmm0 {%k1} {z} = xmm0[1,1,3,3]
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4
@@ -1687,23 +1515,14 @@ define <4 x float> @test_mm_moveldup_ps(<4 x float> %a0) {
 define <4 x float> @test_mm_mask_moveldup_ps(<4 x float> %a0, i8 %a1, <4 x float> %a2) {
 ; X32-LABEL: test_mm_mask_moveldup_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovsldup {{.*#+}} xmm0 {%k1} = xmm1[0,0,2,2]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_moveldup_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovsldup {{.*#+}} xmm0 {%k1} = xmm1[0,0,2,2]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1716,23 +1535,14 @@ define <4 x float> @test_mm_mask_moveldup_ps(<4 x float> %a0, i8 %a1, <4 x float
 define <4 x float> @test_mm_maskz_moveldup_ps(i8 %a0, <4 x float> %a1) {
 ; X32-LABEL: test_mm_maskz_moveldup_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vmovsldup {{.*#+}} xmm0 {%k1} {z} = xmm0[0,0,2,2]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_moveldup_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vmovsldup {{.*#+}} xmm0 {%k1} {z} = xmm0[0,0,2,2]
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4
@@ -1811,23 +1621,14 @@ define <4 x i64> @test_mm256_permutex_epi64(<4 x i64> %a0) {
 define <4 x i64> @test_mm256_mask_permutex_epi64(<4 x i64> %a0, i8 %a1, <4 x i64> %a2) {
 ; X32-LABEL: test_mm256_mask_permutex_epi64:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpermq {{.*#+}} ymm0 {%k1} = ymm1[1,0,0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_permutex_epi64:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpermq {{.*#+}} ymm0 {%k1} = ymm1[1,0,0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1840,23 +1641,14 @@ define <4 x i64> @test_mm256_mask_permutex_epi64(<4 x i64> %a0, i8 %a1, <4 x i64
 define <4 x i64> @test_mm256_maskz_permutex_epi64(i8 %a0, <4 x i64> %a1) {
 ; X32-LABEL: test_mm256_maskz_permutex_epi64:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpermq {{.*#+}} ymm0 {%k1} {z} = ymm0[1,0,0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_permutex_epi64:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpermq {{.*#+}} ymm0 {%k1} {z} = ymm0[1,0,0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a0 to i4
@@ -1883,23 +1675,14 @@ define <4 x double> @test_mm256_permutex_pd(<4 x double> %a0) {
 define <4 x double> @test_mm256_mask_permutex_pd(<4 x double> %a0, i8 %a1, <4 x double> %a2) {
 ; X32-LABEL: test_mm256_mask_permutex_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpermpd {{.*#+}} ymm0 {%k1} = ymm1[1,0,0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_permutex_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpermpd {{.*#+}} ymm0 {%k1} = ymm1[1,0,0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -1912,23 +1695,14 @@ define <4 x double> @test_mm256_mask_permutex_pd(<4 x double> %a0, i8 %a1, <4 x 
 define <4 x double> @test_mm256_maskz_permutex_pd(i8 %a0, <4 x double> %a1) {
 ; X32-LABEL: test_mm256_maskz_permutex_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vpermpd {{.*#+}} ymm0 {%k1} {z} = ymm0[1,0,0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_permutex_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vpermpd {{.*#+}} ymm0 {%k1} {z} = ymm0[1,0,0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a0 to i4
@@ -1955,23 +1729,14 @@ define <2 x double> @test_mm_shuffle_pd(<2 x double> %a0, <2 x double> %a1) {
 define <2 x double> @test_mm_mask_shuffle_pd(<2 x double> %a0, i8 %a1, <2 x double> %a2, <2 x double> %a3) {
 ; X32-LABEL: test_mm_mask_shuffle_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vunpckhpd {{.*#+}} xmm0 {%k1} = xmm1[1],xmm2[1]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_shuffle_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vunpckhpd {{.*#+}} xmm0 {%k1} = xmm1[1],xmm2[1]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i2
@@ -1984,23 +1749,14 @@ define <2 x double> @test_mm_mask_shuffle_pd(<2 x double> %a0, i8 %a1, <2 x doub
 define <2 x double> @test_mm_maskz_shuffle_pd(i8 %a0, <2 x double> %a1, <2 x double> %a2) {
 ; X32-LABEL: test_mm_maskz_shuffle_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $3, %al
-; X32-NEXT:    movb %al, {{[0-9]+}}(%esp)
-; X32-NEXT:    movzbl {{[0-9]+}}(%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vunpckhpd {{.*#+}} xmm0 {%k1} {z} = xmm0[1],xmm1[1]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_shuffle_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $3, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vunpckhpd {{.*#+}} xmm0 {%k1} {z} = xmm0[1],xmm1[1]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a0 to i2
@@ -2027,23 +1783,14 @@ define <4 x double> @test_mm256_shuffle_pd(<4 x double> %a0, <4 x double> %a1) {
 define <4 x double> @test_mm256_mask_shuffle_pd(<4 x double> %a0, i8 %a1, <4 x double> %a2, <4 x double> %a3) {
 ; X32-LABEL: test_mm256_mask_shuffle_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vshufpd {{.*#+}} ymm0 {%k1} = ymm1[1],ymm2[1],ymm1[2],ymm2[2]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_mask_shuffle_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vshufpd {{.*#+}} ymm0 {%k1} = ymm1[1],ymm2[1],ymm1[2],ymm2[2]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -2056,23 +1803,14 @@ define <4 x double> @test_mm256_mask_shuffle_pd(<4 x double> %a0, i8 %a1, <4 x d
 define <4 x double> @test_mm256_maskz_shuffle_pd(i8 %a0, <4 x double> %a1, <4 x double> %a2) {
 ; X32-LABEL: test_mm256_maskz_shuffle_pd:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vshufpd {{.*#+}} ymm0 {%k1} {z} = ymm0[1],ymm1[1],ymm0[2],ymm1[2]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm256_maskz_shuffle_pd:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vshufpd {{.*#+}} ymm0 {%k1} {z} = ymm0[1],ymm1[1],ymm0[2],ymm1[2]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a0 to i4
@@ -2099,23 +1837,14 @@ define <4 x float> @test_mm_shuffle_ps(<4 x float> %a0, <4 x float> %a1) {
 define <4 x float> @test_mm_mask_shuffle_ps(<4 x float> %a0, i8 %a1, <4 x float> %a2, <4 x float> %a3) {
 ; X32-LABEL: test_mm_mask_shuffle_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vshufps {{.*#+}} xmm0 {%k1} = xmm1[0,1],xmm2[0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_mask_shuffle_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vshufps {{.*#+}} xmm0 {%k1} = xmm1[0,1],xmm2[0,0]
 ; X64-NEXT:    retq
   %trn1 = trunc i8 %a1 to i4
@@ -2128,23 +1857,14 @@ define <4 x float> @test_mm_mask_shuffle_ps(<4 x float> %a0, i8 %a1, <4 x float>
 define <4 x float> @test_mm_maskz_shuffle_ps(i8 %a0, <4 x float> %a1, <4 x float> %a2) {
 ; X32-LABEL: test_mm_maskz_shuffle_ps:
 ; X32:       # %bb.0:
-; X32-NEXT:    pushl %eax
-; X32-NEXT:    .cfi_def_cfa_offset 8
 ; X32-NEXT:    movb {{[0-9]+}}(%esp), %al
-; X32-NEXT:    andb $15, %al
-; X32-NEXT:    movb %al, (%esp)
-; X32-NEXT:    movzbl (%esp), %eax
 ; X32-NEXT:    kmovw %eax, %k1
 ; X32-NEXT:    vshufps {{.*#+}} xmm0 {%k1} {z} = xmm0[0,1],xmm1[0,0]
-; X32-NEXT:    popl %eax
 ; X32-NEXT:    retl
 ;
 ; X64-LABEL: test_mm_maskz_shuffle_ps:
 ; X64:       # %bb.0:
-; X64-NEXT:    andb $15, %dil
-; X64-NEXT:    movb %dil, -{{[0-9]+}}(%rsp)
-; X64-NEXT:    movzbl -{{[0-9]+}}(%rsp), %eax
-; X64-NEXT:    kmovw %eax, %k1
+; X64-NEXT:    kmovw %edi, %k1
 ; X64-NEXT:    vshufps {{.*#+}} xmm0 {%k1} {z} = xmm0[0,1],xmm1[0,0]
 ; X64-NEXT:    retq
   %trn0 = trunc i8 %a0 to i4

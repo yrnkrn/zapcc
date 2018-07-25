@@ -21,6 +21,7 @@
 
 using namespace llvm;
 using namespace TargetOpcode;
+using namespace LegalizeActions;
 
 /// FIXME: The following static functions are SizeChangeStrategy functions
 /// that are meant to temporarily mimic the behaviour of the old legalization
@@ -38,7 +39,7 @@ addAndInterleaveWithUnsupported(LegalizerInfo::SizeAndActionsVec &result,
     result.push_back(v[i]);
     if (i + 1 < v[i].first && i + 1 < v.size() &&
         v[i + 1].first != v[i].first + 1)
-      result.push_back({v[i].first + 1, LegalizerInfo::Unsupported});
+      result.push_back({v[i].first + 1, Unsupported});
   }
 }
 
@@ -46,11 +47,11 @@ static LegalizerInfo::SizeAndActionsVec
 widen_1(const LegalizerInfo::SizeAndActionsVec &v) {
   assert(v.size() >= 1);
   assert(v[0].first > 1);
-  LegalizerInfo::SizeAndActionsVec result = {{1, LegalizerInfo::WidenScalar},
-                                             {2, LegalizerInfo::Unsupported}};
+  LegalizerInfo::SizeAndActionsVec result = {{1, WidenScalar},
+                                             {2, Unsupported}};
   addAndInterleaveWithUnsupported(result, v);
   auto Largest = result.back().first;
-  result.push_back({Largest + 1, LegalizerInfo::Unsupported});
+  result.push_back({Largest + 1, Unsupported});
   return result;
 }
 
@@ -91,6 +92,7 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
   const LLT s16 = LLT::scalar(16);
   const LLT s32 = LLT::scalar(32);
   const LLT s64 = LLT::scalar(64);
+  const LLT s128 = LLT::scalar(128);
 
   for (auto Ty : {p0, s1, s8, s16, s32})
     setAction({G_IMPLICIT_DEF, Ty}, Legal);
@@ -135,6 +137,7 @@ void X86LegalizerInfo::setLegalizerInfo32bit() {
     setAction({G_SEXT, Ty}, Legal);
     setAction({G_ANYEXT, Ty}, Legal);
   }
+  setAction({G_ANYEXT, s128}, Legal);
 
   // Comparison
   setAction({G_ICMP, s1}, Legal);
@@ -162,6 +165,9 @@ void X86LegalizerInfo::setLegalizerInfo64bit() {
   const LLT s128 = LLT::scalar(128);
 
   setAction({G_IMPLICIT_DEF, s64}, Legal);
+  // Need to have that, as tryFoldImplicitDef will create this pattern:
+  // s128 = EXTEND (G_IMPLICIT_DEF s32/s64) -> s128 = G_IMPLICIT_DEF
+  setAction({G_IMPLICIT_DEF, s128}, Legal);
 
   setAction({G_PHI, s64}, Legal);
 

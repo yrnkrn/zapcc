@@ -1474,6 +1474,24 @@ for the function.
 Example "subtarget features" from the x86 backend include: "mmx", "sse", "sse4.2",
 "avx", "xop" and largely correspond to the machine specific options handled by
 the front end.
+
+Additionally, this attribute supports function multiversioning for ELF based
+x86/x86-64 targets, which can be used to create multiple implementations of the
+same function that will be resolved at runtime based on the priority of their
+``target`` attribute strings. A function is considered a multiversioned function
+if either two declarations of the function have different ``target`` attribute
+  strings, or if it has a ``target`` attribute string of ``default``.  For
+  example:
+
+  .. code-block:: c++
+  __attribute__((target("arch=atom")))
+  void foo() {} // will be called on 'atom' processors.
+  __attribute__((target("default")))
+  void foo() {} // will be called on any other processors.
+
+All multiversioned functions must contain a ``default`` (fallback)
+implementation, otherwise usages of the function are considered invalid.
+Additionally, a function may not become multiversioned after its first use.
 }];
 }
 
@@ -2221,6 +2239,48 @@ The layout_version attribute requests that the compiler utilize the class
 layout rules of a particular compiler version.
 This attribute only applies to struct, class, and union types.
 It is only supported when using the Microsoft C++ ABI.
+  }];
+}
+
+def TrivialABIDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+The ``trivial_abi`` attribute can be applied to a C++ class, struct, or union.
+It instructs the compiler to pass and return the type using the C ABI for the
+underlying type when the type would otherwise be considered non-trivial for the
+purpose of calls.
+A class annotated with `trivial_abi` can have non-trivial destructors or copy/move constructors without automatically becoming non-trivial for the purposes of calls. For example:
+
+  .. code-block:: c++
+
+    // A is trivial for the purposes of calls because `trivial_abi` makes the
+    // user-provided special functions trivial.
+    struct __attribute__((trivial_abi)) A {
+      ~A();
+      A(const A &);
+      A(A &&);
+      int x;
+    };
+
+    // B's destructor and copy/move constructor are considered trivial for the
+    // purpose of calls because A is trivial.
+    struct B {
+      A a;
+    };
+
+If a type is trivial for the purposes of calls, has a non-trivial destructor,
+and is passed as an argument by value, the convention is that the callee will
+destroy the object before returning.
+
+Attribute ``trivial_abi`` has no effect in the following cases:
+
+- The class directly declares a virtual base or virtual methods.
+- The class has a base class that is non-trivial for the purposes of calls.
+- The class has a non-static data member whose type is non-trivial for the
+purposes of calls, which includes:
+ - classes that are non-trivial for the purposes of calls
+ - __weak-qualified types in Objective-C++
+ - arrays of any of the above
   }];
 }
 

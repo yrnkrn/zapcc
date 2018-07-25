@@ -365,13 +365,33 @@ machine instructions.
 Instruction Flags
 ^^^^^^^^^^^^^^^^^
 
-The flag ``frame-setup`` can be specified before the instruction's name:
+The flag ``frame-setup`` or ``frame-destroy`` can be specified before the
+instruction's name:
 
 .. code-block:: text
 
     %fp = frame-setup ADDXri %sp, 0, 0
 
+.. code-block:: text
+
+    %x21, %x20 = frame-destroy LDPXi %sp
+
 .. _registers:
+
+Bundled Instructions
+^^^^^^^^^^^^^^^^^^^^
+
+The syntax for bundled instructions is the following:
+
+.. code-block:: text
+
+    BUNDLE implicit-def %r0, implicit-def %r1, implicit %r2 {
+      %r0 = SOME_OP %r2
+      %r1 = ANOTHER_OP internal %r0
+    }
+
+The first instruction is often a bundle header. The instructions between ``{``
+and ``}`` are bundled with the first instruction.
 
 Registers
 ---------
@@ -692,9 +712,52 @@ The syntax is:
 
     EH_LABEL <mcsymbol Ltmp1>
 
+CFIIndex Operands
+^^^^^^^^^^^^^^^^^
+
+A CFI Index operand is holding an index into a per-function side-table,
+``MachineFunction::getFrameInstructions()``, which references all the frame
+instructions in a ``MachineFunction``. A ``CFI_INSTRUCTION`` may look like it
+contains multiple operands, but the only operand it contains is the CFI Index.
+The other operands are tracked by the ``MCCFIInstruction`` object.
+
+The syntax is:
+
+.. code-block:: text
+
+    CFI_INSTRUCTION offset %w30, -16
+
+which may be emitted later in the MC layer as:
+
+.. code-block:: text
+
+    .cfi_offset w30, -16
+
+IntrinsicID Operands
+^^^^^^^^^^^^^^^^^^^^
+
+An Intrinsic ID operand contains a generic intrinsic ID or a target-specific ID.
+
+The syntax for the ``returnaddress`` intrinsic is:
+
+.. code-block:: text
+
+   %x0 = COPY intrinsic(@llvm.returnaddress)
+
+Predicate Operands
+^^^^^^^^^^^^^^^^^^
+
+A Predicate operand contains an IR predicate from ``CmpInst::Predicate``, like
+``ICMP_EQ``, etc.
+
+For an int eq predicate ``ICMP_EQ``, the syntax is:
+
+.. code-block:: text
+
+   %2:gpr(s32) = G_ICMP intpred(eq), %0, %1
+
 .. TODO: Describe the parsers default behaviour when optional YAML attributes
    are missing.
-.. TODO: Describe the syntax for the bundled instructions.
 .. TODO: Describe the syntax for virtual register YAML definitions.
 .. TODO: Describe the machine function's YAML flag attributes.
 .. TODO: Describe the syntax for the register mask machine operands.
@@ -702,7 +765,6 @@ The syntax is:
 .. TODO: Describe the syntax of the stack object machine operands and their
    YAML definitions.
 .. TODO: Describe the syntax of the block address machine operands.
-.. TODO: Describe the syntax of the CFI index machine operands.
 .. TODO: Describe the syntax of the metadata machine operands, and the
    instructions debug location attribute.
 .. TODO: Describe the syntax of the register live out machine operands.

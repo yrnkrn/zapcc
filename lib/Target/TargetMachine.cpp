@@ -141,12 +141,10 @@ bool TargetMachine::shouldAssumeDSOLocal(const Module &M,
   // produce a 0 if it turns out the symbol is undefined. While this
   // is ABI and relocation depended, it seems worth it to handle it
   // here.
-  // FIXME: this is probably not ELF specific.
-  if (GV && isPositionIndependent() && TT.isOSBinFormatELF() &&
-      GV->hasExternalWeakLinkage())
+  if (GV && isPositionIndependent() && GV->hasExternalWeakLinkage())
     return false;
 
-  if (GV && (GV->hasLocalLinkage() || !GV->hasDefaultVisibility()))
+  if (GV && !GV->hasDefaultVisibility())
     return true;
 
   if (TT.isOSBinFormatMachO()) {
@@ -219,10 +217,8 @@ CodeGenOpt::Level TargetMachine::getOptLevel() const { return OptLevel; }
 
 void TargetMachine::setOptLevel(CodeGenOpt::Level Level) { OptLevel = Level; }
 
-TargetIRAnalysis TargetMachine::getTargetIRAnalysis() {
-  return TargetIRAnalysis([](const Function &F) {
-    return TargetTransformInfo(F.getParent()->getDataLayout());
-  });
+TargetTransformInfo TargetMachine::getTargetTransformInfo(const Function &F) {
+  return TargetTransformInfo(F.getParent()->getDataLayout());
 }
 
 void TargetMachine::getNameWithPrefix(SmallVectorImpl<char> &Name,
@@ -243,4 +239,11 @@ MCSymbol *TargetMachine::getSymbol(const GlobalValue *GV) const {
   SmallString<128> NameStr;
   getNameWithPrefix(NameStr, GV, TLOF->getMangler());
   return TLOF->getContext().getOrCreateSymbol(NameStr);
+}
+
+TargetIRAnalysis TargetMachine::getTargetIRAnalysis() {
+  // Since Analysis can't depend on Target, use a std::function to invert the
+  // dependency.
+  return TargetIRAnalysis(
+      [this](const Function &F) { return this->getTargetTransformInfo(F); });
 }

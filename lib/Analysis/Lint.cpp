@@ -265,13 +265,21 @@ void Lint::visitCallSite(CallSite CS) {
         // Check that noalias arguments don't alias other arguments. This is
         // not fully precise because we don't know the sizes of the dereferenced
         // memory regions.
-        if (Formal->hasNoAliasAttr() && Actual->getType()->isPointerTy())
-          for (CallSite::arg_iterator BI = CS.arg_begin(); BI != AE; ++BI)
+        if (Formal->hasNoAliasAttr() && Actual->getType()->isPointerTy()) {
+          AttributeList PAL = CS.getAttributes();
+          unsigned ArgNo = 0;
+          for (CallSite::arg_iterator BI = CS.arg_begin(); BI != AE; ++BI) {
+            // Skip ByVal arguments since they will be memcpy'd to the callee's
+            // stack so we're not really passing the pointer anyway.
+            if (PAL.hasParamAttribute(ArgNo++, Attribute::ByVal))
+              continue;
             if (AI != BI && (*BI)->getType()->isPointerTy()) {
               AliasResult Result = AA->alias(*AI, *BI);
               Assert(Result != MustAlias && Result != PartialAlias,
                      "Unusual: noalias argument aliases another argument", &I);
             }
+          }
+        }
 
         // Check that an sret argument points to valid memory.
         if (Formal->hasStructRetAttr() && Actual->getType()->isPointerTy()) {
@@ -315,9 +323,9 @@ void Lint::visitCallSite(CallSite CS) {
       MemCpyInst *MCI = cast<MemCpyInst>(&I);
       // TODO: If the size is known, use it.
       visitMemoryReference(I, MCI->getDest(), MemoryLocation::UnknownSize,
-                           MCI->getAlignment(), nullptr, MemRef::Write);
+                           MCI->getDestAlignment(), nullptr, MemRef::Write);
       visitMemoryReference(I, MCI->getSource(), MemoryLocation::UnknownSize,
-                           MCI->getAlignment(), nullptr, MemRef::Read);
+                           MCI->getSourceAlignment(), nullptr, MemRef::Read);
 
       // Check that the memcpy arguments don't overlap. The AliasAnalysis API
       // isn't expressive enough for what we really want to do. Known partial
@@ -337,16 +345,16 @@ void Lint::visitCallSite(CallSite CS) {
       MemMoveInst *MMI = cast<MemMoveInst>(&I);
       // TODO: If the size is known, use it.
       visitMemoryReference(I, MMI->getDest(), MemoryLocation::UnknownSize,
-                           MMI->getAlignment(), nullptr, MemRef::Write);
+                           MMI->getDestAlignment(), nullptr, MemRef::Write);
       visitMemoryReference(I, MMI->getSource(), MemoryLocation::UnknownSize,
-                           MMI->getAlignment(), nullptr, MemRef::Read);
+                           MMI->getSourceAlignment(), nullptr, MemRef::Read);
       break;
     }
     case Intrinsic::memset: {
       MemSetInst *MSI = cast<MemSetInst>(&I);
       // TODO: If the size is known, use it.
       visitMemoryReference(I, MSI->getDest(), MemoryLocation::UnknownSize,
-                           MSI->getAlignment(), nullptr, MemRef::Write);
+                           MSI->getDestAlignment(), nullptr, MemRef::Write);
       break;
     }
 

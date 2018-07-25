@@ -1,4 +1,4 @@
-; RUN: llc -O0 -filetype=obj -o - %s | llvm-dwarfdump -v - | FileCheck %s
+; RUN: llc -O0 -fast-isel -filetype=obj -o - %s | llvm-dwarfdump -v - | FileCheck %s
 ;
 ; Derived from (clang -O0 -g -fsanitize=address -fobjc-arc)
 ;   @protocol NSObject
@@ -14,7 +14,7 @@
 ;   @interface Object : NSObject
 ;   - (instancetype)initWithSize:(CGSize)size;
 ;   - (id)aMessage;
-;   @end            
+;   @end
 ;   @implementation MyObject
 ;   + (id)doWithSize:(CGSize)imageSize andObject:(id)object {
 ;     return [object aMessage];
@@ -28,9 +28,9 @@
 ; CHECK: "_cmd"
 ; CHECK: DW_TAG_formal_parameter
 ; CHECK-NEXT: DW_AT_location
-; CHECK-NEXT:   0x{{0*}} - 0x{{.*}}:
+; CHECK-NEXT:   [0x{{0*}}, 0x{{.*}}):
 ; CHECK-NOT:    DW_AT_
-; CHECK:        0x{{.*}} - [[FN_END]]:
+; CHECK:        [0x{{.*}}, [[FN_END]]):
 ; CHECK-NEXT: DW_AT_name {{.*}}"imageSize"
 
 ; ModuleID = 'm.m'

@@ -83,6 +83,9 @@ def FeatureDB             : SubtargetFeature<"db", "HasDataBarrier", "true",
 def FeatureV7Clrex        : SubtargetFeature<"v7clrex", "HasV7Clrex", "true",
                                              "Has v7 clrex instruction">;
 
+def FeatureDFB  : SubtargetFeature<"dfb", "HasFullDataBarrier", "true",
+                                   "Has full data barrier (dfb) instruction">;
+
 def FeatureAcquireRelease : SubtargetFeature<"acquire-release",
                                              "HasAcquireRelease", "true",
                                              "Has v8 acquire/release (lda/ldaex "
@@ -504,7 +507,8 @@ def ARMv5te   : Architecture<"armv5te",   "ARMv5te",  [HasV5TEOps]>;
 
 def ARMv5tej  : Architecture<"armv5tej",  "ARMv5tej", [HasV5TEOps]>;
 
-def ARMv6     : Architecture<"armv6",     "ARMv6",    [HasV6Ops]>;
+def ARMv6     : Architecture<"armv6",     "ARMv6",    [HasV6Ops,
+                                                       FeatureDSP]>;
 
 def ARMv6t2   : Architecture<"armv6t2",   "ARMv6t2",  [HasV6T2Ops,
                                                        FeatureDSP]>;
@@ -617,6 +621,7 @@ def ARMv83a   : Architecture<"armv8.3-a", "ARMv83a",  [HasV8_3aOps,
 def ARMv8r    : Architecture<"armv8-r",   "ARMv8r",   [HasV8Ops,
                                                        FeatureRClass,
                                                        FeatureDB,
+                                                       FeatureDFB,
                                                        FeatureDSP,
                                                        FeatureCRC,
                                                        FeatureMP,

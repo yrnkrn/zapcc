@@ -196,7 +196,7 @@ cl::opt<DIDumpType> llvm::DwarfDumpType(
 cl::opt<bool> PrintSource(
     "source",
     cl::desc(
-        "Display source inlined with disassembly. Implies disassmble object"));
+        "Display source inlined with disassembly. Implies disassemble object"));
 
 cl::alias PrintSourceShort("S", cl::desc("Alias for -source"),
                            cl::aliasopt(PrintSource));
@@ -1643,7 +1643,7 @@ static void DisassembleObject(const ObjectFile *Obj, bool InlineRelocs) {
                 outs() << " <" << TargetName;
                 uint64_t Disp = Target - TargetAddress;
                 if (Disp)
-                  outs() << "+0x" << utohexstr(Disp);
+                  outs() << "+0x" << Twine::utohexstr(Disp);
                 outs() << '>';
               }
             }

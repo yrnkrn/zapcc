@@ -94,6 +94,9 @@ def remark_module_lock_failure : Remark<
   "could not acquire lock file for module '%0': %1">, InGroup<ModuleBuild>;
 def remark_module_lock_timeout : Remark<
   "timed out waiting to acquire lock file for module '%0'">, InGroup<ModuleBuild>;
+def err_module_shadowed : Error<"import of shadowed module '%0'">, DefaultFatal;
+def err_module_build_shadowed_submodule : Error<
+  "build a shadowed submodule '%0'">, DefaultFatal;
 def err_module_cycle : Error<"cyclic dependency in module '%0': %1">, 
   DefaultFatal;
 def err_module_prebuilt : Error<
@@ -185,6 +188,7 @@ def note_invalid_subexpr_in_const_expr : Note<
 def err_target_unknown_triple : Error<
   "unknown target triple '%0', please use -triple or -arch">;
 def err_target_unknown_cpu : Error<"unknown target CPU '%0'">;
+def note_valid_options : Note<"valid target CPU values are: %0">;
 def err_target_unsupported_cpu_for_micromips : Error<
   "micromips is not supported for target CPU '%0'">;
 def err_target_unknown_abi : Error<"unknown target ABI '%0'">;
@@ -200,6 +204,8 @@ def err_target_unsupported_execute_only : Error<
   "execute only is not supported for the %0 sub-architecture">;
 def err_opt_not_valid_with_opt : Error<
   "option '%0' cannot be specified with '%1'">;
+def err_opt_not_valid_without_opt : Error<
+  "option '%0' cannot be specified without '%1'">;
 
 // Source manager
 def err_cannot_open_file : Error<"cannot open file '%0': %1">, DefaultFatal;

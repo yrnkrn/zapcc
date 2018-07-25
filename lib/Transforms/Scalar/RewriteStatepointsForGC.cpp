@@ -476,6 +476,12 @@ findBaseDefiningValueOfVector(Value *I) {
   if (auto *BC = dyn_cast<BitCastInst>(I))
     return findBaseDefiningValue(BC->getOperand(0));
 
+  // We assume that functions in the source language only return base
+  // pointers.  This should probably be generalized via attributes to support
+  // both source language and internal functions.
+  if (isa<CallInst>(I) || isa<InvokeInst>(I))
+    return BaseDefiningValueResult(I, true);
+
   // A PHI or Select is a base defining value.  The outer findBasePointer
   // algorithm is responsible for constructing a base value for this BDV.
   assert((isa<SelectInst>(I) || isa<PHINode>(I)) &&
@@ -2461,22 +2467,8 @@ static void stripNonValidDataFromBody(Function &F) {
         continue;
       }
 
-    if (const MDNode *MD = I.getMetadata(LLVMContext::MD_tbaa)) {
-      assert(MD->getNumOperands() < 5 && "unrecognized metadata shape!");
-      bool IsImmutableTBAA =
-          MD->getNumOperands() == 4 &&
-          mdconst::extract<ConstantInt>(MD->getOperand(3))->getValue() == 1;
-
-      if (!IsImmutableTBAA)
-        continue; // no work to do, MD_tbaa is already marked mutable
-
-      MDNode *Base = cast<MDNode>(MD->getOperand(0));
-      MDNode *Access = cast<MDNode>(MD->getOperand(1));
-      uint64_t Offset =
-          mdconst::extract<ConstantInt>(MD->getOperand(2))->getZExtValue();
-
-      MDNode *MutableTBAA =
-          Builder.createTBAAStructTagNode(Base, Access, Offset);
+    if (MDNode *Tag = I.getMetadata(LLVMContext::MD_tbaa)) {
+      MDNode *MutableTBAA = Builder.createMutableTBAAAccessTag(Tag);
       I.setMetadata(LLVMContext::MD_tbaa, MutableTBAA);
     }
 
@@ -2796,17 +2788,12 @@ static void recomputeLiveInValues(GCPtrLivenessData &RevisedLivenessData,
   StatepointLiveSetTy Updated;
   findLiveSetAtInst(Inst, RevisedLivenessData, Updated);
 
-#ifndef NDEBUG
-  DenseSet<Value *> Bases;
-  for (auto KVPair : Info.PointerToBase)
-    Bases.insert(KVPair.second);
-#endif
-
   // We may have base pointers which are now live that weren't before.  We need
   // to update the PointerToBase structure to reflect this.
   for (auto V : Updated)
     if (Info.PointerToBase.insert({V, V}).second) {
-      assert(Bases.count(V) && "Can't find base for unexpected live value!");
+      assert(isKnownBaseResult(V) &&
+             "Can't find base for unexpected live value!");
       continue;
     }
 

@@ -30,8 +30,8 @@ cl::opt<bool>
                llvm::cl::desc("Use llvm.dbg.addr for all local variables"),
                cl::init(false), cl::Hidden);
 
-DIBuilder::DIBuilder(Module &m, bool AllowUnresolvedNodes)
-  : M(m), VMContext(M.getContext()), CUNode(nullptr),
+DIBuilder::DIBuilder(Module &m, bool AllowUnresolvedNodes, DICompileUnit *CU)
+  : M(m), VMContext(M.getContext()), CUNode(CU),
       DeclareFn(nullptr), ValueFn(nullptr),
       AllowUnresolvedNodes(AllowUnresolvedNodes) {}
 
@@ -209,8 +209,8 @@ DIImportedEntity *DIBuilder::createImportedDeclaration(DIScope *Context,
 }
 
 DIFile *DIBuilder::createFile(StringRef Filename, StringRef Directory,
-                              DIFile::ChecksumKind CSKind, StringRef Checksum) {
-  return DIFile::get(VMContext, Filename, Directory, CSKind, Checksum);
+                              Optional<DIFile::ChecksumInfo<StringRef>> CS) {
+  return DIFile::get(VMContext, Filename, Directory, CS);
 }
 
 DIMacro *DIBuilder::createMacro(DIMacroFile *Parent, unsigned LineNumber,
@@ -238,9 +238,10 @@ DIMacroFile *DIBuilder::createTempMacroFile(DIMacroFile *Parent,
   return MF;
 }
 
-DIEnumerator *DIBuilder::createEnumerator(StringRef Name, int64_t Val) {
+DIEnumerator *DIBuilder::createEnumerator(StringRef Name, int64_t Val,
+                                          bool IsUnsigned) {
   assert(!Name.empty() && "Unable to create enumerator without name");
-  return DIEnumerator::get(VMContext, Val, Name);
+  return DIEnumerator::get(VMContext, Val, IsUnsigned, Name);
 }
 
 DIBasicType *DIBuilder::createUnspecifiedType(StringRef Name) {
@@ -336,6 +337,19 @@ static ConstantAsMetadata *getConstantOrNull(Constant *C) {
   if (C)
     return ConstantAsMetadata::get(C);
   return nullptr;
+}
+
+DIDerivedType *DIBuilder::createVariantMemberType(DIScope *Scope, StringRef Name,
+						  DIFile *File, unsigned LineNumber,
+						  uint64_t SizeInBits,
+						  uint32_t AlignInBits,
+						  uint64_t OffsetInBits,
+						  Constant *Discriminant,
+						  DINode::DIFlags Flags, DIType *Ty) {
+  return DIDerivedType::get(VMContext, dwarf::DW_TAG_member, Name, File,
+                            LineNumber, getNonCompileUnitScope(Scope), Ty,
+                            SizeInBits, AlignInBits, OffsetInBits, None, Flags,
+                            getConstantOrNull(Discriminant));
 }
 
 DIDerivedType *DIBuilder::createBitFieldMemberType(
@@ -463,6 +477,18 @@ DICompositeType *DIBuilder::createUnionType(
   return R;
 }
 
+DICompositeType *DIBuilder::createVariantPart(
+    DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNumber,
+    uint64_t SizeInBits, uint32_t AlignInBits, DINode::DIFlags Flags,
+    DIDerivedType *Discriminator, DINodeArray Elements, StringRef UniqueIdentifier) {
+  auto *R = DICompositeType::get(
+      VMContext, dwarf::DW_TAG_variant_part, Name, File, LineNumber,
+      getNonCompileUnitScope(Scope), nullptr, SizeInBits, AlignInBits, 0, Flags,
+      Elements, 0, nullptr, nullptr, UniqueIdentifier, Discriminator);
+  trackIfUnresolved(R);
+  return R;
+}
+
 DISubroutineType *DIBuilder::createSubroutineType(DITypeRefArray ParameterTypes,
                                                   DINode::DIFlags Flags,
                                                   unsigned CC) {
@@ -472,11 +498,12 @@ DISubroutineType *DIBuilder::createSubroutineType(DITypeRefArray ParameterTypes,
 DICompositeType *DIBuilder::createEnumerationType(
     DIScope *Scope, StringRef Name, DIFile *File, unsigned LineNumber,
     uint64_t SizeInBits, uint32_t AlignInBits, DINodeArray Elements,
-    DIType *UnderlyingType, StringRef UniqueIdentifier) {
+    DIType *UnderlyingType, StringRef UniqueIdentifier, bool IsFixed) {
   auto *CTy = DICompositeType::get(
       VMContext, dwarf::DW_TAG_enumeration_type, Name, File, LineNumber,
       getNonCompileUnitScope(Scope), UnderlyingType, SizeInBits, AlignInBits, 0,
-      DINode::FlagZero, Elements, 0, nullptr, nullptr, UniqueIdentifier);
+      IsFixed ? DINode::FlagFixedEnum : DINode::FlagZero, Elements, 0, nullptr,
+      nullptr, UniqueIdentifier);
   AllEnumTypes.push_back(CTy);
   trackIfUnresolved(CTy);
   return CTy;
@@ -585,6 +612,10 @@ DITypeRefArray DIBuilder::getOrCreateTypeArray(ArrayRef<Metadata *> Elements) {
 
 DISubrange *DIBuilder::getOrCreateSubrange(int64_t Lo, int64_t Count) {
   return DISubrange::get(VMContext, Count, Lo);
+}
+
+DISubrange *DIBuilder::getOrCreateSubrange(int64_t Lo, Metadata *CountNode) {
+  return DISubrange::get(VMContext, CountNode, Lo);
 }
 
 static void checkGlobalVariableScope(DIScope *Context) {

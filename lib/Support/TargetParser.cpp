@@ -537,7 +537,7 @@ StringRef llvm::AArch64::getDefaultCPU(StringRef Arch) {
 }
 
 unsigned llvm::AArch64::checkArchVersion(StringRef Arch) {
-  if (Arch[0] == 'v' && std::isdigit(Arch[1]))
+  if (Arch.size() >= 2 && Arch[0] == 'v' && std::isdigit(Arch[1]))
     return (Arch[1] - 48);
   return 0;
 }
@@ -581,7 +581,7 @@ static StringRef getArchSynonym(StringRef Arch) {
       .Case("v7r", "v7-r")
       .Case("v7m", "v7-m")
       .Case("v7em", "v7e-m")
-      .Cases("v8", "v8a", "aarch64", "arm64", "v8-a")
+      .Cases("v8", "v8a", "v8l", "aarch64", "arm64", "v8-a")
       .Case("v8.1a", "v8.1-a")
       .Case("v8.2a", "v8.2-a")
       .Case("v8.3a", "v8.3-a")
@@ -633,7 +633,7 @@ StringRef llvm::ARM::getCanonicalArchName(StringRef Arch) {
   // Only match non-marketing names
   if (offset != StringRef::npos) {
     // Must start with 'vN'.
-    if (A[0] != 'v' || !std::isdigit(A[1]))
+    if (A.size() >= 2 && (A[0] != 'v' || !std::isdigit(A[1])))
       return Error;
     // Can't have an extra 'eb'.
     if (A.find("eb") != StringRef::npos)
@@ -689,6 +689,20 @@ ARM::ArchKind llvm::ARM::parseCPUArch(StringRef CPU) {
   return ARM::ArchKind::INVALID;
 }
 
+void llvm::ARM::fillValidCPUArchList(SmallVectorImpl<StringRef> &Values) {
+  for (const CpuNames<ARM::ArchKind> &Arch : CPUNames) {
+    if (Arch.ArchID != ARM::ArchKind::INVALID)
+      Values.push_back(Arch.getName());
+  }
+}
+
+void llvm::AArch64::fillValidCPUArchList(SmallVectorImpl<StringRef> &Values) {
+  for (const CpuNames<AArch64::ArchKind> &Arch : AArch64CPUNames) {
+    if (Arch.ArchID != AArch64::ArchKind::INVALID)
+      Values.push_back(Arch.getName());
+  }
+}
+
 // ARM, Thumb, AArch64
 ARM::ISAKind ARM::parseArchISA(StringRef Arch) {
   return StringSwitch<ARM::ISAKind>(Arch)
@@ -739,7 +753,6 @@ ARM::ProfileKind ARM::parseArchProfile(StringRef Arch) {
   case ARM::ArchKind::ARMV8_2A:
   case ARM::ArchKind::ARMV8_3A:
     return ARM::ProfileKind::A;
-    LLVM_FALLTHROUGH;
   case ARM::ArchKind::ARMV2:
   case ARM::ArchKind::ARMV2A:
   case ARM::ArchKind::ARMV3:
@@ -869,10 +882,10 @@ AArch64::ArchKind AArch64::parseArch(StringRef Arch) {
   return ArchKind::INVALID;
 }
 
-unsigned llvm::AArch64::parseArchExt(StringRef ArchExt) {
+AArch64::ArchExtKind llvm::AArch64::parseArchExt(StringRef ArchExt) {
   for (const auto A : AArch64ARCHExtNames) {
     if (ArchExt == A.getName())
-      return A.ID;
+      return static_cast<ArchExtKind>(A.ID);
   }
   return AArch64::AEK_INVALID;
 }

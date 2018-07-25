@@ -28,7 +28,6 @@ static const EnumEntry<unsigned> WasmSymbolTypes[] = {
   ENUM_ENTRY(FUNCTION_EXPORT),
   ENUM_ENTRY(GLOBAL_IMPORT),
   ENUM_ENTRY(GLOBAL_EXPORT),
-  ENUM_ENTRY(DEBUG_FUNCTION_NAME),
 #undef ENUM_ENTRY
 };
 
@@ -100,8 +99,8 @@ void WasmDumper::printRelocation(const SectionRef &Section,
       W.printNumber("Addend", WasmReloc.Addend);
   } else {
     raw_ostream& OS = W.startLine();
-    OS << W.hex(Reloc.getOffset())
-       << " " << RelocTypeName << "[" << WasmReloc.Index << "]";
+    OS << W.hex(Reloc.getOffset()) << " " << RelocTypeName << "["
+       << WasmReloc.Index << "]";
     if (HasAddend)
       OS << " " << WasmReloc.Addend;
     OS << "\n";
@@ -156,6 +155,12 @@ void WasmDumper::printSections() {
       if (WasmSec.Name == "linking") {
         const wasm::WasmLinkingData &LinkingData = Obj->linkingData();
         W.printNumber("DataSize", LinkingData.DataSize);
+        if (!LinkingData.InitFunctions.empty()) {
+          ListScope Group(W, "InitFunctions");
+          for (const wasm::WasmInitFunc &F: LinkingData.InitFunctions)
+            W.startLine() << F.FunctionIndex << " (priority=" << F.Priority
+                          << ")\n";
+        }
       }
       break;
     case wasm::WASM_SEC_DATA: {

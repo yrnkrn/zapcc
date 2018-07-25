@@ -10,6 +10,7 @@
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/ADT/ilist_node.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ModuleSlotTracker.h"
@@ -79,7 +80,7 @@ TEST(MachineOperandTest, PrintSubReg) {
   std::string str;
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-  ASSERT_TRUE(OS.str() == "%physreg1.subreg5");
+  ASSERT_TRUE(OS.str() == "$physreg1.subreg5");
 }
 
 TEST(MachineOperandTest, PrintCImm) {
@@ -117,8 +118,7 @@ TEST(MachineOperandTest, PrintSubRegIndex) {
   // TRI and IntrinsicInfo we can print the operand as a subreg index.
   std::string str;
   raw_string_ostream OS(str);
-  ModuleSlotTracker DummyMST(nullptr);
-  MachineOperand::printSubregIdx(OS, MO.getImm(), nullptr);
+  MachineOperand::printSubRegIdx(OS, MO.getImm(), nullptr);
   ASSERT_TRUE(OS.str() == "%subreg.3");
 }
 
@@ -214,7 +214,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(OS.str() == "$foo");
+    ASSERT_TRUE(OS.str() == "&foo");
   }
 
   str.clear();
@@ -224,7 +224,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(OS.str() == "$foo + 12");
+    ASSERT_TRUE(OS.str() == "&foo + 12");
   }
 
   str.clear();
@@ -234,7 +234,7 @@ TEST(MachineOperandTest, PrintExternalSymbol) {
   {
     raw_string_ostream OS(str);
     MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
-    ASSERT_TRUE(OS.str() == "$foo - 12");
+    ASSERT_TRUE(OS.str() == "&foo - 12");
   }
 }
 
@@ -295,7 +295,7 @@ TEST(MachineOperandTest, PrintMetadata) {
   LLVMContext Ctx;
   Module M("MachineOperandMDNodeTest", Ctx);
   NamedMDNode *MD = M.getOrInsertNamedMetadata("namedmd");
-  ModuleSlotTracker DummyMST(&M);
+  ModuleSlotTracker MST(&M);
   Metadata *MDS = MDString::get(Ctx, "foo");
   MDNode *Node = MDNode::get(Ctx, MDS);
   MD->addOperand(Node);
@@ -311,7 +311,8 @@ TEST(MachineOperandTest, PrintMetadata) {
   std::string str;
   // Print a MachineOperand containing a metadata node.
   raw_string_ostream OS(str);
-  MO.print(OS, DummyMST, LLT{}, false, false, 0, /*TRI=*/nullptr,
+  MO.print(OS, MST, LLT{}, /*PrintDef=*/false, /*IsStandalone=*/false,
+           /*ShouldPrintRegisterTies=*/false, 0, /*TRI=*/nullptr,
            /*IntrinsicInfo=*/nullptr);
   ASSERT_TRUE(OS.str() == "!0");
 }
@@ -334,6 +335,68 @@ TEST(MachineOperandTest, PrintMCSymbol) {
   raw_string_ostream OS(str);
   MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
   ASSERT_TRUE(OS.str() == "<mcsymbol foo>");
+}
+
+TEST(MachineOperandTest, PrintCFI) {
+  // Create a MachineOperand with a CFI index but no function and print it.
+  MachineOperand MO = MachineOperand::CreateCFIIndex(8);
+
+  // Checking some preconditions on the newly created
+  // MachineOperand.
+  ASSERT_TRUE(MO.isCFIIndex());
+  ASSERT_TRUE(MO.getCFIIndex() == 8);
+
+  std::string str;
+  // Print a MachineOperand containing a CFI Index node but no machine function
+  // attached to it.
+  raw_string_ostream OS(str);
+  MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
+  ASSERT_TRUE(OS.str() == "<cfi directive>");
+}
+
+TEST(MachineOperandTest, PrintIntrinsicID) {
+  // Create a MachineOperand with a generic intrinsic ID.
+  MachineOperand MO = MachineOperand::CreateIntrinsicID(Intrinsic::bswap);
+
+  // Checking some preconditions on the newly created
+  // MachineOperand.
+  ASSERT_TRUE(MO.isIntrinsicID());
+  ASSERT_TRUE(MO.getIntrinsicID() == Intrinsic::bswap);
+
+  std::string str;
+  {
+    // Print a MachineOperand containing a generic intrinsic ID.
+    raw_string_ostream OS(str);
+    MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
+    ASSERT_TRUE(OS.str() == "intrinsic(@llvm.bswap)");
+  }
+
+  str.clear();
+  // Set a target-specific intrinsic.
+  MO = MachineOperand::CreateIntrinsicID((Intrinsic::ID)-1);
+  {
+    // Print a MachineOperand containing a target-specific intrinsic ID but not
+    // IntrinsicInfo.
+    raw_string_ostream OS(str);
+    MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
+    ASSERT_TRUE(OS.str() == "intrinsic(4294967295)");
+  }
+}
+
+TEST(MachineOperandTest, PrintPredicate) {
+  // Create a MachineOperand with a generic intrinsic ID.
+  MachineOperand MO = MachineOperand::CreatePredicate(CmpInst::ICMP_EQ);
+
+  // Checking some preconditions on the newly created
+  // MachineOperand.
+  ASSERT_TRUE(MO.isPredicate());
+  ASSERT_TRUE(MO.getPredicate() == CmpInst::ICMP_EQ);
+
+  std::string str;
+  // Print a MachineOperand containing a int predicate ICMP_EQ.
+  raw_string_ostream OS(str);
+  MO.print(OS, /*TRI=*/nullptr, /*IntrinsicInfo=*/nullptr);
+  ASSERT_TRUE(OS.str() == "intpred(eq)");
 }
 
 } // end namespace

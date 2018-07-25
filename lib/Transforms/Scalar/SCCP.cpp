@@ -523,10 +523,8 @@ private:
       DEBUG(dbgs() << "Marking Edge Executable: " << Source->getName()
             << " -> " << Dest->getName() << '\n');
 
-      PHINode *PN;
-      for (BasicBlock::iterator I = Dest->begin();
-           (PN = dyn_cast<PHINode>(I)); ++I)
-        visitPHINode(*PN);
+      for (PHINode &PN : Dest->phis())
+        visitPHINode(PN);
     }
   }
 
@@ -1902,7 +1900,7 @@ static bool runIPSCCP(Module &M, const DataLayout &DL,
         if (Inst->getType()->isVoidTy())
           continue;
         if (tryToReplaceWithConstant(Solver, Inst)) {
-          if (!isa<CallInst>(Inst) && !isa<TerminatorInst>(Inst))
+          if (Inst->isSafeToRemove())
             Inst->eraseFromParent();
           // Hey, we just changed something!
           MadeChanges = true;

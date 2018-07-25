@@ -81,6 +81,8 @@ class VOP3_Pseudo <string opName, VOPProfile P, list<dag> pattern = [],
   let UseNamedOperandTable = 1;
   let VOP3_OPSEL = isVop3OpSel;
   let IsPacked = P.IsPacked;
+  // Avoid changing source registers in a way that violates constant bus read limitations.
+  let hasExtraSrcRegAllocReq = 1;
 
   string Mnemonic = opName;
   string AsmOperands = !if(isVop3OpSel,
@@ -149,6 +151,7 @@ class VOP3_Real <VOP3_Pseudo ps, int EncodingFamily> :
   let TSFlags            = ps.TSFlags;
   let UseNamedOperandTable = ps.UseNamedOperandTable;
   let Uses                 = ps.Uses;
+  let Defs                 = ps.Defs;
 
   VOPProfile Pfl = ps.Pfl;
 }

@@ -218,6 +218,7 @@ public:
                  Attribute::get(getContext(), Kind, Val));
   }
 
+  /// @brief Add function attributes to this function.
   void addFnAttr(Attribute Attr) {
     addAttribute(AttributeList::FunctionIndex, Attr);
   }
@@ -233,20 +234,59 @@ public:
         getContext(), AttributeList::FunctionIndex, Kind));
   }
 
+  enum ProfileCountType { PCT_Invalid, PCT_Real, PCT_Synthetic };
+
+  /// Class to represent profile counts.
+  ///
+  /// This class represents both real and synthetic profile counts.
+  class ProfileCount {
+  private:
+    uint64_t Count;
+    ProfileCountType PCT;
+    static ProfileCount Invalid;
+
+  public:
+    ProfileCount() : Count(-1), PCT(PCT_Invalid) {}
+    ProfileCount(uint64_t Count, ProfileCountType PCT)
+        : Count(Count), PCT(PCT) {}
+    bool hasValue() const { return PCT != PCT_Invalid; }
+    uint64_t getCount() const { return Count; }
+    ProfileCountType getType() const { return PCT; }
+    bool isSynthetic() const { return PCT == PCT_Synthetic; }
+    explicit operator bool() { return hasValue(); }
+    bool operator!() const { return !hasValue(); }
+    // Update the count retaining the same profile count type.
+    ProfileCount &setCount(uint64_t C) {
+      Count = C;
+      return *this;
+    }
+    static ProfileCount getInvalid() { return ProfileCount(-1, PCT_Invalid); }
+  };
+
   /// \brief Set the entry count for this function.
   ///
   /// Entry count is the number of times this function was executed based on
-  /// pgo data. \p Imports points to a set of GUIDs that needs to be imported
-  /// by the function for sample PGO, to enable the same inlines as the
-  /// profiled optimized binary.
-  void setEntryCount(uint64_t Count,
+  /// pgo data. \p Imports points to a set of GUIDs that needs to
+  /// be imported by the function for sample PGO, to enable the same inlines as
+  /// the profiled optimized binary.
+  void setEntryCount(ProfileCount Count,
+                     const DenseSet<GlobalValue::GUID> *Imports = nullptr);
+
+  /// A convenience wrapper for setting entry count
+  void setEntryCount(uint64_t Count, ProfileCountType Type = PCT_Real,
                      const DenseSet<GlobalValue::GUID> *Imports = nullptr);
 
   /// \brief Get the entry count for this function.
   ///
   /// Entry count is the number of times the function was executed based on
   /// pgo data.
-  Optional<uint64_t> getEntryCount() const;
+  ProfileCount getEntryCount() const;
+
+  /// Return true if the function is annotated with profile data.
+  ///
+  /// Presence of entry counts from a profile run implies the function has
+  /// profile annotations.
+  bool hasProfileData() const { return getEntryCount().hasValue(); }
 
   /// Returns the set of GUIDs that needs to be imported to the function for
   /// sample PGO, to enable the same inlines as the profiled optimized binary.
@@ -262,6 +302,8 @@ public:
   bool hasFnAttribute(Attribute::AttrKind Kind) const {
     return AttributeSets.hasFnAttribute(Kind);
   }
+
+  /// @brief Return true if the function has the attribute.
   bool hasFnAttribute(StringRef Kind) const {
     return AttributeSets.hasFnAttribute(Kind);
   }
@@ -270,6 +312,8 @@ public:
   Attribute getFnAttribute(Attribute::AttrKind Kind) const {
     return getAttribute(AttributeList::FunctionIndex, Kind);
   }
+
+  /// @brief Return the attribute for the given attribute kind.
   Attribute getFnAttribute(StringRef Kind) const {
     return getAttribute(AttributeList::FunctionIndex, Kind);
   }
@@ -336,10 +380,12 @@ public:
     return getAttributes().hasParamAttribute(ArgNo, Kind);
   }
 
+  /// @brief gets the attribute from the list of attributes.
   Attribute getAttribute(unsigned i, Attribute::AttrKind Kind) const {
     return AttributeSets.getAttribute(i, Kind);
   }
 
+  /// @brief gets the attribute from the list of attributes.
   Attribute getAttribute(unsigned i, StringRef Kind) const {
     return AttributeSets.getAttribute(i, Kind);
   }

@@ -99,6 +99,9 @@ namespace  {
     const CommandTraits *Traits;
     const SourceManager *SM;
 
+    /// The policy to use for printing; can be defaulted.
+    PrintingPolicy PrintPolicy;
+
     /// Pending[i] is an action to dump an entity at level i.
     llvm::SmallVector<std::function<void(bool isLastChild)>, 32> Pending;
 
@@ -207,12 +210,17 @@ namespace  {
   public:
     ASTDumper(raw_ostream &OS, const CommandTraits *Traits,
               const SourceManager *SM)
-      : OS(OS), Traits(Traits), SM(SM),
-        ShowColors(SM && SM->getDiagnostics().getShowColors()) { }
+        : ASTDumper(OS, Traits, SM,
+                    SM && SM->getDiagnostics().getShowColors()) {}
 
     ASTDumper(raw_ostream &OS, const CommandTraits *Traits,
               const SourceManager *SM, bool ShowColors)
-      : OS(OS), Traits(Traits), SM(SM), ShowColors(ShowColors) {}
+        : ASTDumper(OS, Traits, SM, ShowColors, LangOptions()) {}
+    ASTDumper(raw_ostream &OS, const CommandTraits *Traits,
+              const SourceManager *SM, bool ShowColors,
+              const PrintingPolicy &PrintPolicy)
+        : OS(OS), Traits(Traits), SM(SM), PrintPolicy(PrintPolicy),
+          ShowColors(ShowColors) {}
 
     void setDeserialize(bool D) { Deserialize = D; }
 
@@ -531,6 +539,7 @@ namespace  {
     void VisitAddrLabelExpr(const AddrLabelExpr *Node);
     void VisitBlockExpr(const BlockExpr *Node);
     void VisitOpaqueValueExpr(const OpaqueValueExpr *Node);
+    void VisitGenericSelectionExpr(const GenericSelectionExpr *E);
 
     // C++
     void VisitCXXNamedCastExpr(const CXXNamedCastExpr *Node);
@@ -646,13 +655,13 @@ void ASTDumper::dumpBareType(QualType T, bool Desugar) {
   ColorScope Color(*this, TypeColor);
 
   SplitQualType T_split = T.split();
-  OS << "'" << QualType::getAsString(T_split) << "'";
+  OS << "'" << QualType::getAsString(T_split, PrintPolicy) << "'";
 
   if (Desugar && !T.isNull()) {
     // If the type is sugared, also dump a (shallow) desugared type.
     SplitQualType D_split = T.getSplitDesugaredType();
     if (T_split != D_split)
-      OS << ":'" << QualType::getAsString(D_split) << "'";
+      OS << ":'" << QualType::getAsString(D_split, PrintPolicy) << "'";
   }
 }
 
@@ -800,11 +809,10 @@ void ASTDumper::dumpLookups(const DeclContext *DC, bool DumpDecls) {
 
     bool HasUndeserializedLookups = Primary->hasExternalVisibleStorage();
 
-    for (auto I = Deserialize ? Primary->lookups_begin()
-                              : Primary->noload_lookups_begin(),
-              E = Deserialize ? Primary->lookups_end()
-                              : Primary->noload_lookups_end();
-         I != E; ++I) {
+    auto Range = Deserialize
+                     ? Primary->lookups()
+                     : Primary->noload_lookups(/*PreserveInternalState=*/true);
+    for (auto I = Range.begin(), E = Range.end(); I != E; ++I) {
       DeclarationName Name = I.getLookupName();
       DeclContextLookupResult R = *I;
 
@@ -1187,12 +1195,12 @@ void ASTDumper::VisitFunctionDecl(const FunctionDecl *D) {
 
   if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(D)) {
     if (MD->size_overridden_methods() != 0) {
-      auto dumpOverride =
-        [=](const CXXMethodDecl *D) {
-          SplitQualType T_split = D->getType().split();
-          OS << D << " " << D->getParent()->getName() << "::"
-             << D->getNameAsString() << " '" << QualType::getAsString(T_split) << "'";
-        };
+      auto dumpOverride = [=](const CXXMethodDecl *D) {
+        SplitQualType T_split = D->getType().split();
+        OS << D << " " << D->getParent()->getName()
+           << "::" << D->getNameAsString() << " '"
+           << QualType::getAsString(T_split, PrintPolicy) << "'";
+      };
 
       dumpChild([=] {
         auto Overrides = MD->overridden_methods();
@@ -1537,7 +1545,7 @@ void ASTDumper::VisitTemplateDeclSpecialization(const SpecializationDecl *D,
     case TSK_ExplicitInstantiationDefinition:
       if (!DumpExplicitInst)
         break;
-      // Fall through.
+      LLVM_FALLTHROUGH;
     case TSK_Undeclared:
     case TSK_ImplicitInstantiation:
       if (DumpRefOnly)
@@ -1938,8 +1946,13 @@ void ASTDumper::dumpStmt(const Stmt *S) {
       return;
     }
 
+    // Some statements have custom mechanisms for dumping their children.
     if (const DeclStmt *DS = dyn_cast<DeclStmt>(S)) {
       VisitDeclStmt(DS);
+      return;
+    }
+    if (const GenericSelectionExpr *GSE = dyn_cast<GenericSelectionExpr>(S)) {
+      VisitGenericSelectionExpr(GSE);
       return;
     }
 
@@ -2203,6 +2216,8 @@ void ASTDumper::VisitUnaryOperator(const UnaryOperator *Node) {
   VisitExpr(Node);
   OS << " " << (Node->isPostfix() ? "postfix" : "prefix")
      << " '" << UnaryOperator::getOpcodeStr(Node->getOpcode()) << "'";
+  if (!Node->canOverflow())
+    OS << " cannot overflow";
 }
 
 void ASTDumper::VisitUnaryExprOrTypeTraitExpr(
@@ -2262,6 +2277,32 @@ void ASTDumper::VisitOpaqueValueExpr(const OpaqueValueExpr *Node) {
 
   if (Expr *Source = Node->getSourceExpr())
     dumpStmt(Source);
+}
+
+void ASTDumper::VisitGenericSelectionExpr(const GenericSelectionExpr *E) {
+  VisitExpr(E);
+  if (E->isResultDependent())
+    OS << " result_dependent";
+  dumpStmt(E->getControllingExpr());
+  dumpTypeAsChild(E->getControllingExpr()->getType()); // FIXME: remove
+
+  for (unsigned I = 0, N = E->getNumAssocs(); I != N; ++I) {
+    dumpChild([=] {
+      if (const TypeSourceInfo *TSI = E->getAssocTypeSourceInfo(I)) {
+        OS << "case ";
+        dumpType(TSI->getType());
+      } else {
+        OS << "default";
+      }
+
+      if (!E->isResultDependent() && E->getResultIndex() == I)
+        OS << " selected";
+
+      if (const TypeSourceInfo *TSI = E->getAssocTypeSourceInfo(I))
+        dumpTypeAsChild(TSI->getType());
+      dumpStmt(E->getAssocExpr(I));
+    });
+  }
 }
 
 // GNU extensions.
@@ -2682,15 +2723,19 @@ LLVM_DUMP_METHOD void Type::dump(llvm::raw_ostream &OS) const {
 LLVM_DUMP_METHOD void Decl::dump() const { dump(llvm::errs()); }
 
 LLVM_DUMP_METHOD void Decl::dump(raw_ostream &OS, bool Deserialize) const {
-  ASTDumper P(OS, &getASTContext().getCommentCommandTraits(),
-              &getASTContext().getSourceManager());
+  const ASTContext &Ctx = getASTContext();
+  const SourceManager &SM = Ctx.getSourceManager();
+  ASTDumper P(OS, &Ctx.getCommentCommandTraits(), &SM,
+              SM.getDiagnostics().getShowColors(), Ctx.getPrintingPolicy());
   P.setDeserialize(Deserialize);
   P.dumpDecl(this);
 }
 
 LLVM_DUMP_METHOD void Decl::dumpColor() const {
-  ASTDumper P(llvm::errs(), &getASTContext().getCommentCommandTraits(),
-              &getASTContext().getSourceManager(), /*ShowColors*/true);
+  const ASTContext &Ctx = getASTContext();
+  ASTDumper P(llvm::errs(), &Ctx.getCommentCommandTraits(),
+              &Ctx.getSourceManager(), /*ShowColors*/ true,
+              Ctx.getPrintingPolicy());
   P.dumpDecl(this);
 }
 
@@ -2705,7 +2750,9 @@ LLVM_DUMP_METHOD void DeclContext::dumpLookups(raw_ostream &OS,
   while (!DC->isTranslationUnit())
     DC = DC->getParent();
   ASTContext &Ctx = cast<TranslationUnitDecl>(DC)->getASTContext();
-  ASTDumper P(OS, &Ctx.getCommentCommandTraits(), &Ctx.getSourceManager());
+  const SourceManager &SM = Ctx.getSourceManager();
+  ASTDumper P(OS, &Ctx.getCommentCommandTraits(), &Ctx.getSourceManager(),
+              SM.getDiagnostics().getShowColors(), Ctx.getPrintingPolicy());
   P.setDeserialize(Deserialize);
   P.dumpLookups(this, DumpDecls);
 }

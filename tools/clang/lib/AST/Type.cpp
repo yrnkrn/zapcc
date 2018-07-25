@@ -1997,12 +1997,7 @@ bool Type::isIncompleteType(NamedDecl **Def) const {
     EnumDecl *EnumD = cast<EnumType>(CanonicalType)->getDecl();
     if (Def)
       *Def = EnumD;
-    
-    // An enumeration with fixed underlying type is complete (C++0x 7.2p3).
-    if (EnumD->isFixed())
-      return false;
-    
-    return !EnumD->isCompleteDefinition();
+    return !EnumD->isComplete();
   }
   case Record: {
     // A tagged type (struct/union/enum/class) is incomplete if the decl is a
@@ -2198,6 +2193,12 @@ bool QualType::isTriviallyCopyableType(const ASTContext &Context) const {
   }
 
   // No other types can match.
+  return false;
+}
+
+bool QualType::hasTrivialABIOverride() const {
+  if (const auto *RD = getTypePtr()->getAsCXXRecordDecl())
+    return RD->hasTrivialABIOverride();
   return false;
 }
 

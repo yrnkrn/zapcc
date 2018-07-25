@@ -309,9 +309,19 @@ ProgramStateRef CStringChecker::CheckLocation(CheckerContext &C,
     if (!N)
       return nullptr;
 
+    CheckName Name;
+    // These checks are either enabled by the CString out-of-bounds checker
+    // explicitly or the "basic" CStringNullArg checker support that Malloc
+    // checker enables.
+    assert(Filter.CheckCStringOutOfBounds || Filter.CheckCStringNullArg);
+    if (Filter.CheckCStringOutOfBounds)
+      Name = Filter.CheckNameCStringOutOfBounds;
+    else
+      Name = Filter.CheckNameCStringNullArg;
+
     if (!BT_Bounds) {
       BT_Bounds.reset(new BuiltinBug(
-          Filter.CheckNameCStringOutOfBounds, "Out-of-bound array access",
+          Name, "Out-of-bound array access",
           "Byte string function accesses out-of-bound array element"));
     }
     BuiltinBug *BT = static_cast<BuiltinBug*>(BT_Bounds.get());
@@ -366,7 +376,7 @@ ProgramStateRef CStringChecker::CheckBufferAccess(CheckerContext &C,
   QualType PtrTy = Ctx.getPointerType(Ctx.CharTy);
 
   // Check that the first buffer is non-null.
-  SVal BufVal = state->getSVal(FirstBuf, LCtx);
+  SVal BufVal = C.getSVal(FirstBuf);
   state = checkNonNull(C, state, FirstBuf, BufVal);
   if (!state)
     return nullptr;
@@ -378,7 +388,7 @@ ProgramStateRef CStringChecker::CheckBufferAccess(CheckerContext &C,
   // Get the access length and make sure it is known.
   // FIXME: This assumes the caller has already checked that the access length
   // is positive. And that it's unsigned.
-  SVal LengthVal = state->getSVal(Size, LCtx);
+  SVal LengthVal = C.getSVal(Size);
   Optional<NonLoc> Length = LengthVal.getAs<NonLoc>();
   if (!Length)
     return state;
@@ -2149,7 +2159,7 @@ void CStringChecker::checkPreStmt(const DeclStmt *DS, CheckerContext &C) const {
     if (!MR)
       continue;
 
-    SVal StrVal = state->getSVal(Init, C.getLocationContext());
+    SVal StrVal = C.getSVal(Init);
     assert(StrVal.isValid() && "Initializer string is unknown or undefined");
     DefinedOrUnknownSVal strLength =
         getCStringLength(C, state, Init, StrVal).castAs<DefinedOrUnknownSVal>();

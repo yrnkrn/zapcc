@@ -108,8 +108,6 @@ namespace swiftcall {
     virtual bool isHomogeneousAggregateSmallEnough(const Type *Base,
                                                    uint64_t Members) const;
 
-    virtual bool shouldSignExtUnsignedType(QualType Ty) const;
-
     bool isHomogeneousAggregate(QualType Ty, const Type *&Base,
                                 uint64_t &Members) const;
 
@@ -137,8 +135,7 @@ namespace swiftcall {
 
     bool supportsSwift() const final override { return true; }
 
-    virtual bool shouldPassIndirectlyForSwift(CharUnits totalSize,
-                                              ArrayRef<llvm::Type*> types,
+    virtual bool shouldPassIndirectlyForSwift(ArrayRef<llvm::Type*> types,
                                               bool asReturnValue) const = 0;
 
     virtual bool isLegalVectorTypeForSwift(CharUnits totalSize,

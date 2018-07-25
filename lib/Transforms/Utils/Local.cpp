@@ -73,6 +73,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
 #include <climits>
@@ -100,25 +101,22 @@ STATISTIC(NumRemoved, "Number of unreachable basic blocks removed");
 /// conditions and indirectbr addresses this might make dead if
 /// DeleteDeadConditions is true.
 bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
-                                  const TargetLibraryInfo *TLI) {
+                                  const TargetLibraryInfo *TLI,
+                                  DeferredDominance *DDT) {
   TerminatorInst *T = BB->getTerminator();
   IRBuilder<> Builder(T);
 
   // Branch - See if we are conditional jumping on constant
-  if (BranchInst *BI = dyn_cast<BranchInst>(T)) {
+  if (auto *BI = dyn_cast<BranchInst>(T)) {
     if (BI->isUnconditional()) return false;  // Can't optimize uncond branch
     BasicBlock *Dest1 = BI->getSuccessor(0);
     BasicBlock *Dest2 = BI->getSuccessor(1);
 
-    if (ConstantInt *Cond = dyn_cast<ConstantInt>(BI->getCondition())) {
+    if (auto *Cond = dyn_cast<ConstantInt>(BI->getCondition())) {
       // Are we branching on constant?
       // YES.  Change to unconditional branch...
       BasicBlock *Destination = Cond->getZExtValue() ? Dest1 : Dest2;
       BasicBlock *OldDest     = Cond->getZExtValue() ? Dest2 : Dest1;
-
-      //cerr << "Function: " << T->getParent()->getParent()
-      //     << "\nRemoving branch from " << T->getParent()
-      //     << "\n\nTo: " << OldDest << endl;
 
       // Let the basic block know that we are letting go of it.  Based on this,
       // it will adjust it's PHI nodes.
@@ -127,6 +125,8 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       // Replace the conditional branch with an unconditional one.
       Builder.CreateBr(Destination);
       BI->eraseFromParent();
+      if (DDT)
+        DDT->deleteEdge(BB, OldDest);
       return true;
     }
 
@@ -150,10 +150,10 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
     return false;
   }
 
-  if (SwitchInst *SI = dyn_cast<SwitchInst>(T)) {
+  if (auto *SI = dyn_cast<SwitchInst>(T)) {
     // If we are switching on a constant, we can convert the switch to an
     // unconditional branch.
-    ConstantInt *CI = dyn_cast<ConstantInt>(SI->getCondition());
+    auto *CI = dyn_cast<ConstantInt>(SI->getCondition());
     BasicBlock *DefaultDest = SI->getDefaultDest();
     BasicBlock *TheOnlyDest = DefaultDest;
 
@@ -197,9 +197,12 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
                           createBranchWeights(Weights));
         }
         // Remove this entry.
-        DefaultDest->removePredecessor(SI->getParent());
+        BasicBlock *ParentBB = SI->getParent();
+        DefaultDest->removePredecessor(ParentBB);
         i = SI->removeCase(i);
         e = SI->case_end();
+        if (DDT)
+          DDT->deleteEdge(ParentBB, DefaultDest);
         continue;
       }
 
@@ -225,14 +228,20 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       // Insert the new branch.
       Builder.CreateBr(TheOnlyDest);
       BasicBlock *BB = SI->getParent();
+      std::vector <DominatorTree::UpdateType> Updates;
+      if (DDT)
+        Updates.reserve(SI->getNumSuccessors() - 1);
 
       // Remove entries from PHI nodes which we no longer branch to...
       for (BasicBlock *Succ : SI->successors()) {
         // Found case matching a constant operand?
-        if (Succ == TheOnlyDest)
+        if (Succ == TheOnlyDest) {
           TheOnlyDest = nullptr; // Don't modify the first branch to TheOnlyDest
-        else
+        } else {
           Succ->removePredecessor(BB);
+          if (DDT)
+            Updates.push_back({DominatorTree::Delete, BB, Succ});
+        }
       }
 
       // Delete the old switch.
@@ -240,6 +249,8 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
       SI->eraseFromParent();
       if (DeleteDeadConditions)
         RecursivelyDeleteTriviallyDeadInstructions(Cond, TLI);
+      if (DDT)
+        DDT->applyUpdates(Updates);
       return true;
     }
 
@@ -280,19 +291,28 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
     return false;
   }
 
-  if (IndirectBrInst *IBI = dyn_cast<IndirectBrInst>(T)) {
+  if (auto *IBI = dyn_cast<IndirectBrInst>(T)) {
     // indirectbr blockaddress(@F, @BB) -> br label @BB
-    if (BlockAddress *BA =
+    if (auto *BA =
           dyn_cast<BlockAddress>(IBI->getAddress()->stripPointerCasts())) {
       BasicBlock *TheOnlyDest = BA->getBasicBlock();
+      std::vector <DominatorTree::UpdateType> Updates;
+      if (DDT)
+        Updates.reserve(IBI->getNumDestinations() - 1);
+
       // Insert the new branch.
       Builder.CreateBr(TheOnlyDest);
 
       for (unsigned i = 0, e = IBI->getNumDestinations(); i != e; ++i) {
-        if (IBI->getDestination(i) == TheOnlyDest)
+        if (IBI->getDestination(i) == TheOnlyDest) {
           TheOnlyDest = nullptr;
-        else
-          IBI->getDestination(i)->removePredecessor(IBI->getParent());
+        } else {
+          BasicBlock *ParentBB = IBI->getParent();
+          BasicBlock *DestBB = IBI->getDestination(i);
+          DestBB->removePredecessor(ParentBB);
+          if (DDT)
+            Updates.push_back({DominatorTree::Delete, ParentBB, DestBB});
+        }
       }
       Value *Address = IBI->getAddress();
       IBI->eraseFromParent();
@@ -307,6 +327,8 @@ bool llvm::ConstantFoldTerminator(BasicBlock *BB, bool DeleteDeadConditions,
         new UnreachableInst(BB->getContext(), BB);
       }
 
+      if (DDT)
+        DDT->applyUpdates(Updates);
       return true;
     }
   }
@@ -583,7 +605,8 @@ bool llvm::SimplifyInstructionsInBlock(BasicBlock *BB,
 ///
 /// .. and delete the predecessor corresponding to the '1', this will attempt to
 /// recursively fold the and to 0.
-void llvm::RemovePredecessorAndSimplify(BasicBlock *BB, BasicBlock *Pred) {
+void llvm::RemovePredecessorAndSimplify(BasicBlock *BB, BasicBlock *Pred,
+                                        DeferredDominance *DDT) {
   // This only adjusts blocks with PHI nodes.
   if (!isa<PHINode>(BB->begin()))
     return;
@@ -606,13 +629,18 @@ void llvm::RemovePredecessorAndSimplify(BasicBlock *BB, BasicBlock *Pred) {
     // of the block.
     if (PhiIt != OldPhiIt) PhiIt = &BB->front();
   }
+  if (DDT)
+    DDT->deleteEdge(Pred, BB);
 }
 
 /// MergeBasicBlockIntoOnlyPred - DestBB is a block with one predecessor and its
 /// predecessor is known to have one successor (DestBB!).  Eliminate the edge
 /// between them, moving the instructions in the predecessor into DestBB and
 /// deleting the predecessor block.
-void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, DominatorTree *DT) {
+void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, DominatorTree *DT,
+                                       DeferredDominance *DDT) {
+  assert(!(DT && DDT) && "Cannot call with both DT and DDT.");
+
   // If BB has single-entry PHI nodes, fold them.
   while (PHINode *PN = dyn_cast<PHINode>(DestBB->begin())) {
     Value *NewVal = PN->getIncomingValue(0);
@@ -624,6 +652,25 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, DominatorTree *DT) {
 
   BasicBlock *PredBB = DestBB->getSinglePredecessor();
   assert(PredBB && "Block doesn't have a single predecessor!");
+
+  bool ReplaceEntryBB = false;
+  if (PredBB == &DestBB->getParent()->getEntryBlock())
+    ReplaceEntryBB = true;
+
+  // Deferred DT update: Collect all the edges that enter PredBB. These
+  // dominator edges will be redirected to DestBB.
+  std::vector <DominatorTree::UpdateType> Updates;
+  if (DDT && !ReplaceEntryBB) {
+    Updates.reserve(1 +
+                    (2 * std::distance(pred_begin(PredBB), pred_end(PredBB))));
+    Updates.push_back({DominatorTree::Delete, PredBB, DestBB});
+    for (auto I = pred_begin(PredBB), E = pred_end(PredBB); I != E; ++I) {
+      Updates.push_back({DominatorTree::Delete, *I, PredBB});
+      // This predecessor of PredBB may already have DestBB as a successor.
+      if (llvm::find(successors(*I), DestBB) == succ_end(*I))
+        Updates.push_back({DominatorTree::Insert, *I, DestBB});
+    }
+  }
 
   // Zap anything that took the address of DestBB.  Not doing this will give the
   // address an invalid value.
@@ -645,7 +692,7 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, DominatorTree *DT) {
 
   // If the PredBB is the entry block of the function, move DestBB up to
   // become the entry block after we erase PredBB.
-  if (PredBB == &DestBB->getParent()->getEntryBlock())
+  if (ReplaceEntryBB)
     DestBB->moveAfter(PredBB);
 
   if (DT) {
@@ -657,8 +704,19 @@ void llvm::MergeBasicBlockIntoOnlyPred(BasicBlock *DestBB, DominatorTree *DT) {
       DT->eraseNode(PredBB);
     }
   }
-  // Nuke BB.
-  PredBB->eraseFromParent();
+
+  if (DDT) {
+    DDT->deleteBB(PredBB); // Deferred deletion of BB.
+    if (ReplaceEntryBB)
+      // The entry block was removed and there is no external interface for the
+      // dominator tree to be notified of this change. In this corner-case we
+      // recalculate the entire tree.
+      DDT->recalculate(*(DestBB->getParent()));
+    else
+      DDT->applyUpdates(Updates);
+  } else {
+    PredBB->eraseFromParent(); // Nuke BB.
+  }
 }
 
 /// CanMergeValues - Return true if we can choose one of these values to use
@@ -865,7 +923,8 @@ static void redirectValuesFromPredecessorsToPhi(BasicBlock *BB,
 /// potential side-effect free intrinsics and the branch.  If possible,
 /// eliminate BB by rewriting all the predecessors to branch to the successor
 /// block and return true.  If we can't transform, return false.
-bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB) {
+bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB,
+                                                   DeferredDominance *DDT) {
   assert(BB != &BB->getParent()->getEntryBlock() &&
          "TryToSimplifyUncondBranchFromEmptyBlock called on entry block!");
 
@@ -905,6 +964,19 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB) {
   }
 
   DEBUG(dbgs() << "Killing Trivial BB: \n" << *BB);
+
+  std::vector<DominatorTree::UpdateType> Updates;
+  if (DDT) {
+    Updates.reserve(1 + (2 * std::distance(pred_begin(BB), pred_end(BB))));
+    Updates.push_back({DominatorTree::Delete, BB, Succ});
+    // All predecessors of BB will be moved to Succ.
+    for (auto I = pred_begin(BB), E = pred_end(BB); I != E; ++I) {
+      Updates.push_back({DominatorTree::Delete, *I, BB});
+      // This predecessor of BB may already have Succ as a successor.
+      if (llvm::find(successors(*I), Succ) == succ_end(*I))
+        Updates.push_back({DominatorTree::Insert, *I, Succ});
+    }
+  }
 
   if (isa<PHINode>(Succ->begin())) {
     // If there is more than one pred of succ, and there are PHI nodes in
@@ -950,7 +1022,13 @@ bool llvm::TryToSimplifyUncondBranchFromEmptyBlock(BasicBlock *BB) {
   // Everything that jumped to BB now goes to Succ.
   BB->replaceAllUsesWith(Succ);
   if (!Succ->hasName()) Succ->takeName(BB);
-  BB->eraseFromParent();              // Delete the old basic block.
+
+  if (DDT) {
+    DDT->deleteBB(BB); // Deferred deletion of the old basic block.
+    DDT->applyUpdates(Updates);
+  } else {
+    BB->eraseFromParent(); // Delete the old basic block.
+  }
   return true;
 }
 
@@ -1264,6 +1342,45 @@ bool llvm::LowerDbgDeclare(Function &F) {
   return true;
 }
 
+/// Propagate dbg.value intrinsics through the newly inserted PHIs.
+void llvm::insertDebugValuesForPHIs(BasicBlock *BB,
+                                    SmallVectorImpl<PHINode *> &InsertedPHIs) {
+  assert(BB && "No BasicBlock to clone dbg.value(s) from.");
+  if (InsertedPHIs.size() == 0)
+    return;
+
+  // Map existing PHI nodes to their dbg.values.
+  ValueToValueMapTy DbgValueMap;
+  for (auto &I : *BB) {
+    if (auto DbgII = dyn_cast<DbgInfoIntrinsic>(&I)) {
+      if (auto *Loc = dyn_cast_or_null<PHINode>(DbgII->getVariableLocation()))
+        DbgValueMap.insert({Loc, DbgII});
+    }
+  }
+  if (DbgValueMap.size() == 0)
+    return;
+
+  // Then iterate through the new PHIs and look to see if they use one of the
+  // previously mapped PHIs. If so, insert a new dbg.value intrinsic that will
+  // propagate the info through the new PHI.
+  LLVMContext &C = BB->getContext();
+  for (auto PHI : InsertedPHIs) {
+    for (auto VI : PHI->operand_values()) {
+      auto V = DbgValueMap.find(VI);
+      if (V != DbgValueMap.end()) {
+        auto *DbgII = cast<DbgInfoIntrinsic>(V->second);
+        Instruction *NewDbgII = DbgII->clone();
+        auto PhiMAV = MetadataAsValue::get(C, ValueAsMetadata::get(PHI));
+        NewDbgII->setOperand(0, PhiMAV);
+        BasicBlock *Parent = PHI->getParent();
+        auto InsertionPt = Parent->getFirstInsertionPt();
+        assert(InsertionPt != Parent->end() && "Ill-formed basic block");
+        NewDbgII->insertBefore(&*InsertionPt);
+      }
+    }
+  }
+}
+
 /// Finds all intrinsics declaring local variables as living in the memory that
 /// 'V' points to. This may include a mix of dbg.declare and
 /// dbg.addr intrinsics.
@@ -1293,8 +1410,8 @@ void llvm::findDbgValues(SmallVectorImpl<DbgValueInst *> &DbgValues, Value *V) {
           DbgValues.push_back(DVI);
 }
 
-static void findDbgUsers(SmallVectorImpl<DbgInfoIntrinsic *> &DbgUsers,
-                         Value *V) {
+void llvm::findDbgUsers(SmallVectorImpl<DbgInfoIntrinsic *> &DbgUsers,
+                        Value *V) {
   if (auto *L = LocalAsMetadata::getIfExists(V))
     if (auto *MDV = MetadataAsValue::getIfExists(V->getContext(), L))
       for (User *U : MDV->users())
@@ -1369,63 +1486,110 @@ void llvm::replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
 }
 
 void llvm::salvageDebugInfo(Instruction &I) {
-  SmallVector<DbgValueInst *, 1> DbgValues;
+  SmallVector<DbgInfoIntrinsic *, 1> DbgUsers;
+  findDbgUsers(DbgUsers, &I);
+  if (DbgUsers.empty())
+    return;
+
   auto &M = *I.getModule();
 
   auto wrapMD = [&](Value *V) {
     return MetadataAsValue::get(I.getContext(), ValueAsMetadata::get(V));
   };
 
-  auto applyOffset = [&](DbgValueInst *DVI, uint64_t Offset) {
-    auto *DIExpr = DVI->getExpression();
-    DIExpr = DIExpression::prepend(DIExpr, DIExpression::NoDeref, Offset,
-                                   DIExpression::NoDeref,
-                                   DIExpression::WithStackValue);
-    DVI->setOperand(0, wrapMD(I.getOperand(0)));
-    DVI->setOperand(2, MetadataAsValue::get(I.getContext(), DIExpr));
-    DEBUG(dbgs() << "SALVAGE: " << *DVI << '\n');
+  auto doSalvage = [&](DbgInfoIntrinsic *DII, SmallVectorImpl<uint64_t> &Ops) {
+    auto *DIExpr = DII->getExpression();
+    DIExpr = DIExpression::doPrepend(DIExpr, Ops,
+                                     DIExpression::WithStackValue);
+    DII->setOperand(0, wrapMD(I.getOperand(0)));
+    DII->setOperand(2, MetadataAsValue::get(I.getContext(), DIExpr));
+    DEBUG(dbgs() << "SALVAGE: " << *DII << '\n');
   };
 
-  if (isa<BitCastInst>(&I) || isa<IntToPtrInst>(&I)) {
-    // Bitcasts are entirely irrelevant for debug info. Rewrite dbg.value,
-    // dbg.addr, and dbg.declare to use the cast's source.
-    SmallVector<DbgInfoIntrinsic *, 1> DbgUsers;
-    findDbgUsers(DbgUsers, &I);
+  auto applyOffset = [&](DbgInfoIntrinsic *DII, uint64_t Offset) {
+    SmallVector<uint64_t, 8> Ops;
+    DIExpression::appendOffset(Ops, Offset);
+    doSalvage(DII, Ops);
+  };
+
+  auto applyOps = [&](DbgInfoIntrinsic *DII,
+                      std::initializer_list<uint64_t> Opcodes) {
+    SmallVector<uint64_t, 8> Ops(Opcodes);
+    doSalvage(DII, Ops);
+  };
+
+  if (auto *CI = dyn_cast<CastInst>(&I)) {
+    if (!CI->isNoopCast(M.getDataLayout()))
+      return;
+
+    // No-op casts are irrelevant for debug info.
+    MetadataAsValue *CastSrc = wrapMD(I.getOperand(0));
     for (auto *DII : DbgUsers) {
-      DII->setOperand(0, wrapMD(I.getOperand(0)));
+      DII->setOperand(0, CastSrc);
       DEBUG(dbgs() << "SALVAGE: " << *DII << '\n');
     }
   } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-    findDbgValues(DbgValues, &I);
-    for (auto *DVI : DbgValues) {
-      unsigned BitWidth =
-          M.getDataLayout().getPointerSizeInBits(GEP->getPointerAddressSpace());
-      APInt Offset(BitWidth, 0);
-      // Rewrite a constant GEP into a DIExpression.  Since we are performing
-      // arithmetic to compute the variable's *value* in the DIExpression, we
-      // need to mark the expression with a DW_OP_stack_value.
-      if (GEP->accumulateConstantOffset(M.getDataLayout(), Offset))
-        // GEP offsets are i32 and thus always fit into an int64_t.
-        applyOffset(DVI, Offset.getSExtValue());
-    }
+    unsigned BitWidth =
+        M.getDataLayout().getPointerSizeInBits(GEP->getPointerAddressSpace());
+    // Rewrite a constant GEP into a DIExpression.  Since we are performing
+    // arithmetic to compute the variable's *value* in the DIExpression, we
+    // need to mark the expression with a DW_OP_stack_value.
+    APInt Offset(BitWidth, 0);
+    if (GEP->accumulateConstantOffset(M.getDataLayout(), Offset))
+      for (auto *DII : DbgUsers)
+        applyOffset(DII, Offset.getSExtValue());
   } else if (auto *BI = dyn_cast<BinaryOperator>(&I)) {
-    if (BI->getOpcode() == Instruction::Add)
-      if (auto *ConstInt = dyn_cast<ConstantInt>(I.getOperand(1)))
-        if (ConstInt->getBitWidth() <= 64) {
-          APInt Offset = ConstInt->getValue();
-          findDbgValues(DbgValues, &I);
-          for (auto *DVI : DbgValues)
-            applyOffset(DVI, Offset.getSExtValue());
-        }
+    auto *ConstInt = dyn_cast<ConstantInt>(I.getOperand(1));
+    if (!ConstInt || ConstInt->getBitWidth() > 64)
+      return;
+
+    uint64_t Val = ConstInt->getSExtValue();
+    for (auto *DII : DbgUsers) {
+      switch (BI->getOpcode()) {
+      case Instruction::Add:
+        applyOffset(DII, Val);
+        break;
+      case Instruction::Sub:
+        applyOffset(DII, -int64_t(Val));
+        break;
+      case Instruction::Mul:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_mul});
+        break;
+      case Instruction::SDiv:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_div});
+        break;
+      case Instruction::SRem:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_mod});
+        break;
+      case Instruction::Or:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_or});
+        break;
+      case Instruction::Xor:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_xor});
+        break;
+      case Instruction::Shl:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_shl});
+        break;
+      case Instruction::LShr:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_shr});
+        break;
+      case Instruction::AShr:
+        applyOps(DII, {dwarf::DW_OP_constu, Val, dwarf::DW_OP_shra});
+        break;
+      default:
+        // TODO: Salvage constants from each kind of binop we know about.
+        continue;
+      }
+    }
   } else if (isa<LoadInst>(&I)) {
-    findDbgValues(DbgValues, &I);
-    for (auto *DVI : DbgValues) {
+    MetadataAsValue *AddrMD = wrapMD(I.getOperand(0));
+    for (auto *DII : DbgUsers) {
       // Rewrite the load into DW_OP_deref.
-      auto *DIExpr = DVI->getExpression();
+      auto *DIExpr = DII->getExpression();
       DIExpr = DIExpression::prepend(DIExpr, DIExpression::WithDeref);
-      DVI->setOperand(0, wrapMD(I.getOperand(0)));
-      DVI->setOperand(2, MetadataAsValue::get(I.getContext(), DIExpr));
-      DEBUG(dbgs() << "SALVAGE:  " << *DVI << '\n');
+      DII->setOperand(0, AddrMD);
+      DII->setOperand(2, MetadataAsValue::get(I.getContext(), DIExpr));
+      DEBUG(dbgs() << "SALVAGE:  " << *DII << '\n');
     }
   }
 }
@@ -1452,13 +1616,19 @@ unsigned llvm::removeAllNonTerminatorAndEHPadInstructions(BasicBlock *BB) {
 }
 
 unsigned llvm::changeToUnreachable(Instruction *I, bool UseLLVMTrap,
-                                   bool PreserveLCSSA) {
+                                   bool PreserveLCSSA, DeferredDominance *DDT) {
   BasicBlock *BB = I->getParent();
+  std::vector <DominatorTree::UpdateType> Updates;
+
   // Loop over all of the successors, removing BB's entry from any PHI
   // nodes.
-  for (BasicBlock *Successor : successors(BB))
+  if (DDT)
+    Updates.reserve(BB->getTerminator()->getNumSuccessors());
+  for (BasicBlock *Successor : successors(BB)) {
     Successor->removePredecessor(BB, PreserveLCSSA);
-
+    if (DDT)
+      Updates.push_back({DominatorTree::Delete, BB, Successor});
+  }
   // Insert a call to llvm.trap right before this.  This turns the undefined
   // behavior into a hard fail instead of falling through into random code.
   if (UseLLVMTrap) {
@@ -1478,11 +1648,13 @@ unsigned llvm::changeToUnreachable(Instruction *I, bool UseLLVMTrap,
     BB->getInstList().erase(BBI++);
     ++NumInstrsRemoved;
   }
+  if (DDT)
+    DDT->applyUpdates(Updates);
   return NumInstrsRemoved;
 }
 
 /// changeToCall - Convert the specified invoke into a normal call.
-static void changeToCall(InvokeInst *II) {
+static void changeToCall(InvokeInst *II, DeferredDominance *DDT = nullptr) {
   SmallVector<Value*, 8> Args(II->arg_begin(), II->arg_end());
   SmallVector<OperandBundleDef, 1> OpBundles;
   II->getOperandBundlesAsDefs(OpBundles);
@@ -1495,11 +1667,16 @@ static void changeToCall(InvokeInst *II) {
   II->replaceAllUsesWith(NewCall);
 
   // Follow the call by a branch to the normal destination.
-  BranchInst::Create(II->getNormalDest(), II);
+  BasicBlock *NormalDestBB = II->getNormalDest();
+  BranchInst::Create(NormalDestBB, II);
 
   // Update PHI nodes in the unwind destination
-  II->getUnwindDest()->removePredecessor(II->getParent());
+  BasicBlock *BB = II->getParent();
+  BasicBlock *UnwindDestBB = II->getUnwindDest();
+  UnwindDestBB->removePredecessor(BB);
   II->eraseFromParent();
+  if (DDT)
+    DDT->deleteEdge(BB, UnwindDestBB);
 }
 
 BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
@@ -1540,7 +1717,8 @@ BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
 }
 
 static bool markAliveBlocks(Function &F,
-                            SmallPtrSetImpl<BasicBlock*> &Reachable) {
+                            SmallPtrSetImpl<BasicBlock*> &Reachable,
+                            DeferredDominance *DDT = nullptr) {
   SmallVector<BasicBlock*, 128> Worklist;
   BasicBlock *BB = &F.front();
   Worklist.push_back(BB);
@@ -1560,7 +1738,7 @@ static bool markAliveBlocks(Function &F,
         if (II->getIntrinsicID() == Intrinsic::assume) {
           if (match(II->getArgOperand(0), m_CombineOr(m_Zero(), m_Undef()))) {
             // Don't insert a call to llvm.trap right before the unreachable.
-            changeToUnreachable(II, false);
+            changeToUnreachable(II, false, false, DDT);
             Changed = true;
             break;
           }
@@ -1577,7 +1755,8 @@ static bool markAliveBlocks(Function &F,
           // still be useful for widening.
           if (match(II->getArgOperand(0), m_Zero()))
             if (!isa<UnreachableInst>(II->getNextNode())) {
-              changeToUnreachable(II->getNextNode(), /*UseLLVMTrap=*/ false);
+              changeToUnreachable(II->getNextNode(), /*UseLLVMTrap=*/false,
+                                  false, DDT);
               Changed = true;
               break;
             }
@@ -1587,7 +1766,7 @@ static bool markAliveBlocks(Function &F,
       if (auto *CI = dyn_cast<CallInst>(&I)) {
         Value *Callee = CI->getCalledValue();
         if (isa<ConstantPointerNull>(Callee) || isa<UndefValue>(Callee)) {
-          changeToUnreachable(CI, /*UseLLVMTrap=*/false);
+          changeToUnreachable(CI, /*UseLLVMTrap=*/false, false, DDT);
           Changed = true;
           break;
         }
@@ -1597,7 +1776,7 @@ static bool markAliveBlocks(Function &F,
           // though.
           if (!isa<UnreachableInst>(CI->getNextNode())) {
             // Don't insert a call to llvm.trap right before the unreachable.
-            changeToUnreachable(CI->getNextNode(), false);
+            changeToUnreachable(CI->getNextNode(), false, false, DDT);
             Changed = true;
           }
           break;
@@ -1616,7 +1795,7 @@ static bool markAliveBlocks(Function &F,
         if (isa<UndefValue>(Ptr) ||
             (isa<ConstantPointerNull>(Ptr) &&
              SI->getPointerAddressSpace() == 0)) {
-          changeToUnreachable(SI, true);
+          changeToUnreachable(SI, true, false, DDT);
           Changed = true;
           break;
         }
@@ -1628,16 +1807,20 @@ static bool markAliveBlocks(Function &F,
       // Turn invokes that call 'nounwind' functions into ordinary calls.
       Value *Callee = II->getCalledValue();
       if (isa<ConstantPointerNull>(Callee) || isa<UndefValue>(Callee)) {
-        changeToUnreachable(II, true);
+        changeToUnreachable(II, true, false, DDT);
         Changed = true;
       } else if (II->doesNotThrow() && canSimplifyInvokeNoUnwind(&F)) {
         if (II->use_empty() && II->onlyReadsMemory()) {
           // jump to the normal destination branch.
-          BranchInst::Create(II->getNormalDest(), II);
-          II->getUnwindDest()->removePredecessor(II->getParent());
+          BasicBlock *NormalDestBB = II->getNormalDest();
+          BasicBlock *UnwindDestBB = II->getUnwindDest();
+          BranchInst::Create(NormalDestBB, II);
+          UnwindDestBB->removePredecessor(II->getParent());
           II->eraseFromParent();
+          if (DDT)
+            DDT->deleteEdge(BB, UnwindDestBB);
         } else
-          changeToCall(II);
+          changeToCall(II, DDT);
         Changed = true;
       }
     } else if (auto *CatchSwitch = dyn_cast<CatchSwitchInst>(Terminator)) {
@@ -1683,7 +1866,7 @@ static bool markAliveBlocks(Function &F,
       }
     }
 
-    Changed |= ConstantFoldTerminator(BB, true);
+    Changed |= ConstantFoldTerminator(BB, true, nullptr, DDT);
     for (BasicBlock *Successor : successors(BB))
       if (Reachable.insert(Successor).second)
         Worklist.push_back(Successor);
@@ -1691,11 +1874,11 @@ static bool markAliveBlocks(Function &F,
   return Changed;
 }
 
-void llvm::removeUnwindEdge(BasicBlock *BB) {
+void llvm::removeUnwindEdge(BasicBlock *BB, DeferredDominance *DDT) {
   TerminatorInst *TI = BB->getTerminator();
 
   if (auto *II = dyn_cast<InvokeInst>(TI)) {
-    changeToCall(II);
+    changeToCall(II, DDT);
     return;
   }
 
@@ -1723,15 +1906,18 @@ void llvm::removeUnwindEdge(BasicBlock *BB) {
   UnwindDest->removePredecessor(BB);
   TI->replaceAllUsesWith(NewTI);
   TI->eraseFromParent();
+  if (DDT)
+    DDT->deleteEdge(BB, UnwindDest);
 }
 
 /// removeUnreachableBlocks - Remove blocks that are not reachable, even
 /// if they are in a dead cycle.  Return true if a change was made, false
 /// otherwise. If `LVI` is passed, this function preserves LazyValueInfo
 /// after modifying the CFG.
-bool llvm::removeUnreachableBlocks(Function &F, LazyValueInfo *LVI) {
+bool llvm::removeUnreachableBlocks(Function &F, LazyValueInfo *LVI,
+                                   DeferredDominance *DDT) {
   SmallPtrSet<BasicBlock*, 16> Reachable;
-  bool Changed = markAliveBlocks(F, Reachable);
+  bool Changed = markAliveBlocks(F, Reachable, DDT);
 
   // If there are unreachable blocks in the CFG...
   if (Reachable.size() == F.size())
@@ -1741,25 +1927,39 @@ bool llvm::removeUnreachableBlocks(Function &F, LazyValueInfo *LVI) {
   NumRemoved += F.size()-Reachable.size();
 
   // Loop over all of the basic blocks that are not reachable, dropping all of
-  // their internal references...
-  for (Function::iterator BB = ++F.begin(), E = F.end(); BB != E; ++BB) {
-    if (Reachable.count(&*BB))
+  // their internal references. Update DDT and LVI if available.
+  std::vector <DominatorTree::UpdateType> Updates;
+  for (Function::iterator I = ++F.begin(), E = F.end(); I != E; ++I) {
+    auto *BB = &*I;
+    if (Reachable.count(BB))
       continue;
-
-    for (BasicBlock *Successor : successors(&*BB))
+    for (BasicBlock *Successor : successors(BB)) {
       if (Reachable.count(Successor))
-        Successor->removePredecessor(&*BB);
+        Successor->removePredecessor(BB);
+      if (DDT)
+        Updates.push_back({DominatorTree::Delete, BB, Successor});
+    }
     if (LVI)
-      LVI->eraseBlock(&*BB);
+      LVI->eraseBlock(BB);
     BB->dropAllReferences();
   }
 
-  for (Function::iterator I = ++F.begin(); I != F.end();)
-    if (!Reachable.count(&*I))
-      I = F.getBasicBlockList().erase(I);
-    else
+  for (Function::iterator I = ++F.begin(); I != F.end();) {
+    auto *BB = &*I;
+    if (Reachable.count(BB)) {
       ++I;
+      continue;
+    }
+    if (DDT) {
+      DDT->deleteBB(BB); // deferred deletion of BB.
+      ++I;
+    } else {
+      I = F.getBasicBlockList().erase(I);
+    }
+  }
 
+  if (DDT)
+    DDT->applyUpdates(Updates);
   return true;
 }
 

@@ -156,23 +156,23 @@ void Sema::CheckObjCMethodOverride(ObjCMethodDecl *NewMethod,
       Diag(Overridden->getLocation(), 
            diag::note_related_result_type_overridden);
   }
-  if (getLangOpts().ObjCAutoRefCount) {
-    Diags.setSeverity(diag::warn_nsreturns_retained_attribute_mismatch,
-                      diag::Severity::Error, SourceLocation());
-    Diags.setSeverity(diag::warn_nsconsumed_attribute_mismatch,
-                      diag::Severity::Error, SourceLocation());
-  }
 
   if ((NewMethod->hasAttr<NSReturnsRetainedAttr>() !=
        Overridden->hasAttr<NSReturnsRetainedAttr>())) {
     Diag(NewMethod->getLocation(),
-         diag::warn_nsreturns_retained_attribute_mismatch) << 1;
+         getLangOpts().ObjCAutoRefCount
+             ? diag::err_nsreturns_retained_attribute_mismatch
+             : diag::warn_nsreturns_retained_attribute_mismatch)
+        << 1;
     Diag(Overridden->getLocation(), diag::note_previous_decl) << "method";
   }
   if ((NewMethod->hasAttr<NSReturnsNotRetainedAttr>() !=
        Overridden->hasAttr<NSReturnsNotRetainedAttr>())) {
     Diag(NewMethod->getLocation(),
-         diag::warn_nsreturns_retained_attribute_mismatch) << 0;
+         getLangOpts().ObjCAutoRefCount
+             ? diag::err_nsreturns_retained_attribute_mismatch
+             : diag::warn_nsreturns_retained_attribute_mismatch)
+        << 0;
     Diag(Overridden->getLocation(), diag::note_previous_decl)  << "method";
   }
 
@@ -185,7 +185,10 @@ void Sema::CheckObjCMethodOverride(ObjCMethodDecl *NewMethod,
     ParmVarDecl *newDecl = (*ni);
     if (newDecl->hasAttr<NSConsumedAttr>() !=
         oldDecl->hasAttr<NSConsumedAttr>()) {
-      Diag(newDecl->getLocation(), diag::warn_nsconsumed_attribute_mismatch);
+      Diag(newDecl->getLocation(),
+           getLangOpts().ObjCAutoRefCount
+               ? diag::err_nsconsumed_attribute_mismatch
+               : diag::warn_nsconsumed_attribute_mismatch);
       Diag(oldDecl->getLocation(), diag::note_previous_decl) << "parameter";
     }
 
@@ -1538,7 +1541,7 @@ void Sema::actOnObjCTypeArgsOrProtocolQualifiers(
     DS.SetRangeEnd(loc);
 
     // Form the declarator.
-    Declarator D(DS, Declarator::TypeNameContext);
+    Declarator D(DS, DeclaratorContext::TypeNameContext);
 
     // If we have a typedef of an Objective-C class type that is missing a '*',
     // add the '*'.
@@ -4130,7 +4133,7 @@ class OverrideSearch {
 public:
   Sema &S;
   ObjCMethodDecl *Method;
-  llvm::SmallPtrSet<ObjCMethodDecl*, 4> Overridden;
+  llvm::SmallSetVector<ObjCMethodDecl*, 4> Overridden;
   bool Recursive;
 
 public:
@@ -4167,7 +4170,7 @@ public:
     }
   }
 
-  typedef llvm::SmallPtrSetImpl<ObjCMethodDecl*>::iterator iterator;
+  typedef decltype(Overridden)::iterator iterator;
   iterator begin() const { return Overridden.begin(); }
   iterator end() const { return Overridden.end(); }
 
@@ -4335,10 +4338,6 @@ void Sema::CheckObjCMethodOverrides(ObjCMethodDecl *ObjCMethod,
 
     // Then merge the declarations.
     mergeObjCMethodDecls(ObjCMethod, overridden);
-  }
-
-  for (ObjCMethodDecl *overridden : overrides) {
-    CheckObjCMethodOverride(ObjCMethod, overridden);
 
     if (ObjCMethod->isImplicit() && overridden->isImplicit())
       continue; // Conflicting properties are detected elsewhere.

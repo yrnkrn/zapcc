@@ -77,11 +77,12 @@ protected:
   GlobalValue(Type *Ty, ValueTy VTy, Use *Ops, unsigned NumOps,
               LinkageTypes Linkage, const Twine &Name, unsigned AddressSpace)
       : Constant(PointerType::get(Ty, AddressSpace), VTy, Ops, NumOps),
-        ValueType(Ty), Linkage(Linkage), Visibility(DefaultVisibility),
+        ValueType(Ty), Visibility(DefaultVisibility),
         UnnamedAddrVal(unsigned(UnnamedAddr::None)),
         DllStorageClass(DefaultStorageClass), ThreadLocal(NotThreadLocal),
-        HasLLVMReservedName(false), IsDSOLocal(false),
-        IntID((Intrinsic::ID)0U), Parent(nullptr) {
+        HasLLVMReservedName(false), IsDSOLocal(false), IntID((Intrinsic::ID)0U),
+        Parent(nullptr) {
+    setLinkage(Linkage);
     setAliveDefinition();
     setDecl(nullptr);
     setName(Name);
@@ -112,6 +113,12 @@ protected:
 
 private:
   friend class Constant;
+
+  void maybeSetDsoLocal() {
+    if (hasLocalLinkage() ||
+        (!hasDefaultVisibility() && !hasExternalWeakLinkage()))
+      setDSOLocal(true);
+  }
 
   // Give subclasses access to what otherwise would be wasted padding.
   // (17 + 4 + 2 + 2 + 2 + 3 + 1 + 1) == 32.
@@ -254,6 +261,7 @@ public:
     assert((!hasLocalLinkage() || V == DefaultVisibility) &&
            "local linkage requires default visibility");
     Visibility = V;
+    maybeSetDsoLocal();
   }
 
   /// If the value is "Thread Local", its value isn't shared by the threads.
@@ -459,6 +467,7 @@ public:
     if (isLocalLinkage(LT))
       Visibility = DefaultVisibility;
     Linkage = LT;
+    maybeSetDsoLocal();
   }
   LinkageTypes getLinkage() const { return LinkageTypes(Linkage); }
 

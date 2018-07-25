@@ -179,10 +179,7 @@ public:
     OS << "  Step: ";
     Step->print(OS);
     OS << "  End: ";
-    if (End)
-      End->print(OS);
-    else
-      OS << "(null)";
+    End->print(OS);
     OS << "\n  CheckUse: ";
     getCheckUse()->getUser()->print(OS);
     OS << " Operand: " << getCheckUse()->getOperandNo() << "\n";
@@ -196,7 +193,7 @@ public:
   Use *getCheckUse() const { return CheckUse; }
 
   /// Represents an signed integer range [Range.getBegin(), Range.getEnd()).  If
-  /// R.getEnd() sle R.getBegin(), then R denotes the empty range.
+  /// R.getEnd() le R.getBegin(), then R denotes the empty range.
 
   class Range {
     const SCEV *Begin;
@@ -394,8 +391,23 @@ void InductiveRangeCheck::extractRangeChecksFromCond(
   if (!IsAffineIndex)
     return;
 
+  const SCEV *End = nullptr;
+  // We strengthen "0 <= I" to "0 <= I < INT_SMAX" and "I < L" to "0 <= I < L".
+  // We can potentially do much better here.
+  if (Length)
+    End = SE.getSCEV(Length);
+  else {
+    assert(RCKind == InductiveRangeCheck::RANGE_CHECK_LOWER && "invariant!");
+    // So far we can only reach this point for Signed range check. This may
+    // change in future. In this case we will need to pick Unsigned max for the
+    // unsigned range check.
+    unsigned BitWidth = cast<IntegerType>(IndexAddRec->getType())->getBitWidth();
+    const SCEV *SIntMax = SE.getConstant(APInt::getSignedMaxValue(BitWidth));
+    End = SIntMax;
+  }
+
   InductiveRangeCheck IRC;
-  IRC.End = Length ? SE.getSCEV(Length) : nullptr;
+  IRC.End = End;
   IRC.Begin = IndexAddRec->getStart();
   IRC.Step = IndexAddRec->getStepRecurrence(SE);
   IRC.CheckUse = &ConditionUse;
@@ -922,9 +934,9 @@ LoopStructure::parseLoopStructure(ScalarEvolution &SE,
         return None;
       }
 
-      if (!SE.isLoopEntryGuardedByCond(
-              &L, BoundPred, IndVarStart,
-              SE.getAddExpr(RightSCEV, Step))) {
+      if (!SE.isAvailableAtLoopEntry(RightSCEV, &L) ||
+          !SE.isLoopEntryGuardedByCond(&L, BoundPred, IndVarStart,
+                                       SE.getAddExpr(RightSCEV, Step))) {
         FailureReason = "Induction variable start not bounded by upper limit";
         return None;
       }
@@ -936,7 +948,8 @@ LoopStructure::parseLoopStructure(ScalarEvolution &SE,
         RightValue = B.CreateAdd(RightValue, One);
       }
     } else {
-      if (!SE.isLoopEntryGuardedByCond(&L, BoundPred, IndVarStart, RightSCEV)) {
+      if (!SE.isAvailableAtLoopEntry(RightSCEV, &L) ||
+          !SE.isLoopEntryGuardedByCond(&L, BoundPred, IndVarStart, RightSCEV)) {
         FailureReason = "Induction variable start not bounded by upper limit";
         return None;
       }
@@ -1002,9 +1015,10 @@ LoopStructure::parseLoopStructure(ScalarEvolution &SE,
         return None;
       }
 
-      if (!SE.isLoopEntryGuardedByCond(
-              &L, BoundPred, IndVarStart,
-              SE.getMinusSCEV(RightSCEV, SE.getOne(RightSCEV->getType())))) {
+      if (!SE.isAvailableAtLoopEntry(RightSCEV, &L) ||
+          !SE.isLoopEntryGuardedByCond(
+               &L, BoundPred, IndVarStart,
+               SE.getMinusSCEV(RightSCEV, SE.getOne(RightSCEV->getType())))) {
         FailureReason = "Induction variable start not bounded by lower limit";
         return None;
       }
@@ -1016,7 +1030,8 @@ LoopStructure::parseLoopStructure(ScalarEvolution &SE,
         RightValue = B.CreateSub(RightValue, One);
       }
     } else {
-      if (!SE.isLoopEntryGuardedByCond(&L, BoundPred, IndVarStart, RightSCEV)) {
+      if (!SE.isAvailableAtLoopEntry(RightSCEV, &L) ||
+          !SE.isLoopEntryGuardedByCond(&L, BoundPred, IndVarStart, RightSCEV)) {
         FailureReason = "Induction variable start not bounded by lower limit";
         return None;
       }
@@ -1174,13 +1189,9 @@ void LoopConstrainer::cloneLoop(LoopConstrainer::ClonedLoop &Result,
       if (OriginalLoop.contains(SBB))
         continue; // not an exit block
 
-      for (Instruction &I : *SBB) {
-        auto *PN = dyn_cast<PHINode>(&I);
-        if (!PN)
-          break;
-
-        Value *OldIncoming = PN->getIncomingValueForBlock(OriginalBB);
-        PN->addIncoming(GetClonedValue(OldIncoming), ClonedBB);
+      for (PHINode &PN : SBB->phis()) {
+        Value *OldIncoming = PN.getIncomingValueForBlock(OriginalBB);
+        PN.addIncoming(GetClonedValue(OldIncoming), ClonedBB);
       }
     }
   }
@@ -1327,16 +1338,12 @@ LoopConstrainer::RewrittenRangeInfo LoopConstrainer::changeIterationSpaceEnd(
   // We emit PHI nodes into `RRI.PseudoExit' that compute the "latest" value of
   // each of the PHI nodes in the loop header.  This feeds into the initial
   // value of the same PHI nodes if/when we continue execution.
-  for (Instruction &I : *LS.Header) {
-    auto *PN = dyn_cast<PHINode>(&I);
-    if (!PN)
-      break;
-
-    PHINode *NewPHI = PHINode::Create(PN->getType(), 2, PN->getName() + ".copy",
+  for (PHINode &PN : LS.Header->phis()) {
+    PHINode *NewPHI = PHINode::Create(PN.getType(), 2, PN.getName() + ".copy",
                                       BranchToContinuation);
 
-    NewPHI->addIncoming(PN->getIncomingValueForBlock(Preheader), Preheader);
-    NewPHI->addIncoming(PN->getIncomingValueForBlock(LS.Latch),
+    NewPHI->addIncoming(PN.getIncomingValueForBlock(Preheader), Preheader);
+    NewPHI->addIncoming(PN.getIncomingValueForBlock(LS.Latch),
                         RRI.ExitSelector);
     RRI.PHIValuesAtPseudoExit.push_back(NewPHI);
   }
@@ -1348,12 +1355,8 @@ LoopConstrainer::RewrittenRangeInfo LoopConstrainer::changeIterationSpaceEnd(
 
   // The latch exit now has a branch from `RRI.ExitSelector' instead of
   // `LS.Latch'.  The PHI nodes need to be updated to reflect that.
-  for (Instruction &I : *LS.LatchExit) {
-    if (PHINode *PN = dyn_cast<PHINode>(&I))
-      replacePHIBlock(PN, LS.Latch, RRI.ExitSelector);
-    else
-      break;
-  }
+  for (PHINode &PN : LS.LatchExit->phis())
+    replacePHIBlock(&PN, LS.Latch, RRI.ExitSelector);
 
   return RRI;
 }
@@ -1362,15 +1365,10 @@ void LoopConstrainer::rewriteIncomingValuesForPHIs(
     LoopStructure &LS, BasicBlock *ContinuationBlock,
     const LoopConstrainer::RewrittenRangeInfo &RRI) const {
   unsigned PHIIndex = 0;
-  for (Instruction &I : *LS.Header) {
-    auto *PN = dyn_cast<PHINode>(&I);
-    if (!PN)
-      break;
-
-    for (unsigned i = 0, e = PN->getNumIncomingValues(); i < e; ++i)
-      if (PN->getIncomingBlock(i) == ContinuationBlock)
-        PN->setIncomingValue(i, RRI.PHIValuesAtPseudoExit[PHIIndex++]);
-  }
+  for (PHINode &PN : LS.Header->phis())
+    for (unsigned i = 0, e = PN.getNumIncomingValues(); i < e; ++i)
+      if (PN.getIncomingBlock(i) == ContinuationBlock)
+        PN.setIncomingValue(i, RRI.PHIValuesAtPseudoExit[PHIIndex++]);
 
   LS.IndVarStart = RRI.IndVarEnd;
 }
@@ -1381,14 +1379,9 @@ BasicBlock *LoopConstrainer::createPreheader(const LoopStructure &LS,
   BasicBlock *Preheader = BasicBlock::Create(Ctx, Tag, &F, LS.Header);
   BranchInst::Create(LS.Header, Preheader);
 
-  for (Instruction &I : *LS.Header) {
-    auto *PN = dyn_cast<PHINode>(&I);
-    if (!PN)
-      break;
-
-    for (unsigned i = 0, e = PN->getNumIncomingValues(); i < e; ++i)
-      replacePHIBlock(PN, OldPreheader, Preheader);
-  }
+  for (PHINode &PN : LS.Header->phis())
+    for (unsigned i = 0, e = PN.getNumIncomingValues(); i < e; ++i)
+      replacePHIBlock(&PN, OldPreheader, Preheader);
 
   return Preheader;
 }
@@ -1640,32 +1633,30 @@ InductiveRangeCheck::computeSafeIterationSpace(
   unsigned BitWidth = cast<IntegerType>(IndVar->getType())->getBitWidth();
   const SCEV *SIntMax = SE.getConstant(APInt::getSignedMaxValue(BitWidth));
 
-  // Substract Y from X so that it does not go through border of the IV
+  // Subtract Y from X so that it does not go through border of the IV
   // iteration space. Mathematically, it is equivalent to:
   //
-  //    ClampedSubstract(X, Y) = min(max(X - Y, INT_MIN), INT_MAX).        [1]
+  //    ClampedSubtract(X, Y) = min(max(X - Y, INT_MIN), INT_MAX).        [1]
   //
-  // In [1], 'X - Y' is a mathematical substraction (result is not bounded to
+  // In [1], 'X - Y' is a mathematical subtraction (result is not bounded to
   // any width of bit grid). But after we take min/max, the result is
   // guaranteed to be within [INT_MIN, INT_MAX].
   //
   // In [1], INT_MAX and INT_MIN are respectively signed and unsigned max/min
   // values, depending on type of latch condition that defines IV iteration
   // space.
-  auto ClampedSubstract = [&](const SCEV *X, const SCEV *Y) {
-    assert(SE.isKnownNonNegative(X) &&
-           "We can only substract from values in [0; SINT_MAX]!");
+  auto ClampedSubtract = [&](const SCEV *X, const SCEV *Y) {
     if (IsLatchSigned) {
       // X is a number from signed range, Y is interpreted as signed.
       // Even if Y is SINT_MAX, (X - Y) does not reach SINT_MIN. So the only
       // thing we should care about is that we didn't cross SINT_MAX.
-      // So, if Y is positive, we substract Y safely.
+      // So, if Y is positive, we subtract Y safely.
       //   Rule 1: Y > 0 ---> Y.
-      // If 0 <= -Y <= (SINT_MAX - X), we substract Y safely.
+      // If 0 <= -Y <= (SINT_MAX - X), we subtract Y safely.
       //   Rule 2: Y >=s (X - SINT_MAX) ---> Y.
-      // If 0 <= (SINT_MAX - X) < -Y, we can only substract (X - SINT_MAX).
+      // If 0 <= (SINT_MAX - X) < -Y, we can only subtract (X - SINT_MAX).
       //   Rule 3: Y <s (X - SINT_MAX) ---> (X - SINT_MAX).
-      // It gives us smax(Y, X - SINT_MAX) to substract in all cases.
+      // It gives us smax(Y, X - SINT_MAX) to subtract in all cases.
       const SCEV *XMinusSIntMax = SE.getMinusSCEV(X, SIntMax);
       return SE.getMinusSCEV(X, SE.getSMaxExpr(Y, XMinusSIntMax),
                              SCEV::FlagNSW);
@@ -1673,29 +1664,19 @@ InductiveRangeCheck::computeSafeIterationSpace(
       // X is a number from unsigned range, Y is interpreted as signed.
       // Even if Y is SINT_MIN, (X - Y) does not reach UINT_MAX. So the only
       // thing we should care about is that we didn't cross zero.
-      // So, if Y is negative, we substract Y safely.
+      // So, if Y is negative, we subtract Y safely.
       //   Rule 1: Y <s 0 ---> Y.
-      // If 0 <= Y <= X, we substract Y safely.
+      // If 0 <= Y <= X, we subtract Y safely.
       //   Rule 2: Y <=s X ---> Y.
-      // If 0 <= X < Y, we should stop at 0 and can only substract X.
+      // If 0 <= X < Y, we should stop at 0 and can only subtract X.
       //   Rule 3: Y >s X ---> X.
-      // It gives us smin(X, Y) to substract in all cases.
+      // It gives us smin(X, Y) to subtract in all cases.
       return SE.getMinusSCEV(X, SE.getSMinExpr(X, Y), SCEV::FlagNUW);
   };
   const SCEV *M = SE.getMinusSCEV(C, A);
   const SCEV *Zero = SE.getZero(M->getType());
-  const SCEV *Begin = ClampedSubstract(Zero, M);
-  const SCEV *L = nullptr;
-
-  // We strengthen "0 <= I" to "0 <= I < INT_SMAX" and "I < L" to "0 <= I < L".
-  // We can potentially do much better here.
-  if (const SCEV *EndLimit = getEnd())
-    L = EndLimit;
-  else {
-    assert(Kind == InductiveRangeCheck::RANGE_CHECK_LOWER && "invariant!");
-    L = SIntMax;
-  }
-  const SCEV *End = ClampedSubstract(L, M);
+  const SCEV *Begin = ClampedSubtract(Zero, M);
+  const SCEV *End = ClampedSubtract(getEnd(), M);
   return InductiveRangeCheck::Range(Begin, End);
 }
 

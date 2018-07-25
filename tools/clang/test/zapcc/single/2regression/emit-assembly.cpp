@@ -19,7 +19,7 @@
 // RUN: FileCheck %s -check-prefix=CHECK-LLVM < %t
 
 // CHECK: _Z3foov:
-// CHECK-LLVM: define void @_Z3foov
+// CHECK-LLVM: void @_Z3foov
 
 // Bug 1923
 // Bug 1931

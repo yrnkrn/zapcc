@@ -39,41 +39,53 @@ public:
     FUNCTION_EXPORT,
     GLOBAL_IMPORT,
     GLOBAL_EXPORT,
-    DEBUG_FUNCTION_NAME,
   };
 
-  WasmSymbol(StringRef Name, SymbolType Type, uint32_t Section,
-             uint32_t ElementIndex, uint32_t ImportIndex = 0)
-      : Name(Name), Type(Type), Section(Section), ElementIndex(ElementIndex),
-        ImportIndex(ImportIndex) {}
+  WasmSymbol(StringRef Name, SymbolType Type, uint32_t ElementIndex,
+             uint32_t FunctionType = 0)
+      : Name(Name), Type(Type), ElementIndex(ElementIndex),
+        FunctionType(FunctionType) {}
 
   StringRef Name;
   SymbolType Type;
-  uint32_t Section;
   uint32_t Flags = 0;
 
   // Index into either the function or global index space.
   uint32_t ElementIndex;
 
-  // For imports, the index into the import table
-  uint32_t ImportIndex;
+  // For function, the type index
+  uint32_t FunctionType;
 
-  bool isFunction() const {
-    return Type == WasmSymbol::SymbolType::FUNCTION_IMPORT ||
-           Type == WasmSymbol::SymbolType::FUNCTION_EXPORT ||
-           Type == WasmSymbol::SymbolType::DEBUG_FUNCTION_NAME;
+  // Symbols can be both exported and imported (in the case of the weakly
+  // defined symbol).  In this the import index is stored as AltIndex.
+  uint32_t AltIndex = 0;
+  bool HasAltIndex = false;
+
+  void setAltIndex(uint32_t Index) {
+    HasAltIndex = true;
+    AltIndex = Index;
+  }
+
+  bool isTypeFunction() const {
+    return Type == SymbolType::FUNCTION_IMPORT ||
+           Type == SymbolType::FUNCTION_EXPORT;
+  }
+
+  bool isTypeGlobal() const {
+    return Type == SymbolType::GLOBAL_IMPORT ||
+           Type == SymbolType::GLOBAL_EXPORT;
   }
 
 
-  bool isWeak() const {
+  bool isBindingWeak() const {
     return getBinding() == wasm::WASM_SYMBOL_BINDING_WEAK;
   }
 
-  bool isGlobal() const {
+  bool isBindingGlobal() const {
     return getBinding() == wasm::WASM_SYMBOL_BINDING_GLOBAL;
   }
 
-  bool isLocal() const {
+  bool isBindingLocal() const {
     return getBinding() == wasm::WASM_SYMBOL_BINDING_LOCAL;
   }
 
@@ -91,8 +103,7 @@ public:
 
   void print(raw_ostream &Out) const {
     Out << "Name=" << Name << ", Type=" << static_cast<int>(Type)
-        << ", Flags=" << Flags << " ElemIndex=" << ElementIndex
-        << ", ImportIndex=" << ImportIndex;
+        << ", Flags=" << Flags << " ElemIndex=" << ElementIndex;
   }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -140,6 +151,8 @@ public:
   ArrayRef<wasm::WasmElemSegment> elements() const { return ElemSegments; }
   ArrayRef<WasmSegment> dataSegments() const { return DataSegments; }
   ArrayRef<wasm::WasmFunction> functions() const { return Functions; }
+  ArrayRef<StringRef> comdats() const { return Comdats; }
+  ArrayRef<wasm::WasmFunctionName> debugNames() const { return DebugNames; }
   uint32_t startFunction() const { return StartFunction; }
 
   void moveSymbolNext(DataRefImpl &Symb) const override;
@@ -196,6 +209,9 @@ public:
 
 private:
   bool isValidFunctionIndex(uint32_t Index) const;
+  bool isDefinedFunctionIndex(uint32_t Index) const;
+  wasm::WasmFunction& getDefinedFunction(uint32_t Index);
+
   const WasmSection &getWasmSection(DataRefImpl Ref) const;
   const wasm::WasmRelocation &getWasmRelocation(DataRefImpl Ref) const;
 
@@ -223,6 +239,7 @@ private:
   // Custom section types
   Error parseNameSection(const uint8_t *Ptr, const uint8_t *End);
   Error parseLinkingSection(const uint8_t *Ptr, const uint8_t *End);
+  Error parseLinkingSectionComdat(const uint8_t *&Ptr, const uint8_t *End);
   Error parseRelocSection(StringRef Name, const uint8_t *Ptr,
                           const uint8_t *End);
 
@@ -241,13 +258,15 @@ private:
   std::vector<WasmSegment> DataSegments;
   std::vector<wasm::WasmFunction> Functions;
   std::vector<WasmSymbol> Symbols;
+  std::vector<StringRef> Comdats;
+  std::vector<wasm::WasmFunctionName> DebugNames;
   uint32_t StartFunction = -1;
   bool HasLinkingSection = false;
   wasm::WasmLinkingData LinkingData;
   uint32_t NumImportedGlobals = 0;
   uint32_t NumImportedFunctions = 0;
-  uint32_t ImportSection = 0;
-  uint32_t ExportSection = 0;
+  uint32_t CodeSection = 0;
+  uint32_t DataSection = 0;
 
   StringMap<uint32_t> SymbolMap;
 };

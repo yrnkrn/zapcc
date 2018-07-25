@@ -22,7 +22,6 @@
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/BlockFrequencyInfo.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
-#include "llvm/Analysis/DominanceFrontier.h"
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
@@ -218,7 +217,7 @@ struct PartialInlinerImpl {
   // outline function due to code size.
   std::pair<bool, Function *> unswitchFunction(Function *F);
 
-  // This class speculatively clones the the function to be partial inlined.
+  // This class speculatively clones the function to be partial inlined.
   // At the end of partial inlining, the remaining callsites to the cloned
   // function that are not partially inlined will be fixed up to reference
   // the original function, and the cloned function will be erased.
@@ -394,8 +393,6 @@ PartialInlinerImpl::computeOutliningColdRegionsInfo(Function *F) {
   BasicBlock *EntryBlock = &F->front();
 
   DominatorTree DT(*F);
-  DominanceFrontier DF;
-  DF.analyze(DT);
   LoopInfo LI(DT);
   BranchProbabilityInfo BPI(*F, LI);
   std::unique_ptr<BlockFrequencyInfo> ScopedBFI;
@@ -713,7 +710,7 @@ PartialInlinerImpl::computeOutliningInfo(Function *F) {
 
 // Check if there is PGO data or user annoated branch data:
 static bool hasProfileData(Function *F, FunctionOutliningInfo *OI) {
-  if (F->getEntryCount())
+  if (F->hasProfileData())
     return true;
   // Now check if any of the entry block has MD_prof data:
   for (auto *E : OI->Entries) {
@@ -866,6 +863,7 @@ int PartialInlinerImpl::computeBBInlineCost(BasicBlock *BB) {
     case Instruction::GetElementPtr:
       if (cast<GetElementPtrInst>(I)->hasAllZeroIndices())
         continue;
+      break;
     default:
       break;
     }
@@ -1276,7 +1274,7 @@ std::pair<bool, Function *> PartialInlinerImpl::unswitchFunction(Function *F) {
 
   // Only try to outline cold regions if we have a profile summary, which
   // implies we have profiling information.
-  if (PSI->hasProfileSummary() && F->getEntryCount().hasValue() &&
+  if (PSI->hasProfileSummary() && F->hasProfileData() &&
       !DisableMultiRegionPartialInline) {
     std::unique_ptr<FunctionOutliningMultiRegionInfo> OMRI =
         computeOutliningColdRegionsInfo(F);
@@ -1382,11 +1380,12 @@ bool PartialInlinerImpl::tryPartialInline(FunctionCloner &Cloner) {
                             Cloner.ClonedFunc->user_end());
 
   DenseMap<User *, uint64_t> CallSiteToProfCountMap;
-  if (Cloner.OrigFunc->getEntryCount())
+  auto CalleeEntryCount = Cloner.OrigFunc->getEntryCount();
+  if (CalleeEntryCount)
     computeCallsiteToProfCountMap(Cloner.ClonedFunc, CallSiteToProfCountMap);
 
-  auto CalleeEntryCount = Cloner.OrigFunc->getEntryCount();
-  uint64_t CalleeEntryCountV = (CalleeEntryCount ? *CalleeEntryCount : 0);
+  uint64_t CalleeEntryCountV =
+      (CalleeEntryCount ? CalleeEntryCount.getCount() : 0);
 
   bool AnyInline = false;
   for (User *User : Users) {
@@ -1435,7 +1434,8 @@ bool PartialInlinerImpl::tryPartialInline(FunctionCloner &Cloner) {
   if (AnyInline) {
     Cloner.IsFunctionInlined = true;
     if (CalleeEntryCount)
-      Cloner.OrigFunc->setEntryCount(CalleeEntryCountV);
+      Cloner.OrigFunc->setEntryCount(
+          CalleeEntryCount.setCount(CalleeEntryCountV));
     auto &ORE = (*GetORE)(*Cloner.OrigFunc);
     ORE.emit([&]() {
       return OptimizationRemark(DEBUG_TYPE, "PartiallyInlined", Cloner.OrigFunc)

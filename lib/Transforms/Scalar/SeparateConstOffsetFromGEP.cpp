@@ -97,7 +97,7 @@
 //    load %p2
 //    ...
 //
-// We can not do CSE for to the common part related to index "i64 %i". Lowering
+// We can not do CSE to the common part related to index "i64 %i". Lowering
 // GEPs can achieve such goals.
 // If the target does not use alias analysis in codegen, this pass will
 // lower a GEP with multiple indices into arithmetic operations:
@@ -1071,6 +1071,7 @@ bool SeparateConstOffsetFromGEP::splitGEP(GetElementPtrInst *GEP) {
     NewGEP = GetElementPtrInst::Create(GEP->getResultElementType(), NewGEP,
                                        ConstantInt::get(IntPtrTy, Index, true),
                                        GEP->getName(), GEP);
+    NewGEP->copyMetadata(*GEP);
     // Inherit the inbounds attribute of the original GEP.
     cast<GetElementPtrInst>(NewGEP)->setIsInBounds(GEPWasInBounds);
   } else {
@@ -1095,6 +1096,7 @@ bool SeparateConstOffsetFromGEP::splitGEP(GetElementPtrInst *GEP) {
         Type::getInt8Ty(GEP->getContext()), NewGEP,
         ConstantInt::get(IntPtrTy, AccumulativeByteOffset, true), "uglygep",
         GEP);
+    NewGEP->copyMetadata(*GEP);
     // Inherit the inbounds attribute of the original GEP.
     cast<GetElementPtrInst>(NewGEP)->setIsInBounds(GEPWasInBounds);
     if (GEP->getType() != I8PtrTy)

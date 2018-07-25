@@ -23,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/FunctionAttrs.h"
+#include "llvm/Transforms/IPO/FunctionImport.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 using namespace llvm;
@@ -90,8 +91,7 @@ void promoteTypeIds(Module &M, StringRef ModuleId) {
     if (isa<MDNode>(MD) && cast<MDNode>(MD)->isDistinct()) {
       Metadata *&GlobalMD = LocalToGlobal[MD];
       if (!GlobalMD) {
-        std::string NewName =
-            (to_string(LocalToGlobal.size()) + ModuleId).str();
+        std::string NewName = (Twine(LocalToGlobal.size()) + ModuleId).str();
         GlobalMD = MDString::get(M.getContext(), NewName);
       }
 
@@ -170,46 +170,17 @@ void simplifyExternals(Module &M) {
   }
 }
 
-void filterModule(
-    Module *M, function_ref<bool(const GlobalValue *)> ShouldKeepDefinition) {
-  for (Module::alias_iterator I = M->alias_begin(), E = M->alias_end();
-       I != E;) {
-    GlobalAlias *GA = &*I++;
-    if (ShouldKeepDefinition(GA))
-      continue;
+static void
+filterModule(Module *M,
+             function_ref<bool(const GlobalValue *)> ShouldKeepDefinition) {
+  std::vector<GlobalValue *> V;
+  for (GlobalValue &GV : M->global_values())
+    if (!ShouldKeepDefinition(&GV))
+      V.push_back(&GV);
 
-    GlobalObject *GO;
-    if (GA->getValueType()->isFunctionTy())
-      GO = Function::Create(cast<FunctionType>(GA->getValueType()),
-                            GlobalValue::ExternalLinkage, "", M);
-    else
-      GO = new GlobalVariable(
-          *M, GA->getValueType(), false, GlobalValue::ExternalLinkage,
-          nullptr, "", nullptr,
-          GA->getThreadLocalMode(), GA->getType()->getAddressSpace());
-    GO->takeName(GA);
-    GA->replaceAllUsesWith(GO);
-    GA->eraseFromParent();
-  }
-
-  for (Function &F : *M) {
-    if (ShouldKeepDefinition(&F))
-      continue;
-
-    F.deleteBody();
-    F.setComdat(nullptr);
-    F.clearMetadata();
-  }
-
-  for (GlobalVariable &GV : M->globals()) {
-    if (ShouldKeepDefinition(&GV))
-      continue;
-
-    GV.setInitializer(nullptr);
-    GV.setLinkage(GlobalValue::ExternalLinkage);
-    GV.setComdat(nullptr);
-    GV.clearMetadata();
-  }
+  for (GlobalValue *GV : V)
+    if (!convertToDeclaration(*GV))
+      GV->eraseFromParent();
 }
 
 void forEachVirtualFunction(Constant *C, function_ref<void(Function *)> Fn) {
@@ -299,6 +270,7 @@ void splitAndWriteThinLTOBitcode(
         return false;
       }));
   StripDebugInfo(*MergedM);
+  MergedM->setModuleInlineAsm("");
 
   for (Function &F : *MergedM)
     if (!F.isDeclaration()) {
@@ -355,6 +327,31 @@ void splitAndWriteThinLTOBitcode(
   if(!CfiFunctionMDs.empty()) {
     NamedMDNode *NMD = MergedM->getOrInsertNamedMetadata("cfi.functions");
     for (auto MD : CfiFunctionMDs)
+      NMD->addOperand(MD);
+  }
+
+  SmallVector<MDNode *, 8> FunctionAliases;
+  for (auto &A : M.aliases()) {
+    if (!isa<Function>(A.getAliasee()))
+      continue;
+
+    auto *F = cast<Function>(A.getAliasee());
+    auto &Ctx = MergedM->getContext();
+    SmallVector<Metadata *, 4> Elts;
+
+    Elts.push_back(MDString::get(Ctx, A.getName()));
+    Elts.push_back(MDString::get(Ctx, F->getName()));
+    Elts.push_back(ConstantAsMetadata::get(
+        llvm::ConstantInt::get(Type::getInt8Ty(Ctx), A.getVisibility())));
+    Elts.push_back(ConstantAsMetadata::get(
+        llvm::ConstantInt::get(Type::getInt8Ty(Ctx), A.isWeakForLinker())));
+
+    FunctionAliases.push_back(MDTuple::get(Ctx, Elts));
+  }
+
+  if (!FunctionAliases.empty()) {
+    NamedMDNode *NMD = MergedM->getOrInsertNamedMetadata("aliases");
+    for (auto MD : FunctionAliases)
       NMD->addOperand(MD);
   }
 

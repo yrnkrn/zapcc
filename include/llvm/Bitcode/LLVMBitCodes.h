@@ -256,6 +256,13 @@ enum GlobalValueSummarySymtabCodes {
   // strings in strtab.
   // [n * name]
   FS_CFI_FUNCTION_DECLS = 18,
+  // Per-module summary that also adds relative block frequency to callee info.
+  // PERMODULE_RELBF: [valueid, flags, instcount, numrefs,
+  //                   numrefs x valueid,
+  //                   n x (valueid, relblockfreq)]
+  FS_PERMODULE_RELBF = 19,
+  // Index-wide flags
+  FS_FLAGS = 20,
 };
 
 enum MetadataCodes {
@@ -272,7 +279,7 @@ enum MetadataCodes {
   METADATA_ATTACHMENT = 11,    // [m x [value, [n x [id, mdnode]]]
   METADATA_GENERIC_DEBUG = 12, // [distinct, tag, vers, header, n x md num]
   METADATA_SUBRANGE = 13,      // [distinct, count, lo]
-  METADATA_ENUMERATOR = 14,    // [distinct, value, name]
+  METADATA_ENUMERATOR = 14,    // [isUnsigned|distinct, value, name]
   METADATA_BASIC_TYPE = 15,    // [distinct, tag, name, size, align, enc]
   METADATA_FILE = 16, // [distinct, filename, directory, checksumkind, checksum]
   METADATA_DERIVED_TYPE = 17,       // [distinct, ...]

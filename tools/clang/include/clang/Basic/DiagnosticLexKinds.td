@@ -508,16 +508,11 @@ def warn_pragma_message : Warning<"%0">,
 def err_pragma_message : Error<"%0">;
 def warn_pragma_ignored : Warning<"unknown pragma ignored">,
    InGroup<UnknownPragmas>, DefaultIgnore;
-def ext_stdc_pragma_ignored : ExtWarn<"unknown pragma in STDC namespace">,
-   InGroup<UnknownPragmas>;
 def ext_on_off_switch_syntax :
    ExtWarn<"expected 'ON' or 'OFF' or 'DEFAULT' in pragma">,
    InGroup<UnknownPragmas>;
 def ext_pragma_syntax_eod :
    ExtWarn<"expected end of directive in pragma">,
-   InGroup<UnknownPragmas>;
-def warn_stdc_fenv_access_not_supported :
-   Warning<"pragma STDC FENV_ACCESS ON is not supported, ignoring pragma">,
    InGroup<UnknownPragmas>;
 def warn_pragma_diagnostic_invalid :
    ExtWarn<"pragma diagnostic expected 'error', 'warning', 'ignored', 'fatal',"
@@ -694,11 +689,15 @@ def err_mmap_expected_feature : Error<"expected a feature name">;
 def err_mmap_expected_attribute : Error<"expected an attribute name">;
 def warn_mmap_unknown_attribute : Warning<"unknown attribute '%0'">,
   InGroup<IgnoredAttributes>;
-def warn_mmap_mismatched_top_level_private : Warning<
-  "top-level module '%0' in private module map, expected a submodule of '%1'">,
+def warn_mmap_mismatched_private_submodule : Warning<
+  "private submodule '%0' in private module map, expected top-level module">,
   InGroup<PrivateModule>;
-def note_mmap_rename_top_level_private_as_submodule : Note<
-  "make '%0' a submodule of '%1' to ensure it can be found by name">;
+def warn_mmap_mismatched_private_module_name : Warning<
+  "expected canonical name for private module '%0'">,
+  InGroup<PrivateModule>;
+def note_mmap_rename_top_level_private_module : Note<
+  "rename '%0' to ensure it can be found by name">;
+
 def err_mmap_duplicate_header_attribute : Error<
   "header attribute '%0' specified multiple times">;
 def err_mmap_invalid_header_attribute_value : Error<

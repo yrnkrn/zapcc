@@ -11,6 +11,7 @@
 #include "HexagonISelDAGToDAG.h"
 #include "HexagonISelLowering.h"
 #include "HexagonTargetMachine.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/IR/Intrinsics.h"
@@ -26,6 +27,8 @@
 #define DEBUG_TYPE "hexagon-isel"
 
 using namespace llvm;
+
+namespace {
 
 // --------------------------------------------------------------------
 // Implementation of permutation networks.
@@ -92,18 +95,13 @@ using namespace llvm;
 // Benes network is a forward delta network immediately followed by
 // a reverse delta network.
 
+enum class ColorKind { None, Red, Black };
 
 // Graph coloring utility used to partition nodes into two groups:
 // they will correspond to nodes routed to the upper and lower networks.
 struct Coloring {
-  enum : uint8_t {
-    None = 0,
-    Red,
-    Black
-  };
-
   using Node = int;
-  using MapType = std::map<Node,uint8_t>;
+  using MapType = std::map<Node, ColorKind>;
   static constexpr Node Ignore = Node(-1);
 
   Coloring(ArrayRef<Node> Ord) : Order(Ord) {
@@ -116,10 +114,10 @@ struct Coloring {
     return Colors;
   }
 
-  uint8_t other(uint8_t Color) {
-    if (Color == None)
-      return Red;
-    return Color == Red ? Black : Red;
+  ColorKind other(ColorKind Color) {
+    if (Color == ColorKind::None)
+      return ColorKind::Red;
+    return Color == ColorKind::Red ? ColorKind::Black : ColorKind::Red;
   }
 
   void dump() const;
@@ -137,27 +135,28 @@ private:
     return (Pos < Num/2) ? Pos + Num/2 : Pos - Num/2;
   }
 
-  uint8_t getColor(Node N) {
+  ColorKind getColor(Node N) {
     auto F = Colors.find(N);
-    return F != Colors.end() ? F->second : (uint8_t)None;
+    return F != Colors.end() ? F->second : ColorKind::None;
   }
 
-  std::pair<bool,uint8_t> getUniqueColor(const NodeSet &Nodes);
+  std::pair<bool, ColorKind> getUniqueColor(const NodeSet &Nodes);
 
   void build();
   bool color();
 };
+} // namespace
 
-std::pair<bool,uint8_t> Coloring::getUniqueColor(const NodeSet &Nodes) {
-  uint8_t Color = None;
+std::pair<bool, ColorKind> Coloring::getUniqueColor(const NodeSet &Nodes) {
+  auto Color = ColorKind::None;
   for (Node N : Nodes) {
-    uint8_t ColorN = getColor(N);
-    if (ColorN == None)
+    ColorKind ColorN = getColor(N);
+    if (ColorN == ColorKind::None)
       continue;
-    if (Color == None)
+    if (Color == ColorKind::None)
       Color = ColorN;
-    else if (Color != None && Color != ColorN)
-      return { false, None };
+    else if (Color != ColorKind::None && Color != ColorN)
+      return { false, ColorKind::None };
   }
   return { true, Color };
 }
@@ -242,12 +241,12 @@ bool Coloring::color() {
 
     // Coloring failed. Split this node.
     Node C = conj(N);
-    uint8_t ColorN = other(None);
-    uint8_t ColorC = other(ColorN);
+    ColorKind ColorN = other(ColorKind::None);
+    ColorKind ColorC = other(ColorN);
     NodeSet &Cs = Edges[C];
     NodeSet CopyNs = Ns;
     for (Node M : CopyNs) {
-      uint8_t ColorM = getColor(M);
+      ColorKind ColorM = getColor(M);
       if (ColorM == ColorC) {
         // Connect M with C, disconnect M from N.
         Cs.insert(M);
@@ -263,7 +262,7 @@ bool Coloring::color() {
   // Explicitly assign "None" all all uncolored nodes.
   for (unsigned I = 0; I != Order.size(); ++I)
     if (Colors.count(I) == 0)
-      Colors[I] = None;
+      Colors[I] = ColorKind::None;
 
   return true;
 }
@@ -293,13 +292,25 @@ void Coloring::dump() const {
   }
   dbgs() << "  }\n";
 
-  static const char *const Names[] = { "None", "Red", "Black" };
+  auto ColorKindToName = [](ColorKind C) {
+    switch (C) {
+    case ColorKind::None:
+      return "None";
+    case ColorKind::Red:
+      return "Red";
+    case ColorKind::Black:
+      return "Black";
+    }
+    llvm_unreachable("all ColorKinds should be handled by the switch above");
+  };
+
   dbgs() << "  Colors: {\n";
   for (auto C : Colors)
-    dbgs() << "    " << C.first << " -> " << Names[C.second] << "\n";
+    dbgs() << "    " << C.first << " -> " << ColorKindToName(C.second) << "\n";
   dbgs() << "  }\n}\n";
 }
 
+namespace {
 // Base class of for reordering networks. They don't strictly need to be
 // permutations, as outputs with repeated occurrences of an input element
 // are allowed.
@@ -408,7 +419,7 @@ struct BenesNetwork : public PermNetwork {
 private:
   bool route(ElemType *P, RowType *T, unsigned Size, unsigned Step);
 };
-
+} // namespace
 
 bool ForwardDeltaNetwork::route(ElemType *P, RowType *T, unsigned Size,
                                 unsigned Step) {
@@ -467,21 +478,21 @@ bool ReverseDeltaNetwork::route(ElemType *P, RowType *T, unsigned Size,
   if (M.empty())
     return false;
 
-  uint8_t ColorUp = Coloring::None;
+  ColorKind ColorUp = ColorKind::None;
   for (ElemType J = 0; J != Num; ++J) {
     ElemType I = P[J];
     // I is the position in the input,
     // J is the position in the output.
     if (I == Ignore)
       continue;
-    uint8_t C = M.at(I);
-    if (C == Coloring::None)
+    ColorKind C = M.at(I);
+    if (C == ColorKind::None)
       continue;
     // During "Step", inputs cannot switch halves, so if the "up" color
     // is still unknown, make sure that it is selected in such a way that
     // "I" will stay in the same half.
     bool InpUp = I < Num/2;
-    if (ColorUp == Coloring::None)
+    if (ColorUp == ColorKind::None)
       ColorUp = InpUp ? C : G.other(C);
     if ((C == ColorUp) != InpUp) {
       // If I should go to a different half than where is it now, give up.
@@ -541,16 +552,16 @@ bool BenesNetwork::route(ElemType *P, RowType *T, unsigned Size,
   // Both assignments, i.e. Red->Up and Red->Down are valid, but they will
   // result in different controls. Let's pick the one where the first
   // control will be "Pass".
-  uint8_t ColorUp = Coloring::None;
+  ColorKind ColorUp = ColorKind::None;
   for (ElemType J = 0; J != Num; ++J) {
     ElemType I = P[J];
     if (I == Ignore)
       continue;
-    uint8_t C = M.at(I);
-    if (C == Coloring::None)
+    ColorKind C = M.at(I);
+    if (C == ColorKind::None)
       continue;
-    if (ColorUp == Coloring::None) {
-      ColorUp = (I < Num/2) ? Coloring::Red : Coloring::Black;
+    if (ColorUp == ColorKind::None) {
+      ColorUp = (I < Num / 2) ? ColorKind::Red : ColorKind::Black;
     }
     unsigned CI = (I < Num/2) ? I+Num/2 : I-Num/2;
     if (C == ColorUp) {
@@ -602,6 +613,7 @@ bool BenesNetwork::route(ElemType *P, RowType *T, unsigned Size,
 // Support for building selection results (output instructions that are
 // parts of the final selection).
 
+namespace {
 struct OpRef {
   OpRef(SDValue V) : OpV(V) {}
   bool isValue() const { return OpV.getNode() != nullptr; }
@@ -689,6 +701,7 @@ struct ResultStack {
 
   void print(raw_ostream &OS, const SelectionDAG &G) const;
 };
+} // namespace
 
 void OpRef::print(raw_ostream &OS, const SelectionDAG &G) const {
   if (isValue()) {
@@ -740,6 +753,7 @@ void ResultStack::print(raw_ostream &OS, const SelectionDAG &G) const {
   }
 }
 
+namespace {
 struct ShuffleMask {
   ShuffleMask(ArrayRef<int> M) : Mask(M) {
     for (unsigned I = 0, E = Mask.size(); I != E; ++I) {
@@ -756,13 +770,14 @@ struct ShuffleMask {
 
   ShuffleMask lo() const {
     size_t H = Mask.size()/2;
-    return ShuffleMask({Mask.data(), H});
+    return ShuffleMask(Mask.take_front(H));
   }
   ShuffleMask hi() const {
     size_t H = Mask.size()/2;
-    return ShuffleMask({Mask.data()+H, H});
+    return ShuffleMask(Mask.take_back(H));
   }
 };
+} // namespace
 
 // --------------------------------------------------------------------
 // The HvxSelector class.
@@ -813,7 +828,6 @@ namespace llvm {
                 MutableArrayRef<int> NewMask, unsigned Options = None);
     OpRef packp(ShuffleMask SM, OpRef Va, OpRef Vb, ResultStack &Results,
                 MutableArrayRef<int> NewMask);
-    OpRef zerous(ShuffleMask SM, OpRef Va, ResultStack &Results);
     OpRef vmuxs(ArrayRef<uint8_t> Bytes, OpRef Va, OpRef Vb,
                 ResultStack &Results);
     OpRef vmuxp(ArrayRef<uint8_t> Bytes, OpRef Va, OpRef Vb,
@@ -834,15 +848,6 @@ namespace llvm {
                           SDValue Va, SDValue Vb, SDNode *N);
 
   };
-}
-
-// Return a submask of A that is shorter than A by |C| elements:
-// - if C > 0, return a submask of A that starts at position C,
-// - if C <= 0, return a submask of A that starts at 0 (reduce A by |C|).
-static ArrayRef<int> subm(ArrayRef<int> A, int C) {
-  if (C > 0)
-    return { A.data()+C, A.size()-C };
-  return { A.data(), A.size()+C };
 }
 
 static void splitMask(ArrayRef<int> Mask, MutableArrayRef<int> MaskL,
@@ -906,25 +911,51 @@ static bool isPermutation(ArrayRef<int> Mask) {
 }
 
 bool HvxSelector::selectVectorConstants(SDNode *N) {
-  // Constant vectors are generated as loads from constant pools.
+  // Constant vectors are generated as loads from constant pools or
+  // as VSPLATs of a constant value.
   // Since they are generated during the selection process, the main
   // selection algorithm is not aware of them. Select them directly
   // here.
-  if (!N->isMachineOpcode() && N->getOpcode() == ISD::LOAD) {
-    SDValue Addr = cast<LoadSDNode>(N)->getBasePtr();
-    unsigned AddrOpc = Addr.getOpcode();
-    if (AddrOpc == HexagonISD::AT_PCREL || AddrOpc == HexagonISD::CP) {
-      if (Addr.getOperand(0).getOpcode() == ISD::TargetConstantPool) {
-        ISel.Select(N);
+  SmallVector<SDNode*,4> Nodes;
+  SetVector<SDNode*> WorkQ;
+
+  // The DAG can change (due to CSE) during selection, so cache all the
+  // unselected nodes first to avoid traversing a mutating DAG.
+
+  auto IsNodeToSelect = [] (SDNode *N) {
+    if (N->isMachineOpcode())
+      return false;
+    unsigned Opc = N->getOpcode();
+    if (Opc == HexagonISD::VSPLAT || Opc == HexagonISD::VZERO)
+      return true;
+    if (Opc == ISD::BITCAST) {
+      // Only select bitcasts of VSPLATs.
+      if (N->getOperand(0).getOpcode() == HexagonISD::VSPLAT)
         return true;
-      }
     }
+    if (Opc == ISD::LOAD) {
+      SDValue Addr = cast<LoadSDNode>(N)->getBasePtr();
+      unsigned AddrOpc = Addr.getOpcode();
+      if (AddrOpc == HexagonISD::AT_PCREL || AddrOpc == HexagonISD::CP)
+        if (Addr.getOperand(0).getOpcode() == ISD::TargetConstantPool)
+          return true;
+    }
+    return false;
+  };
+
+  WorkQ.insert(N);
+  for (unsigned i = 0; i != WorkQ.size(); ++i) {
+    SDNode *W = WorkQ[i];
+    if (IsNodeToSelect(W))
+      Nodes.push_back(W);
+    for (unsigned j = 0, f = W->getNumOperands(); j != f; ++j)
+      WorkQ.insert(W->getOperand(j).getNode());
   }
 
-  bool Selected = false;
-  for (unsigned I = 0, E = N->getNumOperands(); I != E; ++I)
-    Selected = selectVectorConstants(N->getOperand(I).getNode()) || Selected;
-  return Selected;
+  for (SDNode *L : Nodes)
+    ISel.Select(L);
+
+  return !Nodes.empty();
 }
 
 void HvxSelector::materialize(const ResultStack &Results) {
@@ -961,15 +992,11 @@ void HvxSelector::materialize(const ResultStack &Results) {
       MVT OpTy = Op.getValueType().getSimpleVT();
       if (Part != OpRef::Whole) {
         assert(Part == OpRef::LoHalf || Part == OpRef::HiHalf);
-        if (Op.getOpcode() == HexagonISD::VCOMBINE) {
-          Op = (Part == OpRef::HiHalf) ? Op.getOperand(0) : Op.getOperand(1);
-        } else {
-          MVT HalfTy = MVT::getVectorVT(OpTy.getVectorElementType(),
-                                        OpTy.getVectorNumElements()/2);
-          unsigned Sub = (Part == OpRef::LoHalf) ? Hexagon::vsub_lo
-                                                 : Hexagon::vsub_hi;
-          Op = DAG.getTargetExtractSubreg(Sub, dl, HalfTy, Op);
-        }
+        MVT HalfTy = MVT::getVectorVT(OpTy.getVectorElementType(),
+                                      OpTy.getVectorNumElements()/2);
+        unsigned Sub = (Part == OpRef::LoHalf) ? Hexagon::vsub_lo
+                                               : Hexagon::vsub_hi;
+        Op = DAG.getTargetExtractSubreg(Sub, dl, HalfTy, Op);
       }
       Ops.push_back(Op);
     } // for (Node : Results)
@@ -1123,25 +1150,6 @@ OpRef HvxSelector::packp(ShuffleMask SM, OpRef Va, OpRef Vb,
   return concat(Out[0], Out[1], Results);
 }
 
-OpRef HvxSelector::zerous(ShuffleMask SM, OpRef Va, ResultStack &Results) {
-  DEBUG_WITH_TYPE("isel", {dbgs() << __func__ << '\n';});
-
-  int VecLen = SM.Mask.size();
-  SmallVector<uint8_t,128> UsedBytes(VecLen);
-  bool HasUnused = false;
-  for (int I = 0; I != VecLen; ++I) {
-    if (SM.Mask[I] != -1)
-      UsedBytes[I] = 0xFF;
-    else
-      HasUnused = true;
-  }
-  if (!HasUnused)
-    return Va;
-  SDValue B = getVectorConstant(UsedBytes, SDLoc(Results.InpNode));
-  Results.push(Hexagon::V6_vand, getSingleVT(MVT::i8), {Va, OpRef(B)});
-  return OpRef::res(Results.top());
-}
-
 OpRef HvxSelector::vmuxs(ArrayRef<uint8_t> Bytes, OpRef Va, OpRef Vb,
                          ResultStack &Results) {
   DEBUG_WITH_TYPE("isel", {dbgs() << __func__ << '\n';});
@@ -1159,8 +1167,8 @@ OpRef HvxSelector::vmuxp(ArrayRef<uint8_t> Bytes, OpRef Va, OpRef Vb,
                          ResultStack &Results) {
   DEBUG_WITH_TYPE("isel", {dbgs() << __func__ << '\n';});
   size_t S = Bytes.size() / 2;
-  OpRef L = vmuxs({Bytes.data(),   S}, OpRef::lo(Va), OpRef::lo(Vb), Results);
-  OpRef H = vmuxs({Bytes.data()+S, S}, OpRef::hi(Va), OpRef::hi(Vb), Results);
+  OpRef L = vmuxs(Bytes.take_front(S), OpRef::lo(Va), OpRef::lo(Vb), Results);
+  OpRef H = vmuxs(Bytes.drop_front(S), OpRef::hi(Va), OpRef::hi(Vb), Results);
   return concat(L, H, Results);
 }
 
@@ -1263,6 +1271,8 @@ OpRef HvxSelector::shuffp2(ShuffleMask SM, OpRef Va, OpRef Vb,
     return shuffp1(ShuffleMask(PackedMask), P, Results);
 
   SmallVector<int,256> MaskL(VecLen), MaskR(VecLen);
+  splitMask(SM.Mask, MaskL, MaskR);
+
   OpRef L = shuffp1(ShuffleMask(MaskL), Va, Results);
   OpRef R = shuffp1(ShuffleMask(MaskR), Vb, Results);
   if (!L.isValid() || !R.isValid())
@@ -1435,7 +1445,7 @@ OpRef HvxSelector::contracting(ShuffleMask SM, OpRef Va, OpRef Vb,
       return OpRef::fail();
     // Examine the rest of the mask.
     for (int I = L; I < N; I += L) {
-      auto S = findStrip(subm(SM.Mask,I), 1, N-I);
+      auto S = findStrip(SM.Mask.drop_front(I), 1, N-I);
       // Check whether the mask element at the beginning of each strip
       // increases by 2L each time.
       if (S.first - Strip.first != 2*I)
@@ -1465,7 +1475,7 @@ OpRef HvxSelector::contracting(ShuffleMask SM, OpRef Va, OpRef Vb,
   std::pair<int,unsigned> PrevS = Strip;
   bool Flip = false;
   for (int I = L; I < N; I += L) {
-    auto S = findStrip(subm(SM.Mask,I), 1, N-I);
+    auto S = findStrip(SM.Mask.drop_front(I), 1, N-I);
     if (S.second != PrevS.second)
       return OpRef::fail();
     int Diff = Flip ? PrevS.first - S.first + 2*L
@@ -1524,7 +1534,7 @@ OpRef HvxSelector::expanding(ShuffleMask SM, OpRef Va, ResultStack &Results) {
 
   // First, check the non-ignored strips.
   for (int I = 2*L; I < 2*N; I += 2*L) {
-    auto S = findStrip(subm(SM.Mask,I), 1, N-I);
+    auto S = findStrip(SM.Mask.drop_front(I), 1, N-I);
     if (S.second != unsigned(L))
       return OpRef::fail();
     if (2*S.first != I)
@@ -1532,7 +1542,7 @@ OpRef HvxSelector::expanding(ShuffleMask SM, OpRef Va, ResultStack &Results) {
   }
   // Check the -1s.
   for (int I = L; I < 2*N; I += 2*L) {
-    auto S = findStrip(subm(SM.Mask,I), 0, N-I);
+    auto S = findStrip(SM.Mask.drop_front(I), 0, N-I);
     if (S.first != -1 || S.second != unsigned(L))
       return OpRef::fail();
   }
@@ -1666,8 +1676,8 @@ OpRef HvxSelector::perfect(ShuffleMask SM, OpRef Va, ResultStack &Results) {
     if (!isPowerOf2_32(X))
       return OpRef::fail();
     // Check the other segments of Mask.
-    for (int J = 0; J < VecLen; J += I) {
-      if (XorPow2(subm(SM.Mask, -J), I) != X)
+    for (int J = I; J < VecLen; J += I) {
+      if (XorPow2(SM.Mask.slice(J, I), I) != X)
         return OpRef::fail();
     }
     Perm[Log2_32(X)] = Log2_32(I)-1;
@@ -1960,8 +1970,8 @@ void HvxSelector::selectRor(SDNode *N) {
   SDNode *NewN = nullptr;
 
   if (auto *CN = dyn_cast<ConstantSDNode>(RotV.getNode())) {
-    unsigned S = CN->getZExtValue();
-    if (S % HST.getVectorLength() == 0) {
+    unsigned S = CN->getZExtValue() % HST.getVectorLength();
+    if (S == 0) {
       NewN = VecV.getNode();
     } else if (isUInt<3>(S)) {
       SDValue C = DAG.getTargetConstant(S, dl, MVT::i32);

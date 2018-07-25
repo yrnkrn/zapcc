@@ -753,6 +753,13 @@ private:
   /// added to the global preprocessing entity ID to produce a local ID.
   GlobalPreprocessedEntityMapType GlobalPreprocessedEntityMap;
 
+  typedef ContinuousRangeMap<unsigned, ModuleFile *, 4>
+    GlobalSkippedRangeMapType;
+
+  /// \brief Mapping from global skipped range base IDs to the module in which
+  /// the skipped ranges reside.
+  GlobalSkippedRangeMapType GlobalSkippedRangeMap;
+
   /// \name CodeGen-relevant special data
   /// \brief Fields containing data that is relevant to CodeGen.
   //@{
@@ -1091,6 +1098,10 @@ private:
   /// \brief Record definitions in which we found an ODR violation.
   llvm::SmallDenseMap<CXXRecordDecl *, llvm::SmallVector<DataPointers, 2>, 2>
       PendingOdrMergeFailures;
+
+  /// \brief Function definitions in which we found an ODR violation.
+  llvm::SmallDenseMap<FunctionDecl *, llvm::SmallVector<FunctionDecl *, 2>, 2>
+      PendingFunctionOdrMergeFailures;
 
   /// \brief DeclContexts in which we have diagnosed an ODR violation.
   llvm::SmallPtrSet<DeclContext*, 2> DiagnosedOdrMergeFailures;
@@ -1688,6 +1699,9 @@ public:
   /// entity with index \p Index came from file \p FID.
   Optional<bool> isPreprocessedEntityInFileID(unsigned Index,
                                               FileID FID) override;
+
+  /// \brief Read a preallocated skipped range from the external source.
+  SourceRange ReadSkippedRange(unsigned Index) override;
 
   /// \brief Read the header file information for the given file entry.
   HeaderFileInfo GetHeaderFileInfo(const FileEntry *FE) override;

@@ -20,6 +20,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCSection.h"
+#include "llvm/Support/MD5.h"
 #include <cassert>
 #include <cstdint>
 #include <string>
@@ -31,6 +32,7 @@ namespace llvm {
 template <typename T> class ArrayRef;
 class MCAsmBackend;
 class MCContext;
+class MCDwarfLineStr;
 class MCObjectStreamer;
 class MCStreamer;
 class MCSymbol;
@@ -50,6 +52,10 @@ struct MCDwarfFile {
 
   // \brief The index into the list of directory names for this file name.
   unsigned DirIndex;
+
+  /// The MD5 checksum, if there is one. Non-owning pointer to data allocated
+  /// in MCContext.
+  MD5::MD5Result *Checksum = nullptr;
 };
 
 /// \brief Instances of this class represent the information from a
@@ -203,16 +209,24 @@ struct MCDwarfLineTableHeader {
   SmallVector<MCDwarfFile, 3> MCDwarfFiles;
   StringMap<unsigned> SourceIdMap;
   StringRef CompilationDir;
+  bool HasMD5 = false;
 
   MCDwarfLineTableHeader() = default;
 
   unsigned getFile(StringRef &Directory, StringRef &FileName,
-                   unsigned FileNumber = 0);
-  std::pair<MCSymbol *, MCSymbol *> Emit(MCStreamer *MCOS,
-                                         MCDwarfLineTableParams Params) const;
+                   MD5::MD5Result *Checksum, unsigned FileNumber = 0);
   std::pair<MCSymbol *, MCSymbol *>
   Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
-       ArrayRef<char> SpecialOpcodeLengths) const;
+       Optional<MCDwarfLineStr> &LineStr) const;
+  std::pair<MCSymbol *, MCSymbol *>
+  Emit(MCStreamer *MCOS, MCDwarfLineTableParams Params,
+       ArrayRef<char> SpecialOpcodeLengths,
+       Optional<MCDwarfLineStr> &LineStr) const;
+
+private:
+  void emitV2FileDirTables(MCStreamer *MCOS) const;
+  void emitV5FileDirTables(MCStreamer *MCOS,
+                           Optional<MCDwarfLineStr> &LineStr) const;
 };
 
 class MCDwarfDwoLineTable {
@@ -223,8 +237,9 @@ public:
     Header.CompilationDir = CompilationDir;
   }
 
-  unsigned getFile(StringRef Directory, StringRef FileName) {
-    return Header.getFile(Directory, FileName);
+  unsigned getFile(StringRef Directory, StringRef FileName,
+                   MD5::MD5Result *Checksum) {
+    return Header.getFile(Directory, FileName, Checksum);
   }
 
   void Emit(MCStreamer &MCOS, MCDwarfLineTableParams Params) const;
@@ -239,10 +254,11 @@ public:
   static void Emit(MCObjectStreamer *MCOS, MCDwarfLineTableParams Params);
 
   // This emits the Dwarf file and the line tables for a given Compile Unit.
-  void EmitCU(MCObjectStreamer *MCOS, MCDwarfLineTableParams Params) const;
+  void EmitCU(MCObjectStreamer *MCOS, MCDwarfLineTableParams Params,
+              Optional<MCDwarfLineStr> &LineStr) const;
 
   unsigned getFile(StringRef &Directory, StringRef &FileName,
-                   unsigned FileNumber = 0);
+                   MD5::MD5Result *Checksum, unsigned FileNumber = 0);
 
   MCSymbol *getLabel() const {
     return Header.Label;

@@ -289,10 +289,27 @@ template <typename Predicate> struct cst_pred_ty : public Predicate {
   template <typename ITy> bool match(ITy *V) {
     if (const auto *CI = dyn_cast<ConstantInt>(V))
       return this->isValue(CI->getValue());
-    if (V->getType()->isVectorTy())
-      if (const auto *C = dyn_cast<Constant>(V))
+    if (V->getType()->isVectorTy()) {
+      if (const auto *C = dyn_cast<Constant>(V)) {
         if (const auto *CI = dyn_cast_or_null<ConstantInt>(C->getSplatValue()))
           return this->isValue(CI->getValue());
+
+        // Non-splat vector constant: check each element for a match.
+        unsigned NumElts = V->getType()->getVectorNumElements();
+        assert(NumElts != 0 && "Constant vector with no elements?");
+        for (unsigned i = 0; i != NumElts; ++i) {
+          Constant *Elt = C->getAggregateElement(i);
+          if (!Elt)
+            return false;
+          if (isa<UndefValue>(Elt))
+            continue;
+          auto *CI = dyn_cast<ConstantInt>(Elt);
+          if (!CI || !this->isValue(CI->getValue()))
+            return false;
+        }
+        return true;
+      }
+    }
     return false;
   }
 };
@@ -322,6 +339,22 @@ template <typename Predicate> struct api_pred_ty : public Predicate {
   }
 };
 
+struct is_negative {
+  bool isValue(const APInt &C) { return C.isNegative(); }
+};
+
+/// \brief Match an integer or vector of negative values.
+inline cst_pred_ty<is_negative> m_Negative() { return cst_pred_ty<is_negative>(); }
+inline api_pred_ty<is_negative> m_Negative(const APInt *&V) { return V; }
+
+struct is_nonnegative {
+  bool isValue(const APInt &C) { return C.isNonNegative(); }
+};
+
+/// \brief Match an integer or vector of nonnegative values.
+inline cst_pred_ty<is_nonnegative> m_NonNegative() { return cst_pred_ty<is_nonnegative>(); }
+inline api_pred_ty<is_nonnegative> m_NonNegative(const APInt *&V) { return V; }
+
 struct is_power2 {
   bool isValue(const APInt &C) { return C.isPowerOf2(); }
 };
@@ -329,6 +362,14 @@ struct is_power2 {
 /// \brief Match an integer or vector power of 2.
 inline cst_pred_ty<is_power2> m_Power2() { return cst_pred_ty<is_power2>(); }
 inline api_pred_ty<is_power2> m_Power2(const APInt *&V) { return V; }
+
+struct is_power2_or_zero {
+  bool isValue(const APInt &C) { return !C || C.isPowerOf2(); }
+};
+
+/// \brief Match an integer or vector of zero or power of 2 values.
+inline cst_pred_ty<is_power2_or_zero> m_Power2OrZero() { return cst_pred_ty<is_power2_or_zero>(); }
+inline api_pred_ty<is_power2_or_zero> m_Power2OrZero(const APInt *&V) { return V; }
 
 struct is_maxsignedvalue {
   bool isValue(const APInt &C) { return C.isMaxSignedValue(); }
@@ -1553,6 +1594,20 @@ template <typename LHS, typename RHS>
 inline MaxMin_match<ICmpInst, LHS, RHS, umax_pred_ty, true>
 m_c_UMax(const LHS &L, const RHS &R) {
   return MaxMin_match<ICmpInst, LHS, RHS, umax_pred_ty, true>(L, R);
+}
+
+/// Matches FAdd with LHS and RHS in either order.
+template <typename LHS, typename RHS>
+inline BinaryOp_match<LHS, RHS, Instruction::FAdd, true>
+m_c_FAdd(const LHS &L, const RHS &R) {
+  return BinaryOp_match<LHS, RHS, Instruction::FAdd, true>(L, R);
+}
+
+/// Matches FMul with LHS and RHS in either order.
+template <typename LHS, typename RHS>
+inline BinaryOp_match<LHS, RHS, Instruction::FMul, true>
+m_c_FMul(const LHS &L, const RHS &R) {
+  return BinaryOp_match<LHS, RHS, Instruction::FMul, true>(L, R);
 }
 
 } // end namespace PatternMatch

@@ -28,6 +28,8 @@ Usage:
 
 import os
 import plistlib
+from math import log
+from optparse import OptionParser
 
 
 # Information about analysis run:
@@ -47,6 +49,7 @@ class AnalysisDiagnostic:
         self._loc = self._data['location']
         self._report = report
         self._htmlReport = htmlReport
+        self._reportSize = len(self._data['path'])
 
     def getFileName(self):
         root = self._report.run.root
@@ -60,6 +63,9 @@ class AnalysisDiagnostic:
 
     def getColumn(self):
         return self._loc['col']
+
+    def getPathLength(self):
+        return self._reportSize
 
     def getCategory(self):
         return self._data['category']
@@ -81,21 +87,20 @@ class AnalysisDiagnostic:
         return os.path.join(self._report.run.path, self._htmlReport)
 
     def getReadableName(self):
-        return '%s:%d:%d, %s: %s' % (self.getFileName(), self.getLine(),
-                                     self.getColumn(), self.getCategory(),
-                                     self.getDescription())
+        if 'issue_context' in self._data:
+            funcnamePostfix = "#" + self._data['issue_context']
+        else:
+            funcnamePostfix = ""
+        return '%s%s:%d:%d, %s: %s' % (self.getFileName(),
+                                       funcnamePostfix,
+                                       self.getLine(),
+                                       self.getColumn(), self.getCategory(),
+                                       self.getDescription())
 
     # Note, the data format is not an API and may change from one analyzer
     # version to another.
     def getRawData(self):
         return self._data
-
-
-class CmpOptions:
-    def __init__(self, verboseLog=None, rootA="", rootB=""):
-        self.rootA = rootA
-        self.rootB = rootB
-        self.verboseLog = verboseLog
 
 
 class AnalysisReport:
@@ -193,18 +198,19 @@ def cmpAnalysisDiagnostic(d):
     return d.getIssueIdentifier()
 
 
-def compareResults(A, B):
+def compareResults(A, B, opts):
     """
     compareResults - Generate a relation from diagnostics in run A to
     diagnostics in run B.
 
-    The result is the relation as a list of triples (a, b, confidence) where
-    each element {a,b} is None or an element from the respective run, and
-    confidence is a measure of the match quality (where 0 indicates equality,
-    and None is used if either element is None).
+    The result is the relation as a list of triples (a, b) where
+    each element {a,b} is None or a matching element from the respective run
     """
 
     res = []
+
+    # Map size_before -> size_after
+    path_difference_data = []
 
     # Quickly eliminate equal elements.
     neqA = []
@@ -217,7 +223,18 @@ def compareResults(A, B):
         a = eltsA.pop()
         b = eltsB.pop()
         if (a.getIssueIdentifier() == b.getIssueIdentifier()):
-            res.append((a, b, 0))
+            if a.getPathLength() != b.getPathLength():
+                if opts.relative_path_histogram:
+                    path_difference_data.append(
+                        float(a.getPathLength()) / b.getPathLength())
+                elif opts.relative_log_path_histogram:
+                    path_difference_data.append(
+                        log(float(a.getPathLength()) / b.getPathLength()))
+                elif opts.absolute_path_histogram:
+                    path_difference_data.append(
+                        a.getPathLength() - b.getPathLength())
+
+            res.append((a, b))
         elif a.getIssueIdentifier() > b.getIssueIdentifier():
             eltsB.append(b)
             neqA.append(a)
@@ -234,9 +251,15 @@ def compareResults(A, B):
     # in any way on the diagnostic format.
 
     for a in neqA:
-        res.append((a, None, None))
+        res.append((a, None))
     for b in neqB:
-        res.append((None, b, None))
+        res.append((None, b))
+
+    if opts.relative_log_path_histogram or opts.relative_path_histogram or \
+            opts.absolute_path_histogram:
+        from matplotlib import pyplot
+        pyplot.hist(path_difference_data, bins=100)
+        pyplot.show()
 
     return res
 
@@ -252,47 +275,41 @@ def dumpScanBuildResultsDiff(dirA, dirB, opts, deleteEmpty=True):
     else:
         auxLog = None
 
-    diff = compareResults(resultsA, resultsB)
+    diff = compareResults(resultsA, resultsB, opts)
     foundDiffs = 0
+    totalAdded = 0
+    totalRemoved = 0
     for res in diff:
-        a, b, confidence = res
+        a, b = res
         if a is None:
             print "ADDED: %r" % b.getReadableName()
             foundDiffs += 1
+            totalAdded += 1
             if auxLog:
                 print >>auxLog, ("('ADDED', %r, %r)" % (b.getReadableName(),
                                                         b.getReport()))
         elif b is None:
             print "REMOVED: %r" % a.getReadableName()
             foundDiffs += 1
+            totalRemoved += 1
             if auxLog:
                 print >>auxLog, ("('REMOVED', %r, %r)" % (a.getReadableName(),
                                                           a.getReport()))
-        elif confidence:
-            print "CHANGED: %r to %r" % (a.getReadableName(),
-                                         b.getReadableName())
-            foundDiffs += 1
-            if auxLog:
-                print >>auxLog, ("('CHANGED', %r, %r, %r, %r)"
-                                 % (a.getReadableName(),
-                                    b.getReadableName(),
-                                    a.getReport(),
-                                    b.getReport()))
         else:
             pass
 
     TotalReports = len(resultsB.diagnostics)
     print "TOTAL REPORTS: %r" % TotalReports
     print "TOTAL DIFFERENCES: %r" % foundDiffs
+    print "TOTAL ADDED: %r" % totalAdded
+    print "TOTAL REMOVED: %r" % totalRemoved
     if auxLog:
         print >>auxLog, "('TOTAL NEW REPORTS', %r)" % TotalReports
         print >>auxLog, "('TOTAL DIFFERENCES', %r)" % foundDiffs
 
     return foundDiffs, len(resultsA.diagnostics), len(resultsB.diagnostics)
 
-
-def main():
-    from optparse import OptionParser
+def generate_option_parser():
     parser = OptionParser("usage: %prog [options] [dir A] [dir B]")
     parser.add_option("", "--rootA", dest="rootA",
                       help="Prefix to ignore on source files for directory A",
@@ -302,9 +319,29 @@ def main():
                       action="store", type=str, default="")
     parser.add_option("", "--verbose-log", dest="verboseLog",
                       help="Write additional information to LOG \
-                      [default=None]",
+                           [default=None]",
                       action="store", type=str, default=None,
                       metavar="LOG")
+    parser.add_option("--relative-path-differences-histogram",
+                      action="store_true", dest="relative_path_histogram",
+                      default=False,
+                      help="Show histogram of relative paths differences. \
+                            Requires matplotlib")
+    parser.add_option("--relative-log-path-differences-histogram",
+                      action="store_true", dest="relative_log_path_histogram",
+                      default=False,
+                      help="Show histogram of log relative paths differences. \
+                            Requires matplotlib")
+    parser.add_option("--absolute-path-differences-histogram",
+                      action="store_true", dest="absolute_path_histogram",
+                      default=False,
+                      help="Show histogram of absolute paths differences. \
+                            Requires matplotlib")
+    return parser
+
+
+def main():
+    parser = generate_option_parser()
     (opts, args) = parser.parse_args()
 
     if len(args) != 2:

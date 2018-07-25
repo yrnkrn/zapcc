@@ -267,8 +267,8 @@ std::string MachineBasicBlock::getFullName() const {
   return Name;
 }
 
-void MachineBasicBlock::print(raw_ostream &OS, const SlotIndexes *Indexes)
-    const {
+void MachineBasicBlock::print(raw_ostream &OS, const SlotIndexes *Indexes,
+                              bool IsStandalone) const {
   const MachineFunction *MF = getParent();
   if (!MF) {
     OS << "Can't print out MachineBasicBlock because parent MachineFunction"
@@ -278,11 +278,13 @@ void MachineBasicBlock::print(raw_ostream &OS, const SlotIndexes *Indexes)
   const Function &F = MF->getFunction();
   const Module *M = F.getParent();
   ModuleSlotTracker MST(M);
-  print(OS, MST, Indexes);
+  MST.incorporateFunction(F);
+  print(OS, MST, Indexes, IsStandalone);
 }
 
 void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
-                              const SlotIndexes *Indexes) const {
+                              const SlotIndexes *Indexes,
+                              bool IsStandalone) const {
   const MachineFunction *MF = getParent();
   if (!MF) {
     OS << "Can't print out MachineBasicBlock because parent MachineFunction"
@@ -293,39 +295,100 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
   if (Indexes)
     OS << Indexes->getMBBStartIdx(this) << '\t';
 
-  OS << printMBBReference(*this) << ": ";
-
-  const char *Comma = "";
-  if (const BasicBlock *LBB = getBasicBlock()) {
-    OS << Comma << "derived from LLVM BB ";
-    LBB->printAsOperand(OS, /*PrintType=*/false, MST);
-    Comma = ", ";
+  OS << "bb." << getNumber();
+  bool HasAttributes = false;
+  if (const auto *BB = getBasicBlock()) {
+    if (BB->hasName()) {
+      OS << "." << BB->getName();
+    } else {
+      HasAttributes = true;
+      OS << " (";
+      int Slot = MST.getLocalSlot(BB);
+      if (Slot == -1)
+        OS << "<ir-block badref>";
+      else
+        OS << (Twine("%ir-block.") + Twine(Slot)).str();
+    }
   }
-  if (isEHPad()) { OS << Comma << "EH LANDING PAD"; Comma = ", "; }
-  if (hasAddressTaken()) { OS << Comma << "ADDRESS TAKEN"; Comma = ", "; }
-  if (Alignment)
-    OS << Comma << "Align " << Alignment << " (" << (1u << Alignment)
-       << " bytes)";
 
-  OS << '\n';
+  if (hasAddressTaken()) {
+    OS << (HasAttributes ? ", " : " (");
+    OS << "address-taken";
+    HasAttributes = true;
+  }
+  if (isEHPad()) {
+    OS << (HasAttributes ? ", " : " (");
+    OS << "landing-pad";
+    HasAttributes = true;
+  }
+  if (getAlignment()) {
+    OS << (HasAttributes ? ", " : " (");
+    OS << "align " << getAlignment();
+    HasAttributes = true;
+  }
+  if (HasAttributes)
+    OS << ")";
+  OS << ":\n";
 
   const TargetRegisterInfo *TRI = MF->getSubtarget().getRegisterInfo();
-  if (!livein_empty()) {
+  const MachineRegisterInfo &MRI = MF->getRegInfo();
+  if (!livein_empty() && MRI.tracksLiveness()) {
     if (Indexes) OS << '\t';
-    OS << "    Live Ins:";
-    for (const auto &LI : LiveIns) {
-      OS << ' ' << printReg(LI.PhysReg, TRI);
+    OS.indent(2) << "liveins: ";
+
+    bool First = true;
+    for (const auto &LI : liveins()) {
+      if (!First)
+        OS << ", ";
+      First = false;
+      OS << printReg(LI.PhysReg, TRI);
       if (!LI.LaneMask.all())
-        OS << ':' << PrintLaneMask(LI.LaneMask);
+        OS << ":0x" << PrintLaneMask(LI.LaneMask);
     }
     OS << '\n';
   }
+
+  if (!succ_empty()) {
+    if (Indexes) OS << '\t';
+    // Print the successors
+    OS.indent(2) << "successors: ";
+    for (auto I = succ_begin(), E = succ_end(); I != E; ++I) {
+      if (I != succ_begin())
+        OS << ", ";
+      OS << printMBBReference(**I);
+      if (!Probs.empty())
+        OS << '('
+           << format("0x%08" PRIx32, getSuccProbability(I).getNumerator())
+           << ')';
+    }
+    if (!Probs.empty()) {
+      // Print human readable probabilities as comments.
+      OS << "; ";
+      for (auto I = succ_begin(), E = succ_end(); I != E; ++I) {
+        const BranchProbability &BP = *getProbabilityIterator(I);
+        if (I != succ_begin())
+          OS << ", ";
+        OS << printMBBReference(**I) << '('
+           << format("%.2f%%",
+                     rint(((double)BP.getNumerator() / BP.getDenominator()) *
+                          100.0 * 100.0) /
+                         100.0)
+           << ')';
+      }
+      OS << '\n';
+    }
+  }
+
   // Print the preds of this block according to the CFG.
   if (!pred_empty()) {
     if (Indexes) OS << '\t';
-    OS << "    Predecessors according to CFG:";
-    for (const_pred_iterator PI = pred_begin(), E = pred_end(); PI != E; ++PI)
-      OS << " " << printMBBReference(*(*PI));
+    // Don't indent(2), align with previous line attributes.
+    OS << "; predecessors: ";
+    for (auto I = pred_begin(), E = pred_end(); I != E; ++I) {
+      if (I != pred_begin())
+        OS << ", ";
+      OS << printMBBReference(**I);
+    }
     OS << '\n';
   }
 
@@ -338,20 +401,10 @@ void MachineBasicBlock::print(raw_ostream &OS, ModuleSlotTracker &MST,
     OS << '\t';
     if (I.isInsideBundle())
       OS << "  * ";
-    I.print(OS, MST);
-  }
-
-  // Print the successors of this block according to the CFG.
-  if (!succ_empty()) {
-    if (Indexes) OS << '\t';
-    OS << "    Successors according to CFG:";
-    for (const_succ_iterator SI = succ_begin(), E = succ_end(); SI != E; ++SI) {
-      OS << " " << printMBBReference(*(*SI));
-      if (!Probs.empty())
-        OS << '(' << *getProbabilityIterator(SI) << ')';
-    }
+    I.print(OS, MST, IsStandalone);
     OS << '\n';
   }
+
   if (IrrLoopHeaderWeight) {
     if (Indexes) OS << '\t';
     OS << "    Irreducible loop header weight: "

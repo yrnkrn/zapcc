@@ -417,10 +417,10 @@ def SLDT32r : I<0x00, MRM0r, (outs GR32:$dst), (ins),
 // LLDT is not interpreted specially in 64-bit mode because there is no sign
 //   extension.
 def SLDT64r : RI<0x00, MRM0r, (outs GR64:$dst), (ins),
-                 "sldt{q}\t$dst", [], IIC_SLDT>, TB;
+                 "sldt{q}\t$dst", [], IIC_SLDT>, TB, Requires<[In64BitMode]>;
 let mayStore = 1 in
 def SLDT64m : RI<0x00, MRM0m, (outs), (ins i16mem:$dst),
-                 "sldt{q}\t$dst", [], IIC_SLDT>, TB;
+                 "sldt{q}\t$dst", [], IIC_SLDT>, TB, Requires<[In64BitMode]>;
 
 def LGDT16m : I<0x01, MRM2m, (outs), (ins opaque48mem:$src),
               "lgdt{w}\t$src", [], IIC_LGDT>, TB, OpSize16, Requires<[Not64BitMode]>;
@@ -535,6 +535,11 @@ let SchedRW = [WriteSystem], Predicates = [HasSHSTK]  in{
                      [(int_x86_clrssbsy addr:$src)]>, XS;
   } // Defs SSP
 } // SchedRW && HasSHSTK
+
+let SchedRW = [WriteSystem], Predicates = [HasIBT]  in {
+    def ENDBR64 : I<0x1E, MRM_FA, (outs), (ins), "endbr64", []>, XS;
+    def ENDBR32 : I<0x1E, MRM_FB, (outs), (ins), "endbr32", []>, XS;
+} // SchedRW && HasIBT
 
 //===----------------------------------------------------------------------===//
 // XSAVE instructions
@@ -695,13 +700,21 @@ let Uses = [RAX, RBX, RCX, RDX], Defs = [RAX, RBX, RCX] in {
 //===----------------------------------------------------------------------===//
 // RDPID Instruction
 let SchedRW = [WriteSystem] in {
-def RDPID32 : I<0xC7, MRM7r, (outs GR32:$src), (ins),
-              "rdpid\t$src", [], IIC_RDPID>, XS,
-              Requires<[Not64BitMode]>;
-def RDPID64 : I<0xC7, MRM7r, (outs GR64:$src), (ins),
-              "rdpid\t$src", [], IIC_RDPID>, XS,
-              Requires<[In64BitMode]>;
+def RDPID32 : I<0xC7, MRM7r, (outs GR32:$dst), (ins),
+              "rdpid\t$dst", [(set GR32:$dst, (int_x86_rdpid))], IIC_RDPID>, XS,
+              Requires<[Not64BitMode, HasRDPID]>;
+def RDPID64 : I<0xC7, MRM7r, (outs GR64:$dst), (ins),
+              "rdpid\t$dst", [], IIC_RDPID>, XS,
+              Requires<[In64BitMode, HasRDPID]>;
 } // SchedRW
+
+let Predicates = [In64BitMode, HasRDPID] in {
+  // Due to silly instruction definition, we have to compensate for the
+  // instruction outputing a 64-bit register.
+  def : Pat<(int_x86_rdpid),
+            (EXTRACT_SUBREG (RDPID64), sub_32bit)>;
+}
+
 
 //===----------------------------------------------------------------------===//
 // PTWRITE Instruction

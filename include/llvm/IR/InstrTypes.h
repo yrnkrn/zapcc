@@ -973,6 +973,34 @@ public:
   /// @brief Return the predicate as if the operands were swapped.
   static Predicate getSwappedPredicate(Predicate pred);
 
+  /// For predicate of kind "is X or equal to 0" returns the predicate "is X".
+  /// For predicate of kind "is X" returns the predicate "is X or equal to 0".
+  /// does not support other kind of predicates.
+  /// @returns the predicate that does not contains is equal to zero if
+  /// it had and vice versa.
+  /// @brief Return the flipped strictness of predicate
+  Predicate getFlippedStrictnessPredicate() const {
+    return getFlippedStrictnessPredicate(getPredicate());
+  }
+
+  /// This is a static version that you can use without an instruction
+  /// available.
+  /// @brief Return the flipped strictness of predicate
+  static Predicate getFlippedStrictnessPredicate(Predicate pred);
+
+  /// For example, SGT -> SGE, SLT -> SLE, ULT -> ULE, UGT -> UGE.
+  /// @brief Returns the non-strict version of strict comparisons.
+  Predicate getNonStrictPredicate() const {
+    return getNonStrictPredicate(getPredicate());
+  }
+
+  /// This is a static version that you can use without an instruction
+  /// available.
+  /// @returns the non-strict version of comparison provided in \p pred.
+  /// If \p pred is not a strict comparison predicate, returns \p pred.
+  /// @brief Returns the non-strict version of strict comparisons.
+  static Predicate getNonStrictPredicate(Predicate pred);
+
   /// @brief Provide more efficient getOperand methods.
   DECLARE_TRANSPARENT_OPERAND_ACCESSORS(Value);
 

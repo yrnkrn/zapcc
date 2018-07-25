@@ -156,6 +156,9 @@ static cl::opt<std::string> ThinLTOModuleId(
 static cl::opt<std::string>
     ThinLTOCacheDir("thinlto-cache-dir", cl::desc("Enable ThinLTO caching."));
 
+static cl::opt<int>
+    ThinLTOCachePruningInterval("thinlto-cache-pruning-interval", cl::desc("Set ThinLTO cache pruning interval."));
+
 static cl::opt<std::string> ThinLTOSaveTempsPrefix(
     "thinlto-save-temps",
     cl::desc("Save ThinLTO temp files using filenames created by adding "
@@ -364,7 +367,7 @@ static void listSymbols(const TargetOptions &Options) {
 /// This is meant to enable testing of ThinLTO combined index generation,
 /// currently available via the gold plugin via -thinlto.
 static void createCombinedModuleSummaryIndex() {
-  ModuleSummaryIndex CombinedIndex;
+  ModuleSummaryIndex CombinedIndex(/*IsPerformingAnalysis=*/false);
   uint64_t NextModuleId = 0;
   for (auto &Filename : InputFilenames) {
     ExitOnError ExitOnErr("llvm-lto: error loading file '" + Filename + "': ");
@@ -470,6 +473,7 @@ public:
     ThinGenerator.setCodePICModel(getRelocModel());
     ThinGenerator.setTargetOptions(Options);
     ThinGenerator.setCacheDir(ThinLTOCacheDir);
+    ThinGenerator.setCachePruningInterval(ThinLTOCachePruningInterval);
     ThinGenerator.setFreestanding(EnableFreestanding);
 
     // Add all the exported symbols to the table of symbols to preserve.

@@ -281,6 +281,8 @@ ModuleMap::ModuleMap(SourceManager &SourceMgr, DiagnosticsEngine &Diags,
 ModuleMap::~ModuleMap() {
   for (auto &M : Modules)
     delete M.getValue();
+  for (auto *M : ShadowModules)
+    delete M;
 }
 
 void ModuleMap::setTarget(const TargetInfo &Target) {
@@ -751,7 +753,7 @@ std::pair<Module *, bool> ModuleMap::findOrCreateModule(StringRef Name,
   // Try to find an existing module with this name.
   if (Module *Sub = lookupModuleQualified(Name, Parent))
     return std::make_pair(Sub, false);
-  
+
   // Create a new module with this name.
   Module *Result = new Module(Name, SourceLocation(), Parent, IsFramework,
                               IsExplicit, NumCreatedModules++);
@@ -759,6 +761,7 @@ std::pair<Module *, bool> ModuleMap::findOrCreateModule(StringRef Name,
     if (LangOpts.CurrentModule == Name)
       SourceModule = Result;
     Modules[Name] = Result;
+    ModuleScopeIDs[Result] = CurrentModuleScopeID;
   }
   return std::make_pair(Result, true);
 }
@@ -927,6 +930,7 @@ Module *ModuleMap::inferFrameworkModule(const DirectoryEntry *FrameworkDir,
     if (LangOpts.CurrentModule == ModuleName)
       SourceModule = Result;
     Modules[ModuleName] = Result;
+    ModuleScopeIDs[Result] = CurrentModuleScopeID;
   }
 
   Result->IsSystem |= Attrs.IsSystem;
@@ -995,6 +999,21 @@ Module *ModuleMap::inferFrameworkModule(const DirectoryEntry *FrameworkDir,
   if (!Result->isSubFramework()) {
     inferFrameworkLink(Result, FrameworkDir, FileMgr);
   }
+
+  return Result;
+}
+
+Module *ModuleMap::createShadowedModule(StringRef Name, bool IsFramework,
+                                        Module *ShadowingModule) {
+
+  // Create a new module with this name.
+  Module *Result =
+      new Module(Name, SourceLocation(), /*Parent=*/nullptr, IsFramework,
+                 /*IsExplicit=*/false, NumCreatedModules++);
+  Result->ShadowingModule = ShadowingModule;
+  Result->IsAvailable = false;
+  ModuleScopeIDs[Result] = CurrentModuleScopeID;
+  ShadowModules.push_back(Result);
 
   return Result;
 }
@@ -1319,7 +1338,7 @@ namespace clang {
 
     /// \brief Consume the current token and return its location.
     SourceLocation consumeToken();
-    
+
     /// \brief Skip tokens until we reach the a token with the given kind
     /// (or the end of the file).
     void skipUntil(MMToken::TokenKind K);
@@ -1345,20 +1364,17 @@ namespace clang {
     bool parseOptionalAttributes(Attributes &Attrs);
     
   public:
-    explicit ModuleMapParser(Lexer &L, SourceManager &SourceMgr, 
-                             const TargetInfo *Target,
-                             DiagnosticsEngine &Diags,
-                             ModuleMap &Map,
-                             const FileEntry *ModuleMapFile,
-                             const DirectoryEntry *Directory,
-                             bool IsSystem)
+    explicit ModuleMapParser(Lexer &L, SourceManager &SourceMgr,
+                             const TargetInfo *Target, DiagnosticsEngine &Diags,
+                             ModuleMap &Map, const FileEntry *ModuleMapFile,
+                             const DirectoryEntry *Directory, bool IsSystem)
         : L(L), SourceMgr(SourceMgr), Target(Target), Diags(Diags), Map(Map),
           ModuleMapFile(ModuleMapFile), Directory(Directory),
           IsSystem(IsSystem) {
       Tok.clear();
       consumeToken();
     }
-    
+
     bool parseModuleMapFile();
 
     bool terminatedByDirective() { return false; }
@@ -1608,6 +1624,54 @@ namespace {
 
 } // namespace
 
+/// Private modules are canonicalized as Foo_Private. Clang provides extra
+/// module map search logic to find the appropriate private module when PCH
+/// is used with implicit module maps. Warn when private modules are written
+/// in other ways (FooPrivate and Foo.Private), providing notes and fixits.
+static void diagnosePrivateModules(const ModuleMap &Map,
+                                   DiagnosticsEngine &Diags,
+                                   const Module *ActiveModule) {
+
+  auto GenNoteAndFixIt = [&](StringRef BadName, StringRef Canonical,
+                             const Module *M) {
+    auto D = Diags.Report(ActiveModule->DefinitionLoc,
+                          diag::note_mmap_rename_top_level_private_module);
+    D << BadName << M->Name;
+    D << FixItHint::CreateReplacement(ActiveModule->DefinitionLoc, Canonical);
+  };
+
+  for (auto E = Map.module_begin(); E != Map.module_end(); ++E) {
+    auto const *M = E->getValue();
+    if (M->Directory != ActiveModule->Directory)
+      continue;
+
+    SmallString<128> FullName(ActiveModule->getFullModuleName());
+    if (!FullName.startswith(M->Name) && !FullName.endswith("Private"))
+      continue;
+    SmallString<128> Canonical(M->Name);
+    Canonical.append("_Private");
+
+    // Foo.Private -> Foo_Private
+    if (ActiveModule->Parent && ActiveModule->Name == "Private" && !M->Parent &&
+        M->Name == ActiveModule->Parent->Name) {
+      Diags.Report(ActiveModule->DefinitionLoc,
+                   diag::warn_mmap_mismatched_private_submodule)
+          << FullName;
+      GenNoteAndFixIt(FullName, Canonical, M);
+      continue;
+    }
+
+    // FooPrivate and whatnots -> Foo_Private
+    if (!ActiveModule->Parent && !M->Parent && M->Name != ActiveModule->Name &&
+        ActiveModule->Name != Canonical) {
+      Diags.Report(ActiveModule->DefinitionLoc,
+                   diag::warn_mmap_mismatched_private_module_name)
+          << ActiveModule->Name;
+      GenNoteAndFixIt(ActiveModule->Name, Canonical, M);
+    }
+  }
+}
+
 /// \brief Parse a module declaration.
 ///
 ///   module-declaration:
@@ -1739,6 +1803,7 @@ void ModuleMapParser::parseModuleDecl() {
   SourceLocation LBraceLoc = consumeToken();
   
   // Determine whether this (sub)module has already been defined.
+  Module *ShadowingModule = nullptr;
   if (Module *Existing = Map.lookupModuleQualified(ModuleName, ActiveModule)) {
     // We might see a (re)definition of a module that we already have a
     // definition for in two cases:
@@ -1764,23 +1829,35 @@ void ModuleMapParser::parseModuleDecl() {
       }
       return;
     }
-    
-    Diags.Report(ModuleNameLoc, diag::err_mmap_module_redefinition)
-      << ModuleName;
-    Diags.Report(Existing->DefinitionLoc, diag::note_mmap_prev_definition);
-    
-    // Skip the module definition.
-    skipUntil(MMToken::RBrace);
-    if (Tok.is(MMToken::RBrace))
-      consumeToken();
-    
-    HadError = true;
-    return;
+
+    if (!Existing->Parent && Map.mayShadowNewModule(Existing)) {
+      ShadowingModule = Existing;
+    } else {
+      // This is not a shawdowed module decl, it is an illegal redefinition.
+      Diags.Report(ModuleNameLoc, diag::err_mmap_module_redefinition)
+          << ModuleName;
+      Diags.Report(Existing->DefinitionLoc, diag::note_mmap_prev_definition);
+
+      // Skip the module definition.
+      skipUntil(MMToken::RBrace);
+      if (Tok.is(MMToken::RBrace))
+        consumeToken();
+
+      HadError = true;
+      return;
+    }
   }
 
   // Start defining this module.
-  ActiveModule = Map.findOrCreateModule(ModuleName, ActiveModule, Framework,
-                                        Explicit).first;
+  if (ShadowingModule) {
+    ActiveModule =
+        Map.createShadowedModule(ModuleName, Framework, ShadowingModule);
+  } else {
+    ActiveModule =
+        Map.findOrCreateModule(ModuleName, ActiveModule, Framework, Explicit)
+            .first;
+  }
+
   ActiveModule->DefinitionLoc = ModuleNameLoc;
   if (Attrs.IsSystem || IsSystem)
     ActiveModule->IsSystem = true;
@@ -1791,41 +1868,21 @@ void ModuleMapParser::parseModuleDecl() {
     ActiveModule->NoUndeclaredIncludes = true;
   ActiveModule->Directory = Directory;
 
-  if (!ActiveModule->Parent) {
-    StringRef MapFileName(ModuleMapFile->getName());
-    if (MapFileName.endswith("module.private.modulemap") ||
-        MapFileName.endswith("module_private.map")) {
-      // Adding a top-level module from a private modulemap is likely a
-      // user error; we check to see if there's another top-level module
-      // defined in the non-private map in the same dir, and if so emit a
-      // warning.
-      for (auto E = Map.module_begin(); E != Map.module_end(); ++E) {
-        auto const *M = E->getValue();
-        if (!M->Parent &&
-            M->Directory == ActiveModule->Directory &&
-            M->Name != ActiveModule->Name) {
-          Diags.Report(ActiveModule->DefinitionLoc,
-                       diag::warn_mmap_mismatched_top_level_private)
-            << ActiveModule->Name << M->Name;
-          // The pattern we're defending against here is typically due to
-          // a module named FooPrivate which is supposed to be a submodule
-          // called Foo.Private. Emit a fixit in that case.
-          auto D =
-            Diags.Report(ActiveModule->DefinitionLoc,
-                         diag::note_mmap_rename_top_level_private_as_submodule);
-          D << ActiveModule->Name << M->Name;
-          StringRef Bad(ActiveModule->Name);
-          if (Bad.consume_back("Private")) {
-            SmallString<128> Fixed = Bad;
-            Fixed.append(".Private");
-            D << FixItHint::CreateReplacement(ActiveModule->DefinitionLoc,
-                                              Fixed);
-          }
-          break;
-        }
-      }
-    }
-  }
+
+  // Private modules named as FooPrivate, Foo.Private or similar are likely a
+  // user error; provide warnings, notes and fixits to direct users to use
+  // Foo_Private instead.
+  SourceLocation StartLoc =
+      SourceMgr.getLocForStartOfFile(SourceMgr.getMainFileID());
+  StringRef MapFileName(ModuleMapFile->getName());
+  if (Map.HeaderInfo.getHeaderSearchOpts().ImplicitModuleMaps &&
+      !Diags.isIgnored(diag::warn_mmap_mismatched_private_submodule,
+                       StartLoc) &&
+      !Diags.isIgnored(diag::warn_mmap_mismatched_private_module_name,
+                       StartLoc) &&
+      (MapFileName.endswith("module.private.modulemap") ||
+       MapFileName.endswith("module_private.map")))
+    diagnosePrivateModules(Map, Diags, ActiveModule);
 
   bool Done = false;
   do {
@@ -2826,5 +2883,6 @@ bool ModuleMap::parseModuleMapFile(const FileEntry *File, bool IsSystem,
   // Notify callbacks that we parsed it.
   for (const auto &Cb : Callbacks)
     Cb->moduleMapFileRead(Start, *File, IsSystem);
+
   return Result;
 }

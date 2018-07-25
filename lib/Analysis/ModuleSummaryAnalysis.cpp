@@ -273,9 +273,24 @@ computeFunctionSummary(ModuleSummaryIndex &Index, const Module &M,
         // to record the call edge to the alias in that case. Eventually
         // an alias summary will be created to associate the alias and
         // aliasee.
-        CallGraphEdges[Index.getOrInsertValueInfo(
-                           cast<GlobalValue>(CalledValue))]
-            .updateHotness(Hotness);
+        auto &ValueInfo = CallGraphEdges[Index.getOrInsertValueInfo(
+            cast<GlobalValue>(CalledValue))];
+        ValueInfo.updateHotness(Hotness);
+        // Add the relative block frequency to CalleeInfo if there is no profile
+        // information.
+        if (BFI != nullptr && Hotness == CalleeInfo::HotnessType::Unknown) {
+          auto BBFreq = BFI->getBlockFreq(&BB).getFrequency();
+          // FIXME: This might need some scaling to prevent BBFreq values from
+          // being rounded down to 0.
+          auto EntryFreq = BFI->getEntryFreq();
+          // Block frequencies can be directly set for a block and so we need to
+          // handle the case of entry frequency being 0.
+          if (EntryFreq)
+            BBFreq /= EntryFreq;
+          else
+            BBFreq = 0;
+          ValueInfo.updateRelBlockFreq(BBFreq);
+        }
       } else {
         // Skip inline assembly calls.
         if (CI && CI->isInlineAsm())
@@ -306,7 +321,9 @@ computeFunctionSummary(ModuleSummaryIndex &Index, const Module &M,
       NonRenamableLocal || HasInlineAsmMaybeReferencingInternal ||
       // Inliner doesn't handle variadic functions.
       // FIXME: refactor this to use the same code that inliner is using.
-      F.isVarArg();
+      F.isVarArg() ||
+      // Don't try to import functions with noinline attribute.
+      F.getAttributes().hasFnAttribute(Attribute::NoInline);
   GlobalValueSummary::GVFlags Flags(F.getLinkage(), NotEligibleForImport,
                                     /* Live = */ false, F.isDSOLocal());
   FunctionSummary::FFlags FunFlags{
@@ -370,7 +387,7 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     std::function<BlockFrequencyInfo *(const Function &F)> GetBFICallback,
     ProfileSummaryInfo *PSI) {
   assert(PSI);
-  ModuleSummaryIndex Index;
+  ModuleSummaryIndex Index(/*IsPerformingAnalysis=*/true);
 
   // Identify the local values in the llvm.used and llvm.compiler.used sets,
   // which should not be exported as they would then require renaming and
@@ -454,7 +471,7 @@ ModuleSummaryIndex llvm::buildModuleSummaryIndex(
     std::unique_ptr<BlockFrequencyInfo> BFIPtr;
     if (GetBFICallback)
       BFI = GetBFICallback(F);
-    else if (F.getEntryCount().hasValue()) {
+    else if (F.hasProfileData()) {
       LoopInfo LI{DominatorTree(const_cast<Function &>(F))};
       BranchProbabilityInfo BPI{F, LI};
       BFIPtr = llvm::make_unique<BlockFrequencyInfo>(F, BPI, LI);

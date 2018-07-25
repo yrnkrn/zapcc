@@ -18,6 +18,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/IR/Verifier.h"
 
 using namespace llvm;
 
@@ -84,6 +85,14 @@ void llvm::handleExecNameEncodedOptimizerOpts(StringRef ExecName) {
   for (StringRef Opt : Opts) {
     if (Opt.startswith("instcombine")) {
       Args.push_back("-passes=instcombine");
+    } else if (Opt.startswith("earlycse")) {
+      Args.push_back("-passes=early-cse");
+    } else if (Opt.startswith("simplifycfg")) {
+      Args.push_back("-passes=simplify-cfg");
+    } else if (Opt.startswith("gvn")) {
+      Args.push_back("-passes=gvn");
+    } else if (Opt.startswith("sccp")) {
+      Args.push_back("-passes=sccp");
     } else if (Triple(Opt).getArch()) {
       Args.push_back("-mtriple=" + Opt.str());
     } else {
@@ -166,4 +175,13 @@ size_t llvm::writeModule(const Module &M, uint8_t *Dest, size_t MaxSize) {
       return 0;
   memcpy(Dest, Buf.data(), Buf.size());
   return Buf.size();
+}
+
+std::unique_ptr<Module> llvm::parseAndVerify(const uint8_t *Data, size_t Size,
+                                             LLVMContext &Context) {
+  auto M = parseModule(Data, Size, Context);
+  if (!M || verifyModule(*M, &errs()))
+    return nullptr;
+  
+  return M;
 }

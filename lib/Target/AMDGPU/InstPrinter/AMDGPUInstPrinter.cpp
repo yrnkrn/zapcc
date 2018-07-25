@@ -267,6 +267,9 @@ void AMDGPUInstPrinter::printRegOperand(unsigned RegNo, raw_ostream &O,
   case AMDGPU::FLAT_SCR:
     O << "flat_scratch";
     return;
+  case AMDGPU::XNACK_MASK:
+    O << "xnack_mask";
+    return;
   case AMDGPU::VCC_LO:
     O << "vcc_lo";
     return;
@@ -296,6 +299,12 @@ void AMDGPUInstPrinter::printRegOperand(unsigned RegNo, raw_ostream &O,
     return;
   case AMDGPU::FLAT_SCR_HI:
     O << "flat_scratch_hi";
+    return;
+  case AMDGPU::XNACK_MASK_LO:
+    O << "xnack_mask_lo";
+    return;
+  case AMDGPU::XNACK_MASK_HI:
+    O << "xnack_mask_hi";
     return;
   case AMDGPU::FP_REG:
   case AMDGPU::SP_REG:
@@ -335,13 +344,13 @@ void AMDGPUInstPrinter::printRegOperand(unsigned RegNo, raw_ostream &O,
   } else if (MRI.getRegClass(AMDGPU::VReg_256RegClassID).contains(RegNo)) {
     O << 'v';
     NumRegs = 8;
-  } else if (MRI.getRegClass(AMDGPU::SReg_256RegClassID).contains(RegNo)) {
+  } else if (MRI.getRegClass(AMDGPU::SGPR_256RegClassID).contains(RegNo)) {
     O << 's';
     NumRegs = 8;
   } else if (MRI.getRegClass(AMDGPU::VReg_512RegClassID).contains(RegNo)) {
     O << 'v';
     NumRegs = 16;
-  } else if (MRI.getRegClass(AMDGPU::SReg_512RegClassID).contains(RegNo)) {
+  } else if (MRI.getRegClass(AMDGPU::SGPR_512RegClassID).contains(RegNo)) {
     O << 's';
     NumRegs = 16;
   } else {
@@ -1254,7 +1263,10 @@ void AMDGPUInstPrinter::printHwreg(const MCInst *MI, unsigned OpNo,
   const unsigned Width = ((SImm16 & WIDTH_M1_MASK_) >> WIDTH_M1_SHIFT_) + 1;
 
   O << "hwreg(";
-  if (ID_SYMBOLIC_FIRST_ <= Id && Id < ID_SYMBOLIC_LAST_) {
+  unsigned Last = ID_SYMBOLIC_LAST_;
+  if (AMDGPU::isSI(STI) || AMDGPU::isCI(STI) || AMDGPU::isVI(STI))
+    Last = ID_SYMBOLIC_FIRST_GFX9_;
+  if (ID_SYMBOLIC_FIRST_ <= Id && Id < Last && IdSymbolic[Id]) {
     O << IdSymbolic[Id];
   } else {
     O << Id;

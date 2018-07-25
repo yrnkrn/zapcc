@@ -391,7 +391,7 @@ public:
   /// Access to memory operands of the instruction
   mmo_iterator memoperands_begin() const { return MemRefs; }
   mmo_iterator memoperands_end() const { return MemRefs + NumMemRefs; }
-  /// Return true if we don't have any memory operands which described the the
+  /// Return true if we don't have any memory operands which described the
   /// memory access done by this instruction.  If this is true, calling code
   /// must be conservative.
   bool memoperands_empty() const { return NumMemRefs == 0; }
@@ -893,6 +893,8 @@ public:
     case TargetOpcode::EH_LABEL:
     case TargetOpcode::GC_LABEL:
     case TargetOpcode::DBG_VALUE:
+    case TargetOpcode::LIFETIME_START:
+    case TargetOpcode::LIFETIME_END:
       return true;
     }
   }
@@ -1124,7 +1126,8 @@ public:
   /// Replace all occurrences of FromReg with ToReg:SubIdx,
   /// properly composing subreg indices where necessary.
   void substituteRegister(unsigned FromReg, unsigned ToReg, unsigned SubIdx,
-                          const TargetRegisterInfo &RegInfo);
+                          const TargetRegisterInfo &RegInfo,
+                          bool ClearIsRenamable = false);
 
   /// We have determined MI kills a register. Look for the
   /// operand that uses it and mark it as IsKill. If AddIfNotFound is true,
@@ -1233,15 +1236,19 @@ public:
   bool hasComplexRegisterTies() const;
 
   /// Print this MI to \p OS.
+  /// Don't print information that can be inferred from other instructions if
+  /// \p IsStandalone is false. It is usually true when only a fragment of the
+  /// function is printed.
   /// Only print the defs and the opcode if \p SkipOpers is true.
   /// Otherwise, also print operands if \p SkipDebugLoc is true.
   /// Otherwise, also print the debug loc, with a terminating newline.
   /// \p TII is used to print the opcode name.  If it's not present, but the
   /// MI is in a function, the opcode will be printed using the function's TII.
-  void print(raw_ostream &OS, bool SkipOpers = false, bool SkipDebugLoc = false,
-             const TargetInstrInfo *TII = nullptr) const;
-  void print(raw_ostream &OS, ModuleSlotTracker &MST, bool SkipOpers = false,
+  void print(raw_ostream &OS, bool IsStandalone = true, bool SkipOpers = false,
              bool SkipDebugLoc = false,
+             const TargetInstrInfo *TII = nullptr) const;
+  void print(raw_ostream &OS, ModuleSlotTracker &MST, bool IsStandalone = true,
+             bool SkipOpers = false, bool SkipDebugLoc = false,
              const TargetInstrInfo *TII = nullptr) const;
   void dump() const;
   /// @}

@@ -22,6 +22,7 @@
 #include "clang/Sema/CleanupInfo.h"
 #include "clang/Sema/Ownership.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -54,12 +55,16 @@ namespace sema {
 /// parsed.
 class CompoundScopeInfo {
 public:
-  CompoundScopeInfo()
-    : HasEmptyLoopBodies(false) { }
+  CompoundScopeInfo(bool IsStmtExpr)
+    : HasEmptyLoopBodies(false), IsStmtExpr(IsStmtExpr) { }
 
   /// \brief Whether this compound stamement contains `for' or `while' loops
   /// with empty bodies.
   bool HasEmptyLoopBodies;
+
+  /// \brief Whether this compound statement corresponds to a GNU statement
+  /// expression.
+  bool IsStmtExpr;
 
   void setHasEmptyLoopBodies() {
     HasEmptyLoopBodies = true;
@@ -171,6 +176,10 @@ public:
 
   /// \brief The promise object for this coroutine, if any.
   VarDecl *CoroutinePromise = nullptr;
+
+  /// \brief A mapping between the coroutine function parameters that were moved
+  /// to the coroutine frame, and their move statements.
+  llvm::SmallMapVector<ParmVarDecl *, Stmt *, 4> CoroutineParameterMoves;
 
   /// \brief The initial and final coroutine suspend points.
   std::pair<Stmt *, Stmt *> CoroutineSuspends;
