@@ -256,11 +256,13 @@ endif()
 set(CLANG_VENDOR ${PACKAGE_VENDOR} CACHE STRING
   "Vendor-specific text for showing with version information.")
 
+set(CLANG_VENDOR "zapcc")
+
 if( CLANG_VENDOR )
   add_definitions( -DCLANG_VENDOR="${CLANG_VENDOR} " )
 endif()
 
-set(CLANG_REPOSITORY_STRING "" CACHE STRING
+set(CLANG_REPOSITORY_STRING "https://github.com/yrnkrn/zapcc" CACHE STRING
   "Vendor-specific text for showing the repository the source is taken from.")
 
 if(CLANG_REPOSITORY_STRING)
