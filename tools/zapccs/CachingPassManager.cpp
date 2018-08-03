@@ -253,7 +253,7 @@ void CachingPassManager::Implementation::resurrect() {
         if (TSK == TSK_ExplicitInstantiationDefinition ||
             DM->dependsOnEmittedFunction(VD))
           setGlobalValues(VD, false);
-      } else {
+      } else if (VD->getTLSKind() == VarDecl::TLS_None) {
         setGlobalValues(D, isNoDefinition(VD));
       }
     } else if (const FunctionDecl *FD = dyn_cast<FunctionDecl>(D)) {
