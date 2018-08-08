@@ -12,6 +12,8 @@ include_directories(BEFORE
 set(LLVM_LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}
   Analysis
+  AsmPrinter
+  BitWriter
   CodeGen
   Core
   Support
@@ -65,6 +67,7 @@ target_link_libraries(zapccs
   clangLex
   clangParse
   clangSema
+  clangSerialization
 )
 
 add_custom_target (
