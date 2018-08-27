@@ -76,6 +76,28 @@ zapcc builds on
 zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on Windows targetting mingw-w64, 32 or 64 bits.
 Rest are experimental, please share your experience.
 
+### How to target mingw-w64 on Windows
+
+You need msys2 and the mingw-builds of mingw-w64. Note there are 32- and 64- bits distribtutions of mingw-w64.
+To target x86_64:
+
+* Download the latest [MSYS2 installerWebKit](https://www.msys2.org) and install into the default folder `C:\msys64\`
+* Download one of the mingw-builds personal distributions, such as [x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z](https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z/download) and open into the folder `C:\mingw64\`
+* Add the bin directories to the PATH
+
+    C:\msys64\usr\bin
+    C:\mingw64\bin
+
+* Make sure you have just this gcc version available on the PATH. gcc versions outside the PATH are OK.
+* Either Visual C++ or the just-installed mingw-w64 may be used to build zapcc.
+* If building using Visual C++, target `x86_64-pc-windows-gnu` must be explicitly specified:
+
+    cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-pc-windows-gnu ../llvm
+
+* zapcc will now target mingw-w64 and ignore Visual C++, even if installed.
+
+To target mingw-builds 32 bits, download the apporpriate 32 bits distribution of mingw-builds and replace `x86_64` with `i686` in the configuration.
+
 ### How zapcc is different from precompiled headers?
 
 Precompiled headers requires building your project to the exact precompiled headers rules. Most projects do not bother with using precompiled headers. Even then, precompiled  headers do not cache as much as zapcc. Zapcc works within your existing build.
