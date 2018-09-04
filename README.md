@@ -8,6 +8,16 @@ zapcc is the client while zapccs is the server. Each zapcc run will reuse an exi
 
 This open source release is licensed under the LLVM Release License (University of Illinois/NCSA).
 
+## Which operating systems and compilers are supported?
+
+zapcc builds on 
+* Linux x64 using gcc, clang or zapcc
+* Windows using Visual C++ or mingw-w64, targetting mingw-w64, 32 or 64 bits
+* Targetting Visual C++ binaries or using `zapcc-cl` is not supported
+* On MacOS using clang
+
+zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on Windows. Rest are experimental, please share your experience.
+
 ## Building
 
 The prerequisites and build process are identical to [building LLVM](https://llvm.org/docs/CMake.html).
@@ -18,6 +28,24 @@ The prerequisites and build process are identical to [building LLVM](https://llv
     cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ../llvm
     ninja
     
+### How to target mingw-w64 on Windows
+
+You need msys2 and the mingw-builds of mingw-w64. Note there are 32- and 64- bits distribtutions of mingw-w64.
+To target x86_64:
+
+* Download the latest [MSYS2 installerWebKit](https://www.msys2.org) and install into the default folder `C:\msys64\`
+* Download one of the mingw-builds personal distributions, such as [x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z](https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z/download) and open into the folder `C:\mingw64\`
+* Add the bin directories to the PATH, `C:\msys64\usr\bin` and `C:\mingw64\bin`
+
+* Make sure you have just this gcc version available on the PATH. gcc versions outside the PATH are OK.
+* Either Visual C++ or the just-installed mingw-w64 may be used to build zapcc.
+* If building using Visual C++, target `x86_64-pc-windows-gnu` must be explicitly specified, 
+`cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-pc-windows-gnu ../llvm`
+
+* zapcc will now target mingw-w64 and ignore Visual C++, even if installed.
+
+To target mingw-builds 32 bits, download the apporpriate 32 bits distribution of mingw-builds and replace `x86_64` with `i686` in the configuration.
+
 ## Running the tests
     
     ninja check-all
@@ -65,34 +93,6 @@ Please make sure first your project compiles successfully with Clang. If your pr
 ### Are the sanitizers supported?
 
 No.
-
-### Which operating systems are supported?
-
-zapcc builds on 
-* Linux x64 using gcc, clang or zapcc
-* Windows using Visual C++ or mingw-w64
-* On MacOS using clang
-
-zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on Windows targetting mingw-w64, 32 or 64 bits.
-Rest are experimental, please share your experience.
-
-### How to target mingw-w64 on Windows
-
-You need msys2 and the mingw-builds of mingw-w64. Note there are 32- and 64- bits distribtutions of mingw-w64.
-To target x86_64:
-
-* Download the latest [MSYS2 installerWebKit](https://www.msys2.org) and install into the default folder `C:\msys64\`
-* Download one of the mingw-builds personal distributions, such as [x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z](https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z/download) and open into the folder `C:\mingw64\`
-* Add the bin directories to the PATH, `C:\msys64\usr\bin` and `C:\mingw64\bin`
-
-* Make sure you have just this gcc version available on the PATH. gcc versions outside the PATH are OK.
-* Either Visual C++ or the just-installed mingw-w64 may be used to build zapcc.
-* If building using Visual C++, target `x86_64-pc-windows-gnu` must be explicitly specified, 
-`cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-pc-windows-gnu ../llvm`
-
-* zapcc will now target mingw-w64 and ignore Visual C++, even if installed.
-
-To target mingw-builds 32 bits, download the apporpriate 32 bits distribution of mingw-builds and replace `x86_64` with `i686` in the configuration.
 
 ### How zapcc is different from precompiled headers?
 
