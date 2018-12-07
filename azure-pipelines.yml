@@ -1,0 +1,19 @@
+jobs:
+- job: mac
+  pool:
+    vmImage: 'macOS 10.14'
+
+  timeoutInMinutes: 360
+
+  steps:
+  - script: macos_script
+    displayName: 'build on mac'
+- job: linux
+  pool:
+    vmImage: 'ubuntu-18.04'
+
+  timeoutInMinutes: 360
+
+  steps:
+  - script: linux_script
+    displayName: 'build on linux'
