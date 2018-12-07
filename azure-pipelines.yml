@@ -1,0 +1,27 @@
+jobs:
+- job: mac
+  pool:
+    vmImage: 'macOS 10.14'
+
+  timeoutInMinutes: 360
+
+  steps:
+  - script: macos_script
+    displayName: 'build on mac'
+  - task: PublishBuild
+    inputs:
+      artifactName: 'build'
+      targetPath: 'build'
+- job: linux
+  pool:
+    vmImage: 'ubuntu-18.04'
+
+  timeoutInMinutes: 360
+
+  steps:
+  - script: linux_script
+    displayName: 'build on linux'
+  - task: PublishBuild
+    inputs:
+      artifactName: 'build'
+      targetPath: 'build'
