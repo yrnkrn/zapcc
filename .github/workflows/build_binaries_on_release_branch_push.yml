@@ -1,0 +1,81 @@
+name: build_binaries_on_release_branch_push
+
+on:
+  push:
+    branches: 
+      - release/*
+
+jobs:
+  build_Linux:
+    name: Build binary for Ubuntu-latest
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v1
+      name: Checkout repository
+    - name: Get Env
+      run: |
+        env
+        set
+        uname -a
+        cat /etc/*release*
+        nproc
+        free -h
+        df -h
+        ls -kahl
+        export cwd=$PWD
+    - name: Install Ninja, CMake, and co. 
+    # actually, all but ninja should be installed - see https://help.github.com/en/articles/software-in-virtual-environments-for-github-actions#ubuntu-1804-lts
+      run: |
+        apt update
+        apt upgrade -y
+        apt install -y git curl build-essential ninja-build python python3
+        mkdir -pv /opt/cmake && cd /opt/cmake
+        curl -JL 'https://github.com/Kitware/CMake/releases/download/v3.15.4/cmake-3.15.4-Linux-x86_64.tar.gz' | tar xvz --strip-components=1 -f -
+        export PATH=/opt/cmake/bin:$PATH
+    - name: Configure and build
+      run: |
+        mkdir -pv /opt/build && cd /opt/build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
+        ninja
+        ninja check-all
+    - name: Publish artifacts (i.e. binaries after compilation)
+      uses: actions/upload-artifact@v1
+      with: 
+        name: Binary for Ubuntu-latest
+        path: /opt/build       
+
+  build_macOS:
+    name: Build binary for macOS
+    runs-on: macOS-latest
+
+    steps:
+      - uses: actions/checkout@v1
+        name: Checkout repository
+      - name: Get Env
+        run: |
+          env
+          set
+          uname -a
+          sw_vers
+          xcodebuild -version
+          nproc
+          df -h
+          ls -kahl
+          export cwd=$PWD
+      - name: Install CMake and Ninja
+        run: |
+          brew install cmake ninja
+          export CC=$(which clang)
+          export CXX=$(which clang++)
+      - name: Configure and build
+        run: |
+          mkdir -pv /opt/build && cd /opt/build
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
+          ninja
+          ninja check-all
+      - name: Publish artifacts (i.e. binaries after compilation)
+        uses: actions/upload-artifact@v1
+        with: 
+          name: Binary for macOS-latest
+          path: /opt/build  
