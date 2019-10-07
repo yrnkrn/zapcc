@@ -7,7 +7,7 @@ on:
 
 jobs:
   build_Linux:
-    name: Build binary for Ubuntu-latest
+    name: Ubuntu build
     runs-on: ubuntu-latest
     
     steps:
@@ -19,7 +19,7 @@ jobs:
         set
         uname -a
         cat /etc/*release*
-        nproc
+        echo "nproc=$(nproc)"
         free -h
         df -h
         ls -kahl
@@ -27,9 +27,9 @@ jobs:
     - name: Install Ninja, CMake, and co. 
     # actually, all but ninja should be installed - see https://help.github.com/en/articles/software-in-virtual-environments-for-github-actions#ubuntu-1804-lts
       run: |
-        apt update
-        apt upgrade -y
-        apt install -y git curl build-essential ninja-build python python3
+        sudo apt-get update
+        sudo apt-get upgrade -y
+        sudo apt-get install -y git curl build-essential ninja-build python python3
         mkdir -pv /opt/cmake && cd /opt/cmake
         curl -JL 'https://github.com/Kitware/CMake/releases/download/v3.15.4/cmake-3.15.4-Linux-x86_64.tar.gz' | tar xvz --strip-components=1 -f -
         export PATH=/opt/cmake/bin:$PATH
@@ -42,11 +42,11 @@ jobs:
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v1
       with: 
-        name: Binary for Ubuntu-latest
+        name: Ubuntu_build
         path: /opt/build       
 
   build_macOS:
-    name: Build binary for macOS
+    name: macOS build 
     runs-on: macOS-latest
 
     steps:
@@ -59,7 +59,6 @@ jobs:
           uname -a
           sw_vers
           xcodebuild -version
-          nproc
           df -h
           ls -kahl
           export cwd=$PWD
@@ -77,5 +76,5 @@ jobs:
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v1
         with: 
-          name: Binary for macOS-latest
+          name: macOS_build
           path: /opt/build  
