@@ -19,7 +19,10 @@ jobs:
         set
         uname -a
         cat /etc/*release*
+        lscpu
         echo "nproc=$(nproc)"
+        sudo dmidecode
+        lsmem
         free -h
         df -h
         ls -kahl
