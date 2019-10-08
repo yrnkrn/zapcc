@@ -30,7 +30,8 @@ jobs:
     # sudo apt-get upgrade -y # do not run upgrade on all outdated packages...
       run: |
         sudo apt-get update
-        sudo apt-get install -y git curl build-essential ninja-build python python3
+        sudo apt-get install -y git curl build-essential ninja-build python python3-pip ocaml
+        sudo pip3 install pygments pyyaml
         mkdir -pv /opt/cmake && cd /opt/cmake
         curl -JL 'https://github.com/Kitware/CMake/releases/download/v3.15.4/cmake-3.15.4-Linux-x86_64.tar.gz' | tar xvz --strip-components=1 -f -
         export PATH=/opt/cmake/bin:$PATH
@@ -67,7 +68,8 @@ jobs:
           export cwd=$PWD
       - name: Install CMake and Ninja
         run: |
-          brew install cmake ninja
+          brew install cmake ninja ocaml
+          pip install pygments pyyaml
           export CC=$(which clang)
           export CXX=$(which clang++)
       - name: Configure and build
