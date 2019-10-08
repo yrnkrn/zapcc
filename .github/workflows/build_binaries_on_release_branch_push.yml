@@ -39,12 +39,13 @@ jobs:
         mkdir -pv /opt/build && cd /opt/build
         cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
         ninja
-        ninja check-all
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v1
       with: 
         name: Ubuntu_build
-        path: /opt/build       
+        path: /opt/build
+    - name: Run all checks
+      run: ninja check-all
 
   build_macOS:
     name: macOS build 
@@ -74,9 +75,10 @@ jobs:
           mkdir -pv /tmp/build && cd /tmp/build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
           ninja
-          ninja check-all
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v1
         with: 
           name: macOS_build
-          path: /tmp/build  
+          path: /tmp/build
+      - name: Run all checks
+        run: ninja check-all
