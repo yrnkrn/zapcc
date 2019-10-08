@@ -32,21 +32,28 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y git curl build-essential ninja-build python python3-pip ocaml
         sudo pip3 install pygments pyyaml
-        mkdir -pv /opt/cmake && cd /opt/cmake
+        mkdir -pv /tmp/cmake && cd /tmp/cmake
         curl -JL 'https://github.com/Kitware/CMake/releases/download/v3.15.4/cmake-3.15.4-Linux-x86_64.tar.gz' | tar xvz --strip-components=1 -f -
-        export PATH=/opt/cmake/bin:$PATH
+        export PATH=/tmp/cmake/bin:$PATH
     - name: Configure and build
       run: |
-        mkdir -pv /opt/build && cd /opt/build
+        mkdir -pv /tmp/build && cd /tmp/build
         cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
         ninja
+    - name: Run all tests
+      run: |
+        mkdir -pv /tmp/tests
+        ninja check-all 2>&1 | tee /tmp/tests/check-all.log
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v1
       with: 
         name: Ubuntu_build
-        path: /opt/build
-    - name: Run all checks
-      run: ninja check-all
+        path: /tmp/build
+    - name: Publish test results
+      uses: actions/upload-artifact@v1
+      with: 
+        name: Ubuntu_tests
+        path: /tmp/tests
 
   build_macOS:
     name: macOS build 
@@ -77,10 +84,17 @@ jobs:
           mkdir -pv /tmp/build && cd /tmp/build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
           ninja
+      - name: Run all checks
+        run: |
+          mkdir -pv /tmp/tests
+          ninja check-all 2>&1 | tee /tmp/tests/check-all.log
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v1
         with: 
           name: macOS_build
           path: /tmp/build
-      - name: Run all checks
-        run: ninja check-all
+      - name: Publish test results
+        uses: actions/upload-artifact@v1
+        with: 
+          name: macOS_tests
+          path: /tmp/tests
