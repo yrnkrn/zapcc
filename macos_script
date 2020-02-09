@@ -6,7 +6,7 @@ export CC=$(which clang)
 export CXX=$(which clang++)
 
 
-git clone https://github.com/yrnkrn/zapcc.git llvm
+git clone https://github.com/yrnkrn/zapcc.git llvm --depth 1
 mkdir build
 cd build
 cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ../llvm
