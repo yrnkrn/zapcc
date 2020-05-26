@@ -22,6 +22,7 @@ zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on W
 
 The prerequisites and build process are identical to [building LLVM](https://llvm.org/docs/CMake.html).
 
+    sudo apt-get install ninja-build
     git clone https://github.com/yrnkrn/zapcc.git llvm
     mkdir build
     cd build
