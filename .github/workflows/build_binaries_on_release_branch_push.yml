@@ -42,17 +42,17 @@ jobs:
         cd $RUNNER_WORKSPACE/build
         cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
         ninja
+    - name: Publish artifacts (i.e. binaries after compilation)
+      uses: actions/upload-artifact@v2
+      with: 
+        name: Ubuntu_build
+        path: $RUNNER_WORKSPACE/build
     - name: Run all tests
       run: |
         echo ======{,,," Run all tests ",,,}
         mkdir -pv $RUNNER_WORKSPACE/tests
         cd $RUNNER_WORKSPACE/build/
         ninja check-all 2>&1 | tee $RUNNER_WORKSPACE/tests/check-all.log
-    - name: Publish artifacts (i.e. binaries after compilation)
-      uses: actions/upload-artifact@v2
-      with: 
-        name: Ubuntu_build
-        path: $RUNNER_WORKSPACE/build
     - name: Publish test results
       uses: actions/upload-artifact@v2
       with: 
@@ -90,17 +90,17 @@ jobs:
           cd $RUNNER_WORKSPACE/build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
           ninja
+      - name: Publish artifacts (i.e. binaries after compilation)
+        uses: actions/upload-artifact@v2
+        with: 
+          name: macOS_build
+          path: $RUNNER_WORKSPACE/build
       - name: Run all checks
         run: |
           echo ======{,,," Run all tests ",,,}
           mkdir -pv $RUNNER_WORKSPACE/tests
           cd $RUNNER_WORKSPACE/build
           ninja check-all 2>&1 | tee $RUNNER_WORKSPACE/tests/check-all.log
-      - name: Publish artifacts (i.e. binaries after compilation)
-        uses: actions/upload-artifact@v2
-        with: 
-          name: macOS_build
-          path: $RUNNER_WORKSPACE/build
       - name: Publish test results
         uses: actions/upload-artifact@v2
         with: 
