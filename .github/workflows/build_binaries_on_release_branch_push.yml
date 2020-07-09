@@ -7,6 +7,7 @@ on:
 
 jobs:
   build_Linux:
+    continue-on-error: true
     name: Ubuntu build
     runs-on: ubuntu-20.04
     
@@ -42,7 +43,9 @@ jobs:
         cd $RUNNER_WORKSPACE/build
         cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
         ninja
+        du -hs ./
         cd .. && tar -c -I lbzip2 -f $GITHUB_WORKSPACE/github-actions-build-ubuntu-20.04.tar.bz2 ./build
+        ls -hl $GITHUB_WORKSPACE/github-actions-build-ubuntu-20.04.tar.bz2
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v2
       with: 
@@ -61,6 +64,7 @@ jobs:
         path: check-all-ubuntu-20.04.log
 
   build_macOS:
+    continue-on-error: true
     name: macOS build 
     runs-on: macOS-latest
 
@@ -91,7 +95,9 @@ jobs:
           cd $RUNNER_WORKSPACE/build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
           ninja
-          cd .. && tar -c -I lbzip2 -f $GITHUB_WORKSPACE/github-actions-build-macOS.tar.bz2 ./build
+          du -hs ./
+          cd .. && gtar -c -I lbzip2 -f $GITHUB_WORKSPACE/github-actions-build-macOS.tar.bz2 ./build
+          ls -hl $GITHUB_WORKSPACE/github-actions-build-macOS.tar.bz2
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v2
         with: 
