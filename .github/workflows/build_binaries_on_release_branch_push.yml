@@ -33,7 +33,7 @@ jobs:
       run: |
         export ACCEPT_EULA=Y
         sudo apt-get update
-        sudo apt-get install -y ninja-build ocaml
+        sudo apt-get install -y ninja-build ocaml lbzip2
         sudo pip3 install pygments pyyaml
     - name: Configure and build
       run: |
@@ -42,22 +42,23 @@ jobs:
         cd $RUNNER_WORKSPACE/build
         cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
         ninja
+        cd .. && tar -c -I lbzip2 -f $GITHUB_WORKSPACE/github-actions-build-ubuntu-20.04.tar.bz2 ./build
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v2
       with: 
         name: Ubuntu_build
-        path: $RUNNER_WORKSPACE/build
+        path: github-actions-build-ubuntu-20.04.tar.bz2
     - name: Run all tests
       run: |
         echo ======{,,," Run all tests ",,,}
         mkdir -pv $RUNNER_WORKSPACE/tests
         cd $RUNNER_WORKSPACE/build/
-        ninja check-all 2>&1 | tee $RUNNER_WORKSPACE/tests/check-all.log
+        ninja check-all 2>&1 | tee $GITHUB_WORKSPACE/check-all-ubuntu-20.04.log
     - name: Publish test results
       uses: actions/upload-artifact@v2
       with: 
         name: Ubuntu_tests
-        path: $RUNNER_WORKSPACE/tests
+        path: check-all-ubuntu-20.04.log
 
   build_macOS:
     name: macOS build 
@@ -79,7 +80,7 @@ jobs:
       - name: Install ninja and ocaml
         run: |
           export ACCEPT_EULA=Y
-          brew install ninja ocaml
+          brew install ninja ocaml lbzip2 gnu-tar
           pip3 install pygments pyyaml
           export CC=$(which clang)
           export CXX=$(which clang++)
@@ -90,19 +91,20 @@ jobs:
           cd $RUNNER_WORKSPACE/build
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
           ninja
+          cd .. && tar -c -I lbzip2 -f $GITHUB_WORKSPACE/github-actions-build-macOS.tar.bz2 ./build
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v2
         with: 
           name: macOS_build
-          path: $RUNNER_WORKSPACE/build
+          path: github-actions-build-macOS.tar.bz2
       - name: Run all checks
         run: |
           echo ======{,,," Run all tests ",,,}
           mkdir -pv $RUNNER_WORKSPACE/tests
           cd $RUNNER_WORKSPACE/build
-          ninja check-all 2>&1 | tee $RUNNER_WORKSPACE/tests/check-all.log
+          ninja check-all 2>&1 | tee $GITHUB_WORKSPACE/check-all-macOS.log
       - name: Publish test results
         uses: actions/upload-artifact@v2
         with: 
           name: macOS_tests
-          path: $build_dir/tests
+          path: check-all-macOS.log
