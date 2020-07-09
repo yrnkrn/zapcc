@@ -15,6 +15,9 @@ jobs:
       name: Checkout repository
     - name: Get Env
       run: |
+        export cwd=$PWD
+        export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
+        export ACCEPT_EULA=Y
         env
         set
         uname -a
@@ -26,9 +29,6 @@ jobs:
         free -h
         df -h
         ls -kahl
-        export cwd=$PWD
-        export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
-        export ACCEPT_EULA=Y
     - name: Install ninja, ocaml, and co. 
     # actually, all but ninja should be installed - see https://help.github.com/en/articles/software-in-virtual-environments-for-github-actions#ubuntu-1804-lts
     # https://github.com/actions/virtual-environments/blob/master/images/linux/Ubuntu2004-README.md
@@ -39,11 +39,14 @@ jobs:
         sudo pip3 install pygments pyyaml
     - name: Configure and build
       run: |
+        echo ======{,,," Configure and build ",,,}
+        echo $build_dir
         cd $build_dir
         cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
         ninja
     - name: Run all tests
       run: |
+        echo ======{,,," Run all tests ",,,}
         mkdir -pv $build_dir/tests && cd $build_dir
         ninja check-all 2>&1 | tee $build_dir/tests/check-all.log
     - name: Publish artifacts (i.e. binaries after compilation)
@@ -66,6 +69,9 @@ jobs:
         name: Checkout repository
       - name: Get Env
         run: |
+          export cwd=$PWD
+          export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
+          export ACCEPT_EULA=Y
           env
           set
           uname -a
@@ -74,8 +80,6 @@ jobs:
           system_profiler -timeout 30 -detailLevel basic
           df -h
           ls -kahl
-          export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
-          export cwd=$PWD
       - name: Install ninja and ocaml
         run: |
           brew install ninja ocaml
@@ -84,11 +88,14 @@ jobs:
           export CXX=$(which clang++)
       - name: Configure and build
         run: |
-          mkdir -pv $build_dir && cd $build_dir
+          echo ======{,,," Configure and build ",,,}
+          echo $build_dir
+          cd $build_dir
           cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
           ninja
       - name: Run all checks
         run: |
+          echo ======{,,," Run all tests ",,,}
           mkdir -pv $build_dir/tests && cd $build_dir
           ninja check-all 2>&1 | tee $build_dir/tests/check-all.log
       - name: Publish artifacts (i.e. binaries after compilation)
