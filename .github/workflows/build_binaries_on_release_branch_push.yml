@@ -45,7 +45,7 @@ jobs:
         ninja
     - name: Run all tests
       run: |
-        mkdir -pv /tmp/tests
+        mkdir -pv /tmp/tests && cd /tmp/build
         ninja check-all 2>&1 | tee /tmp/tests/check-all.log
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v1
@@ -89,7 +89,7 @@ jobs:
           ninja
       - name: Run all checks
         run: |
-          mkdir -pv /tmp/tests
+          mkdir -pv /tmp/tests && cd /tmp/build
           ninja check-all 2>&1 | tee /tmp/tests/check-all.log
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v1
