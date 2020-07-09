@@ -22,6 +22,7 @@ zapcc was thoroughly tested on Linux x64 targetting Linux x64 and minimally on W
 
 The prerequisites and build process are identical to [building LLVM](https://llvm.org/docs/CMake.html).
 
+    sudo apt-get install ninja-build
     git clone https://github.com/yrnkrn/zapcc.git llvm
     mkdir build
     cd build
@@ -67,24 +68,38 @@ To kill the zapccs server to free memory or replace with newly-built zapcc
 ### What is the typical acceleration of Zapcc?
 
 Full builds are 2x-5x faster, see 
-* [WebKit](https://www.zapcc.com/demo-webkit)
 * [ETL](https://baptiste-wicht.com/posts/2016/12/zapcc-cpp-compilation-speed-against-gcc-54-and-clang-39.html)
 * [MKVToolNix](https://www.bunkus.org/blog/2018/06/speeding-up-mkvtoolnix-compilation-speed-with-zapcc)
 * [A Performance-Based Comparison of C/C++ Compilers](https://colfaxresearch.com/compiler-comparison)
 
-Typically re-compilation of one modified source file is 10x-50x faster, see [Boost.Math](https://www.zapcc.com/demo-incremental-build/). 
+Typically re-compilation of one modified source file is 10x-50x faster.
 
 Acceleration depends on the complexity of the header files vs. the complexity of the source files. It can range from no acceleration at all for plain C projects where caching is disabled to x2-x5 for build-all of heavily templated projects, up to cases of x50 speedups in developer-mode incremental change of one source file.
+As a reference number, Zapcc builds the LLVM `build-all` target about x2 faster compared to building LLVM using clang.
 
-As a reference number, Zapcc builds LLVM build-all about x2 faster compared to building LLVM using clang.
+Here are [ASCII movies comparing clang and zapcc](https://asciinema.org/~Zapcc) fully building [WebKit](https://webkit.org) and incremental building [Boost](https://www.boost.org).
 
 ### Is Zapcc Clang compatible?
 
-Yes, zapcc is based on heavily-modified clang code.
+Yes, zapcc is based on heavily-modified [clang](https://clang.llvm.org) code.
 
 ### Is Zapcc GCC compatible?
 
-Yes, to the extent clang is gcc compatible.
+Yes, to the extent clang is [gcc](https://gcc.gnu.org) compatible.
+
+### How zapcc works?
+
+See [CATC 2017 presentation](/docs/zapcc/catc17-zapcc-an-accelerating-c-compiler.pdf) and [discussion at cfe-dev](http://lists.llvm.org/pipermail/cfe-dev/2015-May/043155.html).
+
+### Is zapcc different from precompiled headers?
+
+Precompiled headers requires building your project to the exact precompiled headers rules. Most projects do not bother with using precompiled headers. Even then, precompiled  headers do not cache as much as zapcc. Zapcc works within your existing build.
+
+Precompiled headers are currently ignored by Zapcc.
+
+### How zapcc is different from C++ modules?
+
+As of C++17, modules are not standard, rarely used and do not support well legacy code and macros found in most existing C++ code, such as Boost. Modules require significant code refactoring in bottom-up approach everything or are slow. Even then, modules do not cache template instantiations and generated code that are specific to your code like zapcc does.
 
 ### My project does not compile with Zapcc!
 
@@ -93,17 +108,6 @@ Please make sure first your project compiles successfully with Clang. If your pr
 ### Are the sanitizers supported?
 
 No.
-
-### How zapcc is different from precompiled headers?
-
-Precompiled headers requires building your project to the exact precompiled headers rules. Most projects do not bother with using precompiled headers. Even then, precompiled  headers do not cache as much as zapcc. Zapcc works within your existing build.
-See [discussion at cfe-dev](http://lists.llvm.org/pipermail/cfe-dev/2015-May/043155.html).
-
-Precompiled headers are currently ignored by Zapcc.
-
-### How zapcc is different from C++ modules?
-
-Modules are not yet standard, rarely used and do not support well legacy code and macros found in most existing C++ code, such as Boost. Modules require significant code refactoring in bottom-up approach everything or are slow. Even then, modules do not cache template instantiations and generated code that are specific to your code like zapcc does.
 
 ### How much memory does Zapcc use?
 
