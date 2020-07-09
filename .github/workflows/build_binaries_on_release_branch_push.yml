@@ -15,9 +15,6 @@ jobs:
       name: Checkout repository
     - name: Get Env
       run: |
-        export cwd=$PWD
-        export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
-        export ACCEPT_EULA=Y
         env
         set
         uname -a
@@ -34,31 +31,33 @@ jobs:
     # https://github.com/actions/virtual-environments/blob/master/images/linux/Ubuntu2004-README.md
     # sudo apt-get upgrade -y # do not run upgrade on all outdated packages...
       run: |
+        export ACCEPT_EULA=Y
         sudo apt-get update
         sudo apt-get install -y ninja-build ocaml
         sudo pip3 install pygments pyyaml
     - name: Configure and build
       run: |
         echo ======{,,," Configure and build ",,,}
-        echo $build_dir
-        cd $build_dir
-        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
+        mkdir -pv $GITHUB_WORKSPACE/../build
+        cd $GITHUB_WORKSPACE/../build
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
         ninja
     - name: Run all tests
       run: |
         echo ======{,,," Run all tests ",,,}
-        mkdir -pv $build_dir/tests && cd $build_dir
-        ninja check-all 2>&1 | tee $build_dir/tests/check-all.log
+        mkdir -pv $GITHUB_WORKSPACE/../tests
+        cd $GITHUB_WORKSPACE/../build/
+        ninja check-all 2>&1 | tee $GITHUB_WORKSPACE/../tests/check-all.log
     - name: Publish artifacts (i.e. binaries after compilation)
       uses: actions/upload-artifact@v2
       with: 
         name: Ubuntu_build
-        path: $build_dir
-    # - name: Publish test results
-    #   uses: actions/upload-artifact@v2
-    #   with: 
-    #     name: Ubuntu_tests
-    #     path: $build_dir/tests
+        path: $GITHUB_WORKSPACE/../build
+    - name: Publish test results
+      uses: actions/upload-artifact@v2
+      with: 
+        name: Ubuntu_tests
+        path: $GITHUB_WORKSPACE/../tests
 
   build_macOS:
     name: macOS build 
@@ -69,9 +68,6 @@ jobs:
         name: Checkout repository
       - name: Get Env
         run: |
-          export cwd=$PWD
-          export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
-          export ACCEPT_EULA=Y
           env
           set
           uname -a
@@ -82,6 +78,7 @@ jobs:
           ls -kahl
       - name: Install ninja and ocaml
         run: |
+          export ACCEPT_EULA=Y
           brew install ninja ocaml
           pip3 install pygments pyyaml
           export CC=$(which clang)
@@ -89,22 +86,23 @@ jobs:
       - name: Configure and build
         run: |
           echo ======{,,," Configure and build ",,,}
-          echo $build_dir
-          cd $build_dir
-          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
+          mkdir -pv $GITHUB_WORKSPACE/../build
+          cd $GITHUB_WORKSPACE/../build
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF $GITHUB_WORKSPACE
           ninja
       - name: Run all checks
         run: |
           echo ======{,,," Run all tests ",,,}
-          mkdir -pv $build_dir/tests && cd $build_dir
-          ninja check-all 2>&1 | tee $build_dir/tests/check-all.log
+          mkdir -pv $GITHUB_WORKSPACE/../tests
+          cd $GITHUB_WORKSPACE/../build
+          ninja check-all 2>&1 | tee $GITHUB_WORKSPACE/../tests/check-all.log
       - name: Publish artifacts (i.e. binaries after compilation)
         uses: actions/upload-artifact@v2
         with: 
           name: macOS_build
-          path: $build_dir
-      # - name: Publish test results
-      #   uses: actions/upload-artifact@v2
-      #   with: 
-      #     name: macOS_tests
-      #     path: $build_dir/tests
+          path: $GITHUB_WORKSPACE/../build
+      - name: Publish test results
+        uses: actions/upload-artifact@v2
+        with: 
+          name: macOS_tests
+          path: $build_dir/tests
