@@ -1,0 +1,103 @@
+name: build_binaries_on_release_branch_push
+
+on:
+  push:
+    branches: 
+      - release/*
+
+jobs:
+  build_Linux:
+    name: Ubuntu build
+    runs-on: ubuntu-20.04
+    
+    steps:
+    - uses: actions/checkout@v2
+      name: Checkout repository
+    - name: Get Env
+      run: |
+        env
+        set
+        uname -a
+        cat /etc/*release*
+        lscpu
+        echo "nproc=$(nproc)"
+        sudo dmidecode
+        lsmem
+        free -h
+        df -h
+        ls -kahl
+        export cwd=$PWD
+        export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
+        export ACCEPT_EULA=Y
+    - name: Install ninja, ocaml, and co. 
+    # actually, all but ninja should be installed - see https://help.github.com/en/articles/software-in-virtual-environments-for-github-actions#ubuntu-1804-lts
+    # https://github.com/actions/virtual-environments/blob/master/images/linux/Ubuntu2004-README.md
+    # sudo apt-get upgrade -y # do not run upgrade on all outdated packages...
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build ocaml
+        sudo pip3 install pygments pyyaml
+    - name: Configure and build
+      run: |
+        cd $build_dir
+        cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
+        ninja
+    - name: Run all tests
+      run: |
+        mkdir -pv $build_dir/tests && cd $build_dir
+        ninja check-all 2>&1 | tee $build_dir/tests/check-all.log
+    - name: Publish artifacts (i.e. binaries after compilation)
+      uses: actions/upload-artifact@v2
+      with: 
+        name: Ubuntu_build
+        path: $build_dir
+    # - name: Publish test results
+    #   uses: actions/upload-artifact@v2
+    #   with: 
+    #     name: Ubuntu_tests
+    #     path: $build_dir/tests
+
+  build_macOS:
+    name: macOS build 
+    runs-on: macOS-latest
+
+    steps:
+      - uses: actions/checkout@v2
+        name: Checkout repository
+      - name: Get Env
+        run: |
+          env
+          set
+          uname -a
+          sw_vers
+          xcodebuild -version
+          system_profiler -timeout 30 -detailLevel basic
+          df -h
+          ls -kahl
+          export build_dir=$PWD/$(mktemp -d build-$(date +%F_%H.%M.%S)-XXXXX)
+          export cwd=$PWD
+      - name: Install ninja and ocaml
+        run: |
+          brew install ninja ocaml
+          pip3 install pygments pyyaml
+          export CC=$(which clang)
+          export CXX=$(which clang++)
+      - name: Configure and build
+        run: |
+          mkdir -pv $build_dir && cd $build_dir
+          cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_WARNINGS=OFF ${cwd:-$GITHUB_WORKSPACE}
+          ninja
+      - name: Run all checks
+        run: |
+          mkdir -pv $build_dir/tests && cd $build_dir
+          ninja check-all 2>&1 | tee $build_dir/tests/check-all.log
+      - name: Publish artifacts (i.e. binaries after compilation)
+        uses: actions/upload-artifact@v2
+        with: 
+          name: macOS_build
+          path: $build_dir
+      # - name: Publish test results
+      #   uses: actions/upload-artifact@v2
+      #   with: 
+      #     name: macOS_tests
+      #     path: $build_dir/tests
