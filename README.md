@@ -45,7 +45,7 @@ To target x86_64:
 
 * zapcc will now target mingw-w64 and ignore Visual C++, even if installed.
 
-To target mingw-builds 32 bits, download the apporpriate 32 bits distribution of mingw-builds and replace `x86_64` with `i686` in the configuration.
+To target mingw-builds 32 bits, download the appropriate 32 bits distribution of mingw-builds and replace `x86_64` with `i686` in the configuration.
 
 ## Running the tests
     
